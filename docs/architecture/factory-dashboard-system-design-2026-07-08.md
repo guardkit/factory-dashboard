@@ -88,10 +88,13 @@ cannot and does not parse — stated honestly in the worked example, §10).
 | P12 | **Cost panel** (arch §8) | Gateway side: LiteLLM spend table when the opt-in Postgres layer is enabled (key-per-project×seat convention) → `usage_gateway`; DB-less interim: the dashboard records `x-litellm-response-cost` for **its own chat calls only** (labelled as such). Frontier side: per-stage usage rollups on B7 payloads / BuildComplete extension → `usage_frontier` | 📋 asks A-4 (frontier) + IN-5 (gateway Postgres); interim slice ✅ |
 | P13 | **Ledger graduated bar** | `live_verdict`-class events flip ledger rows to bar `deployed_live_verified` (§5 decision) | 📋 B7/B8 |
 
-**DF-008 firewall on every FinProxy-visible row (re-checked per field):** the FinProxy store
-receives ONLY: feature id, title/summary, project, delivered bar + date, PR URL, per-project and
-per-build spend totals. It never receives: coach scores, turns, agent ids, heartbeats,
-evidence paths, seat-level cost, gateway key names, planning internals, failure reasons.
+**DF-008 firewall on every client-visible row (re-checked per field; amended 2026-07-08 —
+client tenancy is a configured registry, FinProxy is its first row, and a tenant may own
+several repos):** a client-tenant store receives ONLY: feature id, title/summary, project/repo
+(from the tenant's own configured set), delivered bar + date, PR URL, per-project, per-build
+and per-tenant spend totals. It never receives: coach scores, turns, agent ids, heartbeats,
+evidence paths, seat-level cost, gateway key names, planning internals, failure reasons — or
+anything about another tenant's projects.
 
 ### Per-chat-tool mapping (the same projections — no separate feed exists or ever will)
 
@@ -101,15 +104,17 @@ evidence paths, seat-level cost, gateway key names, planning internals, failure 
 | `project_rollup` | aggregates of the above per project + `ledger` | P2–P7 |
 | `open_issues` | `issues` (+ ages, owners) | P3–P5 |
 | `delivered_period` | `ledger` (tenant-bound) | P7/P13 |
-| `cost_summary` | `cost_rollups` (Rich handler); the FinProxy handler reads `ledger_finproxy.cost_build`/`cost_project` ONLY — there is no "filtered view" of the operational store (gate finding F-2c) | P12 |
+| `cost_summary` | `cost_rollups` (Rich handler); the client handler reads its own tenant's `ledger_client_{tenant}.cost_build`/`cost_project` ONLY — there is no "filtered view" of the operational store (gate finding F-2c) | P12 |
 
-**The FinProxy registry is enumerated, not derived (gate finding F-2d):** it contains exactly
-three tools — `delivered_period`, `project_rollup_lite` (delivered counts + per-project spend
-from `ledger_finproxy` only), `cost_summary_lite` (per-project/per-build totals, no `by_seat`
-in its schema) — and nothing else. `feature_status` and `open_issues` do not exist in the
-FinProxy registry in v1 (their substance is operational). FinProxy tool-result objects are
-DF-008-clean **at the tool boundary** (they are constructed only from `ledger_finproxy.db`
-columns), so the degrade-to-table fallback is inherently safe for that audience (F-2e).
+**The client registry is enumerated, not derived (gate finding F-2d; amended 2026-07-08 —
+tenant-parameterized, FinProxy = the first configured instance):** a client tenant's registry
+contains exactly three tools — `delivered_period`, `project_rollup_lite` (delivered counts +
+per-project spend across the tenant's configured repo set, plus the tenant total),
+`cost_summary_lite` (per-project/per-build/per-tenant totals, no `by_seat` in its schema) —
+and nothing else. `feature_status` and `open_issues` do not exist in client registries in v1
+(their substance is operational). Client tool-result objects are DF-008-clean **at the tool
+boundary** (they are constructed only from that tenant's `ledger_client_{tenant}.db` columns),
+so the degrade-to-table fallback is inherently safe for that audience (F-2e).
 
 ---
 
@@ -138,10 +143,11 @@ project_rollup(project: str, window?: iso-interval) -> {
 open_issues(scope: {project?|feature_id?}) -> { issues: [...], citations, coverage }
 
 delivered_period(tenant: str, window: iso-interval) -> {
-  records: [{feature_id, title, bar, delivered_at, pr_url, spend?}], citations, coverage
+  records: [{feature_id, title, project, bar, delivered_at, pr_url, spend?}], citations, coverage
 }
-# `tenant` is NOT a caller argument in the FinProxy registry — it is bound at registry
-# construction; the FinProxy handler reads ledger_finproxy only. The Rich registry may pass any tenant.
+# `tenant` is NOT a caller argument in any client registry — it is bound at registry
+# construction from the tenant registry row; a client handler reads its own
+# ledger_client_{tenant} only. The Rich registry may pass any tenant.
 
 cost_summary(scope: {project?|feature_id?}, window: iso-interval) -> {
   frontier_gbp, local_tokens, local_gpu_seconds?, local_nominal_gbp (labelled nominal),
@@ -195,8 +201,14 @@ it verify that claims MATCH, are COMPLETE, and are FRESH:**
 
 ## 4 · Read-model schema (SQLite v1; every table rebuildable)
 
-One operational DB (`readmodel.db`) + one FinProxy DB (`ledger_finproxy.db`) — separate files,
-separate feeders (arch §4). Sketch (columns abridged to the load-bearing):
+One operational DB (`readmodel.db`) + **one client DB per configured tenant**
+(`ledger_client_{tenant}.db`; v1 instantiates one: `ledger_client_finproxy.db`) — separate
+files, separate feeders (arch §4, as amended 2026-07-08: tenants are registry rows, and a
+tenant may own several repos). Sketch (columns abridged to the load-bearing):
+
+0. `tenants(tenant_slug PK, display_name, nats_account, subject_prefix, projects_json,
+   store_path)` — the tenant registry (config-sourced, mirrored here for joins); `operator`
+   is reserved and has no client store.
 
 1. `consumer_watermarks(stream, consumer, last_stream_seq, updated_at)` — resume + SSE
    Last-Event-ID.
@@ -242,15 +254,17 @@ separate feeders (arch §4). Sketch (columns abridged to the load-bearing):
     pre-instrumentation builds).
 14. `service_health(service PK, status, detail, checked_at)`.
 
-`ledger_finproxy.db` gets its **own reduced DDL, not a copy of the operational shapes** (gate
-finding F-2d): `ledger_client(feature_id, project, title, bar, delivered_at, pr_url)` — note
-**no `evidence_ref` column exists in this store** — plus `cost_build(feature_id, project,
-window, spend_frontier_gbp, spend_local_nominal_gbp, coverage_note)` and
-`cost_project(project, window, …same columns…)`. Written solely by the connection-B projector,
-from the A-8 **client-facing reduced delivery events** (which carry the per-build spend total
-at source — see the re-cut A-8 in the wire note): per-project spend is the in-store sum of
-per-build spend, so **no APPMILLA-derived row ever crosses app-side** (F-2b). Gateway-side
-project spend (PO/chat seats) is out of FinProxy v1 scope and named in `coverage_note`.
+Each `ledger_client_{tenant}.db` gets its **own reduced DDL, not a copy of the operational
+shapes** (gate finding F-2d): `ledger_client(feature_id, project, title, bar, delivered_at,
+pr_url)` — note **no `evidence_ref` column exists in this store**, and `project` ranges only
+over the tenant's configured repo set — plus `cost_build(feature_id, project, window,
+spend_frontier_gbp, spend_local_nominal_gbp, coverage_note)`, `cost_project(project, window,
+…same columns…)`, and `cost_tenant(window, …same columns…)` (the tenant total across its
+repos). Written solely by that tenant's projector connection, from the A-8 **client-facing
+reduced delivery events** (which carry project + the per-build spend total at source — see the
+re-cut A-8 in the wire note): per-project and per-tenant spend are in-store sums of per-build
+spend, so **no APPMILLA-derived row ever crosses app-side** (F-2b). Gateway-side project spend
+(PO/chat seats) is out of client scope in v1 and named in `coverage_note`.
 
 ---
 
@@ -303,13 +317,14 @@ project spend (PO/chat seats) is out of FinProxy v1 scope and named in `coverage
 
 ## 7 · Auth + tenant scoping (mechanics of arch §4)
 
-Server-side sessions (signed cookie); `users(username, tenant CHECK(tenant IN
-('operator','finproxy')), credential_hash)`. **Tenant is re-read from `users.tenant` by
-authenticated username on every request — never trusted from the cookie payload** (gate finding
-F-2f). Tenant selects: (a) which read DB the request's query layer opens (operator →
-`readmodel.db`; finproxy → `ledger_finproxy.db` ONLY — the operational DB path is not present
-in that request context), (b) which chat tool registry is constructed, (c) which SSE channels
-are subscribable. **All web-layer DB opens use URI `mode=ro`** — the projector is the sole
+Server-side sessions (signed cookie); `users(username, tenant_slug REFERENCES
+tenants(tenant_slug), credential_hash)` — tenant values come from the tenant registry (§4.0),
+never from a hardcoded enum (amended 2026-07-08). **Tenant is re-read from `users.tenant_slug`
+by authenticated username on every request — never trusted from the cookie payload** (gate
+finding F-2f). Tenant selects: (a) which read DB the request's query layer opens (operator →
+`readmodel.db`; a client tenant → its own `ledger_client_{tenant}.db` ONLY — the operational
+DB path and other tenants' store paths are not present in that request context), (b) which
+chat tool registry is constructed, (c) which SSE channels are subscribable. **All web-layer DB opens use URI `mode=ro`** — the projector is the sole
 writer of both stores, asserted by M-D4 (F-17). **The M-D2/ledger parity check is an offline
 batch job with its own read-only credential — not a live request path**: no request context
 ever co-holds handles to both stores (F-2g). NATS credentials live in the projector's
@@ -325,8 +340,10 @@ factory-dashboard/
 ├── docs/architecture/            ← this doc set
 ├── backend/
 │   ├── app.py                    ← FastAPI entrypoint; sessions; SSE
+│   ├── config/
+│   │   └── tenants.yaml          ← the tenant registry (§4.0) — client tenants are config
 │   ├── projector/
-│   │   ├── consumers.py          ← nats-core durable consumers (conn A + conn B)
+│   │   ├── consumers.py          ← nats-core consumers (conn A + one per tenant registry row)
 │   │   ├── forge_mirror.py       ← read-only forge SQLite mirror
 │   │   ├── health_polls.py       ← gateway/llama-swap/NATS HTTP polls
 │   │   └── projections/          ← one module per matrix row (P1..P13)

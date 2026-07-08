@@ -110,7 +110,7 @@ flowchart TB
   CHAT --> DB
   WEB --> CHAT
   CHAT -->|"chat alias (default)\nworkhorse for tool-heavy turns\nclaude-* attended only"| GWY
-  PROJ -->|"conn A: APPMILLA dashboard_ro user (ask)\nconn B: FINPROXY account user (ask)"| NATS
+  PROJ -->|"conn A: APPMILLA dashboard_ro user (ask)\nconn B..N: one user per configured\nclient-tenant account (ask; v1: FinProxy)"| NATS
   PROJ --> DB
   PROJ -.->|read-only| FORGE
 ```
@@ -174,21 +174,32 @@ These reshape the design and are carried into every companion doc:
 
 ---
 
-## 4 · The two-audience tenancy model (ADR-DASH-002)
+## 4 · The tenancy model: operator + configured client tenants (ADR-DASH-002)
 
 **Decision (2026-07-08): tenancy is enforced at the NATS account boundary and at the tool layer —
 never in the UI.** Restates and mechanizes starter D3.
 
-- The projector holds **two connections**: connection A as a new read-only APPMILLA service user
-  (`dashboard_ro` — subscribe-only on `pipeline.> agents.> fleet.> jarvis.> memory.episode.>` +
-  `$JS.>` + `_INBOX.>`, mirroring the `fleet-memory` user pattern; provisioning ask IN-3), and
-  connection B as a new user **inside the FINPROXY account**, which can physically see only
-  `finproxy.>` (ask IN-4).
-- **Two read stores, not one filtered store:** connection A feeds the operational projections;
-  connection B is the *sole* feeder of the FinProxy ledger store (`ledger_finproxy`). A FinProxy
-  session's queries — panel and chat alike — execute only against `ledger_finproxy`. There is no
-  code path from a FinProxy session to the operational store; the isolation is structural
-  (separate DB file), not a WHERE clause.
+> **Dated amendment 2026-07-08 (Rich's steer, same day): nothing is hardcoded to FinProxy.**
+> The client side of the model is a **configured tenant registry**, not a named client: each
+> client tenant is a config row `{tenant_slug, display_name, nats_account, subject_prefix,
+> projects: [repo, …]}` — and a tenant may own **one or more repos/projects** (a real client
+> engagement is often several). Every "FinProxy" below is shorthand for *the first configured
+> instance* of that row; adding a second client is a config + WS5-provisioning act (new account
+> pair per IN-4, new registry row, new client store), never a code change. Per-project rollups
+> nest inside the tenant: a client sees each of their repos' delivery and spend separately plus
+> the tenant total.
+
+- The projector holds **one connection per scope**: connection A as a new read-only APPMILLA
+  service user (`dashboard_ro`; provisioning ask IN-3 — grant shape as re-cut by the gate), and
+  **one connection per configured client tenant**, as a user inside *that tenant's* NATS
+  account, which can physically see only `{tenant_prefix}.>` (ask IN-4; v1 instantiates
+  exactly one: FinProxy).
+- **Per-tenant read stores, not one filtered store:** connection A feeds the operational
+  projections; each tenant connection is the *sole* feeder of that tenant's client store
+  (`ledger_client_{tenant}.db`). A client session's queries — panel and chat alike — execute
+  only against its own tenant's store. There is no code path from a client session to the
+  operational store or to another tenant's store; the isolation is structural (separate DB
+  file per tenant), not a WHERE clause.
 - **The feed gap, stated honestly:** because accounts are fully isolated and no producer
   publishes on `finproxy.>` today, the FinProxy view is **dark at birth**. Lighting it requires
   (a) forge publishing a **client-facing, DF-008-reduced delivery event** on `finproxy.>`
@@ -197,26 +208,29 @@ never in the UI.** Restates and mechanizes starter D3.
   ask IN-4. Until both land, FinProxy sees an honest "ledger feed pending" state. **We do not
   bridge the gap app-side**: having the dashboard re-publish or copy APPMILLA-derived rows into
   the FinProxy store would make the app the tenancy boundary — exactly what D3 forbids.
-- **What may ride `finproxy.>` (gate finding, 2026-07-08 — BLOCKER-fixed):** the FINPROXY
-  account's own user (`mark`) subscribes `finproxy.>` **directly with raw NATS credentials** —
-  whatever is published there is client-visible with no dashboard in the path. So A-8 is
-  explicitly NOT "tenant-prefixed copies of internal payloads" (BuildComplete carries
-  tasks_failed/branch; verdict payloads carry evidence refs — all DF-008-forbidden): it is a
-  **distinct reduced event** carrying only feature id, title, bar, delivered date, PR URL, and
-  the per-build spend total. The DF-008 firewall is enforced at the *producer*, at the account
-  boundary — never one layer late in the projector. This also closes the cost-feed hole: with
-  per-build spend riding the reduced event, per-project spend is the in-store sum inside
-  `ledger_finproxy` — no APPMILLA-derived cost row ever crosses app-side (gateway-side seat
-  spend stays out of FinProxy v1 scope, named in the coverage note).
-- **DF-008 field firewall** (checked per-field in the design doc's matrix): FinProxy-visible
-  records carry feature id/title, delivery bar cleared, PR URL, dates, and per-project/per-build
-  spend (Rich's 2026-07-08 steer) — never coach scores, turn counts, agent internals, fleet
-  diagnostics, evidence file paths, or seat-level cost splits. Cost visibility is per-audience
-  **by design**, not blanket-hidden.
+- **What may ride `{tenant_prefix}.>` (gate finding, 2026-07-08 — BLOCKER-fixed):** a client
+  account's own users subscribe their prefix **directly with raw NATS credentials** (verified
+  for the first instance: FINPROXY's `mark` subscribes `finproxy.>`) — whatever is published
+  there is client-visible with no dashboard in the path. So A-8 is explicitly NOT
+  "tenant-prefixed copies of internal payloads" (BuildComplete carries tasks_failed/branch;
+  verdict payloads carry evidence refs — all DF-008-forbidden): it is a **distinct reduced
+  event** carrying only feature id, title, **project/repo** (a tenant owns several), bar,
+  delivered date, PR URL, and the per-build spend total. The DF-008 firewall is enforced at
+  the *producer*, at the account boundary — never one layer late in the projector. This also
+  closes the cost-feed hole: with per-build spend riding the reduced event, per-project and
+  per-tenant spend are in-store sums inside `ledger_client_{tenant}` — no APPMILLA-derived
+  cost row ever crosses app-side (gateway-side seat spend stays out of client scope in v1,
+  named in the coverage note).
+- **DF-008 field firewall** (checked per-field in the design doc's matrix): client-visible
+  records carry feature id/title, project/repo (within the tenant's own configured set only),
+  delivery bar cleared, PR URL, dates, and per-project/per-build/per-tenant spend (Rich's
+  2026-07-08 steer) — never coach scores, turn counts, agent internals, fleet diagnostics,
+  evidence file paths, or seat-level cost splits. Cost visibility is per-audience **by
+  design**, not blanket-hidden.
 - **Session→tenant mapping** (starter open question 4): the web app authenticates users to a
-  tenant (v1: server-side session + per-user credential; Tailscale provides the network
-  boundary), and the tenant selects which read store and which chat tool registry the session is
-  bound to. NATS credentials never reach the browser.
+  tenant registry row (v1: server-side session + per-user credential; Tailscale provides the
+  network boundary), and the tenant selects which read store and which chat tool registry the
+  session is bound to. NATS credentials never reach the browser.
 
 ---
 
@@ -332,10 +346,11 @@ currencies and two capture points:
 - **Per-audience visibility (named design decision):** Rich sees the full breakdown including
   the seat/role split; **James/FinProxy see per-project + per-build spend only** — no agent
   internals, no seat split, no gateway key names (DF-008 firewall, §4). Mechanically (gate fix
-  2026-07-08): FinProxy's per-build spend arrives ON the A-8 reduced delivery event (forge
-  computes the total at build close from the A-4 rollups it holds); per-project spend is summed
-  inside `ledger_finproxy` — no APPMILLA-side cost row is ever copied across, and gateway-side
-  seat spend is out of FinProxy scope in v1 (coverage-labelled).
+  2026-07-08): a client tenant's per-build spend arrives ON the A-8 reduced delivery event
+  (forge computes the total at build close from the A-4 rollups it holds); per-project and
+  per-tenant spend are summed inside `ledger_client_{tenant}` across the tenant's configured
+  repo set — no APPMILLA-side cost row is ever copied across, and gateway-side seat spend is
+  out of client scope in v1 (coverage-labelled).
 
 **Relationship to Workstream-A D5/D13/D14 (for WS2 B13's graduation review):** Workstream-A's
 live remainders transfer via B13 (gap §6 outside-cut item 2). This architecture is their landing

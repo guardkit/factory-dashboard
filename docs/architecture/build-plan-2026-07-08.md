@@ -22,7 +22,7 @@ D0 scaffold ──► D1 read-model core + live-now panels ──► D2 interim 
                                     │                        │
 WS5 IN-3 (dashboard_ro user) ───────┘ (D1 can start on rich/dev creds; IN-3 before any
                                         long-running deploy of the projector)
-WS5/B9 IN-4 + B8 A-8 (FinProxy feed pair) ──► D3 FinProxy ledger view goes live
+WS5/B9 IN-4 + B8 A-8 (per-tenant feed pair; first: FinProxy) ──► D3 client ledger view(s) go live
 D1 ──► D4 chat v1.x (tools + grounding + LiteLLM serving)
 IN-5 (gateway Postgres + keys) ──► D5a gateway cost slice
 B7 A-4 (+A-4b guardkit emitter) ──► D5b frontier cost slice ──► D5c cost panel complete
@@ -41,7 +41,7 @@ No dashboard phase blocks any factory workstream; every inbound gate is an ask a
 | D0 | **Scaffold + skeleton** | file tree (design §8), FastAPI app, schema.sql (§4), config; no NATS yet | [Opus 4.8] attended | S | now |
 | D1 | **Read-model core + live-now panels** | projector conn A (dev creds until IN-3 — **PIPELINE via core-NATS subscribe ONLY; no JetStream consumer may be created, bound, or acked on PIPELINE under any credentials until IN-1 resolves**, design §2 P2), projections P1–P6 (P6 pinned to load-neutral endpoints — LiteLLM `/health` forbidden), forge SQLite mirror (WAL-courtesy discipline, design §4.7), watermarks, SSE (§6), HTMX panels; **records the P2 producer-liveness verification** (which build-lifecycle events actually fire — the matrix's ✅/🟡 sharpened with evidence) | [Opus 4.8]; autobuild-able (GPU: post-07-13, or degraded) | M | now (code) |
 | D2 | **Interim delivery ledger (Rich view)** | ledger table + bootstrap from forge `builds` + build-complete consumer; period query; bar labelled `merged_pr` (§5) | [Opus 4.8]; autobuild-able | S–M | after D1 |
-| D3 | **FinProxy view** | conn B projector → `ledger_finproxy.db`; finproxy session + panel + DF-008 field firewall tests | [Opus 4.8] attended (tenancy = security-relevant) | M | after IN-4 + A-8 land |
+| D3 | **Client-tenant view** (tenant-parameterized; first instance: FinProxy) | tenant registry config (`tenants.yaml`, design §4.0); per-tenant projector connection → `ledger_client_{tenant}.db`; client session + panel + DF-008 field firewall tests; per-project rollups across the tenant's repo set. Acceptance includes proving a **second** tenant is config + provisioning only (a dry-run registry row with no account must render "feed pending", zero code change) | [Opus 4.8] attended (tenancy = security-relevant) | M | after the first tenant's IN-4 + A-8 land |
 | D4 | **Delivery-status chat v1.x** | tool registry + 5 tools (§3), grounding checker, LiteLLM client (`chat`/`workhorse`), chat window + SSE streaming; FinProxy registry binding | [Opus 4.8] attended (grounding checker is correctness-critical) | M | after D1 |
 | D5a/b/c | **Cost lens** | a: `usage_gateway` from LiteLLM spend table; b: `usage_frontier` from A-4 payloads; c: `cost_rollups` + panel + `cost_summary` tool with coverage notes | [Opus 4.8] | S each | a: after IN-5 · b: after B7+A-4b |
 | D6 | **Back-half panels + ledger graduation** | P8/P9 projections, `deployed_live_verified` bar appends, evidence links (Rich) | [Opus 4.8]; autobuild-able | M | after B7+B8 (WS2's V1 window ~w/c 07-14 is the natural test bed) |
@@ -60,7 +60,7 @@ land; D6 aligns naturally with WS2's V1/V2 validation window.
 | M-D1 | **The three-question test:** for any feature with build events, `feature_status` answers progress/on-track/issues with every line cited (the FEAT-3ED2 worked example is the fixture — design §10) | answerable, cited, refusals data-driven |
 | M-D2 | **Ledger parity:** `delivered_period` vs a manual git/PR sweep over the same window | 100% agreement or each discrepancy explained by a named feed gap |
 | M-D3 | **Projection-not-participant audit:** broker-side — `dashboard_ro` has zero publish grants and no `$JS.>` grant (IN-3 as re-cut); app-side — no NATS publish call sites; **plus (gate extension): no JetStream consumer exists on any workqueue stream; all dashboard consumers are the WS5-pre-created `dash-*` set on limits streams; ack policy is explicit; acks are never sent on PIPELINE subjects** (library-level JS API/ack publishes are exactly what a grep for `publish(` misses) | all hold; checked at D1, D3, D4 close |
-| M-D4 | **Tenant-leak probe:** from a FinProxy session, attempt every panel/tool/SSE channel + crafted queries for non-finproxy ids | zero rows cross; probe scripted, kept as a regression test |
+| M-D4 | **Tenant-leak probe:** from each configured client-tenant session, attempt every panel/tool/SSE channel + crafted queries for ids outside that tenant's project set (incl. other tenants' ids once ≥2 exist) | zero rows cross; probe scripted per tenant, kept as a regression test |
 | M-D5 | **Chat grounding:** N=20 mixed questions (answerable + unanswerable) | 0 fabricated records; every unanswerable → named gap; grounding-checker rejections logged |
 | M-D6 | **Cost coverage honesty:** cost panel always states captured-share | no view presents partial capture as total (DDR-DASH-004) |
 
@@ -69,7 +69,7 @@ land; D6 aligns naturally with WS2's V1/V2 validation window.
 | Risk | Mitigation |
 |---|---|
 | Build-lifecycle producer liveness overestimated (P2 🟡) | D1 verifies and records; bootstrap path (forge SQLite) carries the ledger regardless |
-| FinProxy feed asks (IN-4/A-8) stall | FinProxy view stays honestly dark; D3 is the only gated audience-facing phase; Rich's value lands in D1–D2 regardless |
+| Client-tenant feed asks (IN-4/A-8) stall | that tenant's view stays honestly dark; D3 is the only gated audience-facing phase; Rich's value lands in D1–D2 regardless |
 | Chat over-trusted before M-D5 passes | chat ships behind Rich-only flag until M-D5 recorded; FinProxy chat only after M-D4+M-D5 both green |
 | GPU contention with the 90h run | no dashboard session needs the GPU except autobuild lanes and chat serving tests — both post-07-13; calendar rule in header |
 | Runtime chat turns evicting the Coach's model mid-build (llama-swap swap-in) | arch §7.5 no-eviction rule: pin to resident model or degrade to raw tables during active builds; D4 implements the resident-model check |
