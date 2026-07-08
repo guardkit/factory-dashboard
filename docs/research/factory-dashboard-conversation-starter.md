@@ -1,5 +1,20 @@
 # Factory Dashboard — Delivery Read-Model — Conversation Starter
 
+> **⚠️ SUPERSEDED — 2026-07-08.** The session this starter was written for has run. The
+> architecture now lives in `docs/architecture/`:
+> `factory-dashboard-system-arch-2026-07-08.md` · `factory-dashboard-system-design-2026-07-08.md`
+> · `wire-consumer-requirements-2026-07-08.md` · `build-plan-2026-07-08.md`.
+> **D1–D6 below still stand** (restated, not reopened, in the arch doc), but three of this
+> starter's premises were corrected against the 2026-07-07 factory canon and are binding in the
+> new docs: (1) "the bus already emits everything" is false for the back half — deploy/QA-verdict/
+> live-gate payloads do not exist yet (WS2 B7); (2) "PIPELINE 30d retention" is wrong — PIPELINE
+> is provisioned workqueue/7d, so the ledger uses a durable read DB, not JetStream replay
+> (ADR-DASH-001); (3) the FINPROXY account has one user (`mark`) and no cross-account exports —
+> the FinProxy feed is a named ask (IN-4/A-8), not an existing capability. New since this
+> starter and now first-class in the design: the delivery-status chat and the cost lens.
+> This file is retained as the product brief of record. Dated banner per house rules — no
+> silent edits below this line.
+
 ## For: /system-arch + /system-design session · `factory-dashboard` (new repo) · June 2026
 
 ---
