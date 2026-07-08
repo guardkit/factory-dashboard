@@ -191,12 +191,23 @@ never in the UI.** Restates and mechanizes starter D3.
   (separate DB file), not a WHERE clause.
 - **The feed gap, stated honestly:** because accounts are fully isolated and no producer
   publishes on `finproxy.>` today, the FinProxy view is **dark at birth**. Lighting it requires
-  (a) forge publishing delivery-lifecycle events tenant-prefixed per the existing
-  `Topics.for_project()` convention (`topics.py:183-198`) — wire ask A-8 — and (b) an
-  APPMILLA→FINPROXY export/import of `finproxy.>` in `accounts.conf` — infra ask IN-4. Until
-  both land, FinProxy sees an honest "ledger feed pending" state. **We do not bridge the gap
-  app-side**: having the dashboard re-publish or copy APPMILLA-derived rows into the FinProxy
-  store would make the app the tenancy boundary — exactly what D3 forbids.
+  (a) forge publishing a **client-facing, DF-008-reduced delivery event** on `finproxy.>`
+  (subject shape per the `Topics.for_project()` convention, `topics.py:183-198`) — wire ask
+  A-8 — and (b) an APPMILLA→FINPROXY export/import of `finproxy.>` in `accounts.conf` — infra
+  ask IN-4. Until both land, FinProxy sees an honest "ledger feed pending" state. **We do not
+  bridge the gap app-side**: having the dashboard re-publish or copy APPMILLA-derived rows into
+  the FinProxy store would make the app the tenancy boundary — exactly what D3 forbids.
+- **What may ride `finproxy.>` (gate finding, 2026-07-08 — BLOCKER-fixed):** the FINPROXY
+  account's own user (`mark`) subscribes `finproxy.>` **directly with raw NATS credentials** —
+  whatever is published there is client-visible with no dashboard in the path. So A-8 is
+  explicitly NOT "tenant-prefixed copies of internal payloads" (BuildComplete carries
+  tasks_failed/branch; verdict payloads carry evidence refs — all DF-008-forbidden): it is a
+  **distinct reduced event** carrying only feature id, title, bar, delivered date, PR URL, and
+  the per-build spend total. The DF-008 firewall is enforced at the *producer*, at the account
+  boundary — never one layer late in the projector. This also closes the cost-feed hole: with
+  per-build spend riding the reduced event, per-project spend is the in-store sum inside
+  `ledger_finproxy` — no APPMILLA-derived cost row ever crosses app-side (gateway-side seat
+  spend stays out of FinProxy v1 scope, named in the coverage note).
 - **DF-008 field firewall** (checked per-field in the design doc's matrix): FinProxy-visible
   records carry feature id/title, delivery bar cleared, PR URL, dates, and per-project/per-build
   spend (Rich's 2026-07-08 steer) — never coach scores, turn counts, agent internals, fleet
@@ -211,8 +222,11 @@ never in the UI.** Restates and mechanizes starter D3.
 
 ## 5 · FinProxy access decision (ADR-DASH-004)
 
-**Decision (2026-07-08): v1 access is Tailscale** — a scoped Tailscale share to the dashboard
-host, the same human-mediated mechanism the HSBC demo already uses (lpa runbook precedent). A
+**Decision (2026-07-08): v1 access is Tailscale, port-scoped** — a Tailscale share restricted
+by ACL to the dashboard's web port ONLY (never a host-level share: the host also listens on
+NATS monitoring :8222, llama-swap :9000, and LiteLLM :4000, none of which are tenant-scoped —
+gate finding, 2026-07-08). Same human-mediated mechanism the HSBC demo already uses (lpa
+runbook precedent). A
 hosted authenticated view (AWS, Docker Compose lift) remains the low-risk later move, tied to the
 hosted-self-serve fork exactly as the starter framed it — **not a v1 prerequisite**. Rationale:
 the FinProxy audience is currently one named person (Mark; James when the PO panel lands); asking
@@ -276,6 +290,11 @@ track · what are the issues* — are first-class in the status model, per featu
    frontier-via-gateway is **permitted but not default** (and on this gateway `claude-*` routes
    local unless a cloud model is deliberately configured — the public config names none;
    DF-001's guard is structural). Panels make zero model calls.
+   **No-eviction rule (gate finding, 2026-07-08):** when a factory build holds the serving GPU
+   (the Coach's model resident), a chat turn must never trigger a llama-swap model eviction —
+   the chat pins to whatever model is already resident, or degrades to the raw-table rendering
+   (design DDR-DASH-003). The dashboard being *used* must not slow the factory any more than
+   the dashboard being *down* stops it.
 6. **The Slack twin seam (named, not built):** jarvis could later expose the same tool registry
    conversationally — same typed tools, second renderer, still zero new brains. The tool layer
    is designed registry-shaped (name → handler + schema + tenant binding) so that lift is a
@@ -312,7 +331,11 @@ currencies and two capture points:
   silently zero.
 - **Per-audience visibility (named design decision):** Rich sees the full breakdown including
   the seat/role split; **James/FinProxy see per-project + per-build spend only** — no agent
-  internals, no seat split, no gateway key names (DF-008 firewall, §4).
+  internals, no seat split, no gateway key names (DF-008 firewall, §4). Mechanically (gate fix
+  2026-07-08): FinProxy's per-build spend arrives ON the A-8 reduced delivery event (forge
+  computes the total at build close from the A-4 rollups it holds); per-project spend is summed
+  inside `ledger_finproxy` — no APPMILLA-side cost row is ever copied across, and gateway-side
+  seat spend is out of FinProxy scope in v1 (coverage-labelled).
 
 **Relationship to Workstream-A D5/D13/D14 (for WS2 B13's graduation review):** Workstream-A's
 live remainders transfer via B13 (gap §6 outside-cut item 2). This architecture is their landing
@@ -334,7 +357,7 @@ owned hardware. B13 should record this doc as the transfer target rather than re
 | ADR-DASH-004 | **FinProxy access = Tailscale share v1; hosted view deferred to the hosted-self-serve fork** | §5 |
 | ADR-DASH-005 | **Chat = grounded tool-calling over the panel query layer; LiteLLM :4000 serving, local-first; refuses beyond its data; originates nothing** | §7 |
 | ADR-DASH-006 | **Cost lens: two currencies/two capture points; key-per-project×seat convention; per-audience visibility (Rich full, FinProxy per-project/build)** | §8 |
-| ADR-DASH-007 | **Projection-not-participant, mechanized:** the app holds no NATS publish permission at the ACL level in v1 (`dashboard_ro` is subscribe-only) — the invariant is enforced by the broker, not by discipline. The later approve action arrives only with the PO panel, via the existing gate mechanism, behind a new explicitly-granted publish permission on exactly the approval-response subject | §1, §4 |
+| ADR-DASH-007 | **Projection-not-participant, mechanized:** the app holds no NATS publish permission at the ACL level in v1 (`dashboard_ro` is subscribe-only; consumer plumbing is WS5-pre-created so no `$JS.>` API grant exists either — wire IN-3 as re-cut 2026-07-08) — the invariant is enforced by the broker, not by discipline. The later approve action rides a **separate NATS user (`dashboard_approve`)** loaded only in the approve handler's process context — never the projector credentials — publishing on exactly the approval-response subject, with `decided_by` set to the authenticated session user (identity is a fact, never a service constant); M-D3's zero-publish assertion on `dashboard_ro`/`dashboard_finproxy` remains permanent | §1, §4 |
 
 **Assumptions carried (validate in build):** A1 — forge's SQLite file is readable by the
 dashboard host user without contention (WAL read-only open; else a periodic copy). A2 — the

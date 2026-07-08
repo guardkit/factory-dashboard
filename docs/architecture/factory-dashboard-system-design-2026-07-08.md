@@ -45,6 +45,16 @@ dated note only):
 | stage dwell with no event | <30 min | 30–120 min | >120 min → "stalled" issue |
 | approval waiting on named human | <1 h | 1–4 h (escalation window) | >4 h / TIMED_OUT |
 
+**Measured-or-excluded rule (gate finding F-6, 2026-07-08):** every `on_track` signal carries
+`measured: bool`. A signal whose feed is absent for this record (e.g. turns-per-task and
+SDK-ceiling-hits, which have **no live feed until the A-4 loop-stats ask lands** — they live
+today only in guardkit artifacts the dashboard does not scrape; or bus-only counters missing on
+`source='forge_sqlite'` bootstrap rows) is **excluded from the verdict and echoed into
+`coverage.gaps`** — never counted as zero, never a vacuous green. Division guards: missing/zero
+denominators ⇒ unmeasured, not 0. Stalled-detection is additionally gated on projector
+liveness: if the consumer watermark itself is stale, the panel reports "projection lagging
+(since ⟨ts⟩)" instead of manufacturing stalled-run issues (F-5).
+
 **Q3 — What are the issues?** = the issue register (§4.6): escalations, gate REJECTED,
 approval-waiting-on-named-human (with age + who), stalled runs, build failures, seam findings
 (📋 — seam findings become machine events only when WS2 F14 / WS3-S5 merge-review records or the
@@ -60,11 +70,11 @@ cannot and does not parse — stated honestly in the worked example, §10).
 | # | Panel | Feeds (payload → projection) | Status |
 |---|---|---|---|
 | P1 | **Fleet health / agent roster** | `fleet.register` (AgentManifest) → `agents`; `fleet.heartbeat.{agent_id}` (AgentHeartbeatPayload: status, queue_depth, active_tasks, uptime_seconds) → `agents` upsert; `fleet.deregister` → mark offline. FLEET stream is 1h/limits — live-only by design, no history claimed | ✅ |
-| P2 | **Work in flight / build board** | `pipeline.build-queued.{feat}` (BuildQueuedPayload) → `builds` insert ✅ live-proven; `build-started/progress/paused/resumed/complete/failed/cancelled` → `builds` update. Contracts all exist (nats-core `_pipeline.py:148-748`); forge's publisher + bridge-registry code exists but live emission is unverified for the non-queued family — Phase 1 verifies and records | ✅/🟡 |
+| P2 | **Work in flight / build board** | `pipeline.build-queued.{feat}` (BuildQueuedPayload) → `builds` insert ✅ live-proven; `build-started/progress/paused/resumed/complete/failed/cancelled` → `builds` update. Contracts all exist (nats-core `_pipeline.py:148-748`); forge's publisher + bridge-registry code exists but live emission is unverified for the non-queued family — Phase 1 verifies and records. **PIPELINE consumption rule (gate finding F-12, BLOCKER-fixed):** PIPELINE is a workqueue stream — until IN-1 resolves, the projector touches `pipeline.>` via **core-NATS subscribe only**; it MUST NOT create, bind, or ack any JetStream consumer on PIPELINE, including under dev credentials (a JS consumer on a workqueue competes with forge's and can consume-delete its work items). Durable consumers are permitted only on limits-retention streams, named `dash-*`, never binding an existing durable | ✅/🟡 |
 | P3 | **Stage & gate board** | `pipeline.stage-complete/.stage-gated` (StageComplete/StageGatedPayload: stage_label, status, gate_mode, coach_score, duration_secs) → `stage_events`; backfill/reconcile from forge SQLite `stage_log` (gate_mode, coach_score, threshold_applied — `schema.sql:66-91`) | 🟡 bus / ✅ SQLite |
 | P4 | **Approvals & escalations** | `agents.approval.forge.*` (ApprovalRequestPayload) + `.response` (ApprovalResponsePayload: decision, decided_by) → `approvals`; open-request age drives the "waiting on named human" issue. Live-proven G1 2026-07-07 | ✅ |
 | P5 | **Planning runs** | forge SQLite `planning_runs` + `planning_run_events` (schema_v3; states QUEUED…PLANNED_HANDOFF; actor_identity, gate records) → `planning_mirror`; `pipeline.planning-queued.*` (PlanningQueuedPayload) for live arrival. Front half is one operator session from live (gap §1a) — panel renders whatever exists; AGENTS-stream approval events for `plan-{cid}` slots per WS1-I item 2's convention | 🟡 (inert until MP-010/J04) |
-| P6 | **Gateway / serving health** | HTTP polls, not bus: LiteLLM `:4000/v1/models`, llama-swap `:9000/v1/models` (+ `/health` per runbook), NATS `:8222/healthz` → `service_health`. Poll ≤1/30s, read-only | ✅ (available now) |
+| P6 | **Gateway / serving health** | HTTP polls, not bus — **pinned to load-neutral endpoints only** (gate finding F-15): LiteLLM `GET /v1/models`, llama-swap `GET /health` + `GET /v1/models`, NATS `:8222/healthz` → `service_health`. **LiteLLM's `/health` endpoint is explicitly forbidden on any poll path** — it fires real test completions per configured model and would reshuffle GPU residency twice a minute. Poll ≤1/30s | ✅ (available now) |
 | P7 | **Delivery ledger v1** (Rich view + FinProxy view when the feed lands) | `pipeline.build-complete` (BuildCompletePayload: **pr_url**, tasks_completed/failed/total, duration_seconds, repo, branch) → `ledger` at bar `merged_pr`; bootstrap/reconcile from forge SQLite `builds` (status=COMPLETE, pr_url — `schema.sql:15-52`). FinProxy copy requires asks A-8 + IN-4 (arch §4) | 🟡 (Rich now; FinProxy 📋 feed) |
 
 ### Panels GATED on unrun producers (build later phases against the asks)
@@ -85,13 +95,21 @@ evidence paths, seat-level cost, gateway key names, planning internals, failure 
 
 ### Per-chat-tool mapping (the same projections — no separate feed exists or ever will)
 
-| Tool | Reads | Status inherited from |
+| Tool | Reads (Rich registry) | Status inherited from |
 |---|---|---|
 | `feature_status` | `features`, `builds`, `stage_events`, `approvals`, `issues`, (`deploys`, `live_verdicts` 📋) | P2–P4, P8–P9 |
 | `project_rollup` | aggregates of the above per project + `ledger` | P2–P7 |
 | `open_issues` | `issues` (+ ages, owners) | P3–P5 |
 | `delivered_period` | `ledger` (tenant-bound) | P7/P13 |
-| `cost_summary` | `cost_rollups` (audience-filtered view) | P12 |
+| `cost_summary` | `cost_rollups` (Rich handler); the FinProxy handler reads `ledger_finproxy.cost_build`/`cost_project` ONLY — there is no "filtered view" of the operational store (gate finding F-2c) | P12 |
+
+**The FinProxy registry is enumerated, not derived (gate finding F-2d):** it contains exactly
+three tools — `delivered_period`, `project_rollup_lite` (delivered counts + per-project spend
+from `ledger_finproxy` only), `cost_summary_lite` (per-project/per-build totals, no `by_seat`
+in its schema) — and nothing else. `feature_status` and `open_issues` do not exist in the
+FinProxy registry in v1 (their substance is operational). FinProxy tool-result objects are
+DF-008-clean **at the tool boundary** (they are constructed only from `ledger_finproxy.db`
+columns), so the degrade-to-table fallback is inherently safe for that audience (F-2e).
 
 ---
 
@@ -137,16 +155,41 @@ cost_summary(scope: {project?|feature_id?}, window: iso-interval) -> {
 `{kind: "event", ref: "pipeline.build-complete.FEAT-3ED2 seq=1041", at: "2026-07-06T14:13:34Z"}`
 or `{kind: "sqlite_row", ref: "forge builds/build-FEAT-3ED2-20260706125839"}`.
 
-**Grounding rules (binding; mechanized, not prompted-only):**
-1. The model receives only the user turn + tool results. No raw logs, no docs, no memory.
-2. Every rendered claim must cite; the **grounding checker** (deterministic, post-model)
-   verifies every cited ref appeared in this turn's tool results — a failed check discards the
-   NL answer and renders the tool results as a table instead (degrade to truth, never to prose).
-3. Unanswerable ⇒ the tools' `coverage.gaps` are surfaced verbatim ("deploy tracking lands with
-   WS2 B7/B8") — the refusal is data-driven, not model-judged.
-4. Tool loop: max 6 calls/turn; serving default `chat` alias, `workhorse` for multi-tool turns;
-   `claude-*` attended opt-in only (arch §7.5). Chat requests carry the dashboard's own virtual
-   key (`factory-dashboard--chat`) so the chat's own spend appears in its own cost panel.
+**Response-envelope fields every tool must include (gate findings F-5/F-10):**
+`as_of: {watermark_ts, mirror_ts}` (data freshness — the renderer displays the lag whenever it
+exceeds a threshold, so projector downtime is never presented as "now") and an echo of the
+call's own `window`/scope arguments (so period/scope claims are citable, not model narrative).
+
+**Grounding rules (binding; mechanized, not prompted-only). Hardened 2026-07-08 by the gate's
+fabrication review — the original checker verified only that citations EXIST; these rules make
+it verify that claims MATCH, are COMPLETE, and are FRESH:**
+1. The model receives only the current user turn + this turn's tool results. Prior assistant
+   prose is excluded from model input — every turn re-queries; stale verdicts cannot leak
+   forward (F-11).
+2. **Structured claims:** the NL answer is emitted as sentences/bullets each carrying ≥1
+   citation token. A citation-free sentence is itself a grounding failure — zero-citation
+   answers cannot vacuously pass (F-2).
+3. **Entailment, not existence:** the grounding checker (deterministic, post-model) verifies
+   (a) every cited ref appeared in this turn's tool results, AND (b) every claim-bearing scalar
+   in the sentence — status enums, verdict colours, counts, dates, money — string-matches a
+   field value inside the specific cited record (F-1).
+4. **No model arithmetic:** any numeral not literally present in a tool result is rejected;
+   tools pre-compute every aggregate they want displayed. Cross-currency totals can never be
+   rendered because no tool ever returns one (frontier and local are separate columns end to
+   end — F-3).
+5. **No forecasts:** a deterministic claim-class filter rejects future-dated or
+   modal-predictive sentences (ETAs, "should complete by") — no tool contract emits forecasts,
+   so none may be rendered (F-4).
+6. **Gaps are load-bearing:** every non-empty `coverage.gaps` entry from this turn's tool
+   results must appear (string containment) in the rendered answer; dropping a gap is a
+   grounding failure (F-8). Unanswerable ⇒ gaps surfaced verbatim — refusal is data-driven.
+7. **Degrade to truth, labelled:** any failed check discards the NL answer and renders the raw
+   tool results as tables under the header "Could not produce a grounded answer to:
+   ⟨user question⟩ — raw results of ⟨tools called⟩ below" (F-9).
+8. Tool loop: max 6 calls/turn; serving default `chat` alias, `workhorse` for multi-tool turns;
+   `claude-*` attended opt-in only (arch §7.5, incl. the no-eviction rule during active
+   builds). Chat requests carry the dashboard's own virtual key (`factory-dashboard--chat`) so
+   the chat's own spend appears in its own cost panel.
 
 ---
 
@@ -174,7 +217,12 @@ separate feeders (arch §4). Sketch (columns abridged to the load-bearing):
 7. `planning_mirror(correlation_id PK, state, originating_user, expected_approver, request_text,
    target_repo, queued_at, started_at, completed_at, handoff_branch, handoff_path, defer_count,
    escalated_at, error, mirrored_at)` — read-only periodic mirror of forge SQLite
-   (`FORGE_DB_PATH`, default `~/.forge/forge.db`; WAL read-only open, assumption A1).
+   (`FORGE_DB_PATH`, default `~/.forge/forge.db`). **WAL-courtesy discipline (gate finding
+   F-16):** open with URI `mode=ro`, autocommit, per-query transactions <100 ms, connection
+   closed between mirror passes — a long-lived read transaction would block forge's WAL
+   checkpointing (the factory caring about the dashboard, which is forbidden). If forge's
+   `-wal` file grows past a pinned threshold while the mirror runs, assumption A1 is failed and
+   the periodic-copy fallback becomes mandatory.
 8. `ledger(feature_id, project, tenant, title, bar CHECK(bar IN ('merged_pr',
    'deployed_live_verified')), delivered_at, pr_url, evidence_ref, PRIMARY KEY(feature_id, bar))`
    — one row PER BAR CLEARED (§5): graduation appends, never mutates.
@@ -194,9 +242,15 @@ separate feeders (arch §4). Sketch (columns abridged to the load-bearing):
     pre-instrumentation builds).
 14. `service_health(service PK, status, detail, checked_at)`.
 
-`ledger_finproxy.db` contains ONLY: `ledger` (tenant='finproxy' rows), `cost_project`,
-`cost_build` (per-project/per-build totals) — the DF-008-filtered field set of §2, written
-solely by the connection-B projector.
+`ledger_finproxy.db` gets its **own reduced DDL, not a copy of the operational shapes** (gate
+finding F-2d): `ledger_client(feature_id, project, title, bar, delivered_at, pr_url)` — note
+**no `evidence_ref` column exists in this store** — plus `cost_build(feature_id, project,
+window, spend_frontier_gbp, spend_local_nominal_gbp, coverage_note)` and
+`cost_project(project, window, …same columns…)`. Written solely by the connection-B projector,
+from the A-8 **client-facing reduced delivery events** (which carry the per-build spend total
+at source — see the re-cut A-8 in the wire note): per-project spend is the in-store sum of
+per-build spend, so **no APPMILLA-derived row ever crosses app-side** (F-2b). Gateway-side
+project spend (PO/chat seats) is out of FinProxy v1 scope and named in `coverage_note`.
 
 ---
 
@@ -228,7 +282,10 @@ solely by the connection-B projector.
   (upserts keyed on build_id/feature_id+bar).
 - **Period query:** `SELECT ... FROM ledger WHERE tenant=? AND delivered_at >= ? AND
   delivered_at < ? ORDER BY delivered_at` with the bar-labelling rule above — served identically
-  to the panel and to `delivered_period`.
+  to the panel and to `delivered_period`. **No double counting (gate finding F-10b):** a
+  graduation row whose feature already cleared an earlier bar in a *prior* reported window is
+  reported as an upgrade, not a new delivery — `delivered_count` counts features first
+  delivered in the window, with upgrades listed separately.
 
 ---
 
@@ -247,12 +304,17 @@ solely by the connection-B projector.
 ## 7 · Auth + tenant scoping (mechanics of arch §4)
 
 Server-side sessions (signed cookie); `users(username, tenant CHECK(tenant IN
-('operator','finproxy')), credential_hash)`. Tenant selects: (a) which read DB the request's
-query layer opens (operator → `readmodel.db` + `ledger_finproxy.db` read for parity checks;
-finproxy → `ledger_finproxy.db` ONLY — the operational DB path is not present in that request
-context), (b) which chat tool registry is constructed, (c) which SSE channels are subscribable.
-NATS credentials live in the projector's environment only; no request path touches NATS.
-Network: Tailscale (arch §5); no public listener in v1.
+('operator','finproxy')), credential_hash)`. **Tenant is re-read from `users.tenant` by
+authenticated username on every request — never trusted from the cookie payload** (gate finding
+F-2f). Tenant selects: (a) which read DB the request's query layer opens (operator →
+`readmodel.db`; finproxy → `ledger_finproxy.db` ONLY — the operational DB path is not present
+in that request context), (b) which chat tool registry is constructed, (c) which SSE channels
+are subscribable. **All web-layer DB opens use URI `mode=ro`** — the projector is the sole
+writer of both stores, asserted by M-D4 (F-17). **The M-D2/ledger parity check is an offline
+batch job with its own read-only credential — not a live request path**: no request context
+ever co-holds handles to both stores (F-2g). NATS credentials live in the projector's
+environment only; no request path touches NATS. Network: Tailscale, port-scoped share (arch
+§5); no public listener in v1.
 
 ---
 
@@ -292,7 +354,7 @@ factory-dashboard/
 |---|---|
 | DDR-DASH-001 | Ledger semantics: v1 merged+PR → graduated deployed+live-verified; bar labelled per record; graduation appends (§5) |
 | DDR-DASH-002 | Push = SSE, notification-only (no row data on the push channel); re-fetch through the tenant-bound query layer (§6) |
-| DDR-DASH-003 | Grounding checker is deterministic post-model verification; failed grounding degrades to raw tool-result tables (§3) |
+| DDR-DASH-003 | Grounding checker is deterministic post-model verification of **entailment, completeness, and freshness** — per-sentence citations, scalar claim-matching against cited records, no model arithmetic, no forecasts, gaps rendered, `as_of` disclosed; failed grounding degrades to labelled raw tool-result tables (§3; hardened 2026-07-08 by the gate's fabrication review) |
 | DDR-DASH-004 | `source`/`origin` columns keep bootstrap-vs-live provenance explicit; `coverage` fields keep cost/status gaps explicit — the dashboard never presents partial capture as total (§4) |
 
 ---
@@ -323,16 +385,20 @@ citing projection + feed:**
 > No deploy or live-verification is recorded — deploy tracking does not exist yet (WS2 B7/B8).
 > *(`coverage.gaps` ← absence of `deploys`/`live_verdicts` rows 📋.)*
 >
-> **On track: GREEN at delivery — with one post-delivery amber.** Single run, 0 SDK ceiling
-> hits, 16 turns / 11 tasks ≈ 1.45 avg (norm green ≤2), 5/11 first-turn approvals.
-> *(`norms` table §1 vs `builds` + `stage_events` counters ← BuildComplete/StageComplete 🟡 +
-> forge `stage_log` ✅.)*
-> Post-delivery: a follow-up fix build (FEAT-DD4F, 3 turns, same afternoon) targeted this
-> feature's wiring — flagged amber because a second build against the same scope within its
-> norms-window is a re-work signal. *(correlation: `builds` rows sharing repo+scope ←
-> build-queued/complete 🟡; the *semantic* link "DD4F fixes 3ED2's PS-002 gap" is only in
-> FEAT-DD4F.yaml's description — a human-readable note the panel shows as text, not a machine
-> edge, until `spec_survival` episodes exist 📋 WS4-S7/WS1-E.)*
+> **On track: GREEN on the measured signals; two signals unmeasured; one re-work signal not yet
+> machine-computable.** Measured: single run (attempts=1, norm green), 0 task failures
+> (tasks_failed=0/11), gate events clean, 74m55s wall time. *(`norms` §1 vs `builds` counters ←
+> BuildCompletePayload 🟡 + forge `stage_log` ✅; each signal carries `measured: true`.)*
+> Unmeasured, excluded from the verdict and listed as gaps (§1 rule): turns-per-task and
+> SDK-ceiling-hits — **no live feed exists for loop stats until the A-4 loop-stats ask lands**
+> (for this pre-dashboard run they are recoverable one-off from guardkit's durable records —
+> 16 turns/11 tasks, 0 ceiling hits — but that is archaeology, not a projection, and the tool
+> reports it as a gap, not a number). *(F-6/F-7 honesty rule.)*
+> A follow-up fix build (FEAT-DD4F, same afternoon) targeted this feature's wiring — but the
+> re-work link is **not machine-computable in v1**: DD4F is a different feature_id, `builds`
+> has no scope column, and "DD4F fixes 3ED2's PS-002 gap" exists only as prose in
+> FEAT-DD4F.yaml. The tool surfaces it as a coverage gap ("re-work linkage lands with
+> `spec_survival` episodes 📋 WS4-S7/WS1-E"), not as an amber verdict it cannot ground.
 >
 > **Issues: 1 open, 1 honest blind spot.**
 > (1) *Operator follow-up outstanding:* TASK-MP-010 deferred — runtime validation required;
