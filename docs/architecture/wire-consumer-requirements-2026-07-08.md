@@ -91,6 +91,18 @@ fallback (mirror-fed, coverage-noted, or honestly dark). Corrections by dated no
 > **A-10 (new, to the forge lane):** start the existing-but-unwired `heartbeat_loop`
 > (`adapters/nats/fleet_publisher.py:230-305`) in the daemon boot path — forge currently
 > registers once and never heartbeats, so its roster row can never go live.
+> **A-11 (new, to the forge lane; capture mechanism owners' choice):** capture the **merge
+> receipt** at/after the merge boundary — add a nullable `merge_sha` column + payload field
+> mirroring the existing (fully-built, never-fed) `pr_url` carry pipeline
+> (`BuildCompletePayload` field → `_final_hop_fields` copy → `apply_transition` COALESCE),
+> and **stop hardcoding `pr_url`/`repo`/`branch` to `None` at the two emit sites**
+> (`lifecycle_bridge/translation.py:544`, `subagents/autobuild_runner.py:631` — repo/branch
+> are already NOT NULL columns known at queue time). Rationale: DDR-DASH-001 as amended
+> 2026-07-11 — delivery is evidenced by merge receipt (merge_sha primary, pr_url alternate);
+> today NEITHER is ever captured, so no delivery is provable from forge state. Where the
+> merge is human (the current design), the receipt can be recorded by the post-merge step of
+> the handoff tooling; where a PR flow is used (client-repo branch protection), pr_url serves
+> as the receipt unchanged.
 > **IN-3 amendment:** add **`$KV.agent-registry.>`** to `dashboard_ro`'s subscribe list
 > (a plain core-NATS subject-space read of KV puts — no `$JS.>` grant needed): jarvis and
 > KV-registering agents are invisible to `fleet.*` subscribers. Priority note: verification

@@ -477,3 +477,22 @@ row live in `wire-consumer-requirements-2026-07-08.md`; sequencing in `build-pla
 > payloads (BuildProgress/Complete, _fleet/_agent/_memory, the envelope) are `extra="ignore"`
 > (unknown fields DROPPED at parse), only v2.2 payloads are `extra="allow"` — see the wire
 > note's A-4 correction. `Topics.for_project` now lives at topics.py:232-260.
+
+> **Dated amendment 2026-07-11 (Rich's steer, same day) — DDR-DASH-001 evidence generalized:
+> the v1 bar is "merged", evidenced by a MERGE RECEIPT, not by a PR.** Rich challenged the
+> PR-tie ("PRs were invented for zero-trust; the factory's trust is its gates") and a code
+> trace confirmed the factory never wired PRs at all: no programmatic PR creation (guardkit
+> prints `gh pr create` as one of two handoff options, direct merge first; forge's
+> `create_pull_request` has zero callers), no auto-merge by design ("humans own merges"),
+> `pr_url` hardcoded `None` at both emit sites, and review = the gate machinery + the human
+> at the merge boundary. Therefore: the ledger's delivery evidence is `merge_sha` + repo +
+> branch (rendered as a merge-commit "change" link), with `pr_url` an equally-valid ALTERNATE
+> receipt where a flow used a PR (e.g. a client repo's own branch protection — per-engagement
+> config, never factory doctrine). The ledger gains a nullable `merge_sha` column beside
+> `pr_url`; the bar clears on either receipt; a COMPLETE build with neither renders
+> "complete — merge unverified" (a named gap, not a delivered row). Bar labels:
+> `Delivered — merged ⟨change⟩` / `Delivered — deployed & live-verified ⟨date⟩`. The internal
+> bar enum value `merged_pr` is unchanged (internal-name stability; the ux naming map governs
+> rendered copy). Capture-side ask = wire note A-11. The FACTORY-side question (whether the
+> human merge boundary ever becomes automated direct-merge behind gates) is WS2/guardkit's
+> decision — this dashboard is now agnostic to it.
