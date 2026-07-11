@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Weekly delivery report — {{ report.tenant_display }} (client-safe export)</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+{# ux §4.7 (S4) — the CLIENT-SAFE EXPORT. The DF-008 outbound firewall, MECHANIZED: this template
+   renders ONLY the sanctioned fields — feature id/title/project/bar/date/change link + per-build
+   spend totals (FEED-PENDING) + the FOUR sanctioned plan-milestone fields (id/title/target window/
+   deviation state). It is a SEPARATE, STANDALONE document (no operator nav, no operator chrome):
+   James copies it out and adds his own narrative; the dashboard writes nothing and sends nothing.
+   Coach greps THIS file for operator-only tokens (zero hits) + positive-asserts the plan section
+   renders only the four fields. Deliberately no in-flight, no register rows, no scores, no
+   internals, no agent/norm/planning data. #}
+<body class="layout-client">
+  {% import 'macros.html' as m %}
+  <main class="content content--client report-export">
+    <a class="report-export__back" href="/reports?tenant={{ report_tenant }}&from={{ report.window_from }}&to={{ report.window_to }}">← back to the internal report</a>
+    <header class="report-export__head">
+      <h1>Weekly delivery report — {{ report.tenant_display }}</h1>
+      <p class="report-export__meta">
+        <span>week: {{ report.window_from }} → {{ report.window_to }}</span>
+        {{ m.asof_chip(report.as_of) }}
+      </p>
+    </header>
+
+    <section class="report-export__section">
+      <h2>Delivered this week</h2>
+      {% if report.delivered_rows %}
+        <table class="dense-table">
+          <thead>
+            <tr>
+              <th scope="col">delivered</th><th scope="col">feature</th>
+              <th scope="col">project</th><th scope="col">status</th><th scope="col">spend</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for r in report.delivered_rows %}
+            <tr>
+              <td class="num">{{ r.delivered_date }}</td>
+              <td>
+                {% if r.title %}<span class="feature-title">{{ r.title }}</span>
+                {% else %}<span class="feature-title feature-title--missing">{{ r.feature_id }}</span>{% endif %}
+                <span class="feature-id">⟨{{ r.feature_id }}⟩</span>
+              </td>
+              <td>{{ r.project }}</td>
+              <td>
+                {% if r.change_verified %}
+                  {{ r.bar_label.split('⟨')[0] }}<a class="change-link" href="{{ r.change_link }}">⟨change⟩</a>
+                {% else %}
+                  <span class="named-gap">{{ r.bar_label }}</span>
+                {% endif %}
+              </td>
+              <td>{{ m.spend_slot(r.spend) }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="true-empty">No features delivered in this window.</p>
+      {% endif %}
+    </section>
+
+    <section class="report-export__section">
+      <h2>Plan &amp; milestones</h2>
+      {% if report.milestones_withheld %}
+        <p class="report-withheld">plan status unavailable — projection lagging (since {{ report.withheld_since }})</p>
+        {% if report.milestones %}
+        <ul class="plan-list plan-list--withheld">
+          {% for ms in report.milestones %}
+            <li class="plan-row plan-row--withheld">
+              <span class="plan-row__id">{{ ms.milestone_id }} "{{ ms.title }}"</span>
+              <span class="plan-row__target">{{ ms.target_window }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      {% elif report.milestones %}
+        {# ONLY the four sanctioned fields: id, title, target window, deviation state. #}
+        <ul class="plan-list">
+          {% for ms in report.milestones %}
+            <li class="plan-row plan-row--{{ ms.band.band }}">
+              {{ m.band_chip(ms.band) }}
+              <span class="plan-row__id">{{ ms.milestone_id }} "{{ ms.title }}"</span>
+              <span class="plan-row__target">{{ ms.target_window }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="true-empty">No milestones agreed for this engagement yet.</p>
+      {% endif %}
+    </section>
+
+    <section class="report-export__section">
+      <h2>Spend</h2>
+      {{ m.spend_slot(report.spend) }}
+    </section>
+
+    <footer class="report-export__foot">
+      This is an automatically composed summary. Your delivery manager adds the narrative before it reaches you.
+    </footer>
+  </main>
+</body>
+</html>

@@ -1,12 +1,180 @@
 {% extends "base.html" %}
+{% import 'macros.html' as m %}
 {% block title %}Reports · factory-dashboard{% endblock %}
 {% block content %}
-<h1 class="page-title">Reports</h1>
-{# ux §2 — D0 ships the nav item + route rendering a plain "arrives at S4" placeholder. This is
-   NOT the §5.2 FEED-PENDING treatment (that names dark producer feeds, not unbuilt pages). #}
-<section class="panel-card reports-placeholder">
+{# ux §4.7 (S4) — the weekly delivery report. Composition over existing projections + the plan
+   registry; templates render, the query layer computes (§1.3). Every §5 honesty rule applies:
+   as-of chips per card, FEED-PENDING spend, deviation verdicts WITHHELD under a stale projection
+   (never dimmed-green). The internal|export toggle is two server-rendered GET variants (§1.6). #}
+<div class="report-head">
+  <h1 class="page-title">Weekly delivery report — {{ report.tenant_display }}</h1>
+  <form class="window-form" method="get" action="/reports">
+    <input type="hidden" name="tenant" value="{{ report_tenant }}">
+    <label>from <input type="date" name="from" value="{{ report.window_from }}"></label>
+    <label>to <input type="date" name="to" value="{{ report.window_to }}"></label>
+    <button type="submit">Apply week</button>
+  </form>
+</div>
+<div class="report-toolbar">
+  <span class="report-rendering">
+    rendering:
+    <span class="report-rendering__active">[ internal ]</span>
+    <a class="report-rendering__link"
+       href="/reports?view=export&tenant={{ report_tenant }}&from={{ report.window_from }}&to={{ report.window_to }}">client-safe export</a>
+  </span>
+  {% if report.client_tenants %}
+  <span class="report-engagements">
+    engagement:
+    <a href="/reports?tenant=operator" class="{% if report_tenant == 'operator' %}report-engagements__active{% endif %}">operator (fleet)</a>
+    {% for slug, display in report.client_tenants %}
+      <a href="/reports?tenant={{ slug }}" class="{% if report_tenant == slug %}report-engagements__active{% endif %}">{{ display }}</a>
+    {% endfor %}
+  </span>
+  {% endif %}
+</div>
+
+{# --- HEADLINE ------------------------------------------------------------- #}
+<section class="panel-card report-headline state-{{ 'lagging' if report.headline.withheld else 'live' }}">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">HEADLINE</h2>
+    {{ m.asof_chip(report.chrome.events_as_of) }}
+  </header>
   <div class="panel-card__body">
-    <p class="placeholder-note">{{ view.message }}</p>
+    {% if report.headline.withheld %}
+      <p class="report-withheld">plan status unavailable — projection lagging (since {{ report.headline.withheld_since }})</p>
+    {% else %}
+      <p class="report-headline__line">
+        {{ report.headline.delivered_count }} features delivered ·
+        {{ report.headline.in_flight_count }} in flight ·
+        {{ report.headline.behind_count }} milestone{{ 's' if report.headline.behind_count != 1 else '' }} BEHIND ·
+        {{ report.headline.on_target_count }} on target{% if report.headline.ahead_count %} ·
+        {{ report.headline.ahead_count }} ahead{% endif %}
+      </p>
+    {% endif %}
+    {{ m.spend_slot(report.headline.spend) }}
+  </div>
+</section>
+
+{# --- PLAN vs ACTUAL (plans.yaml registry) --------------------------------- #}
+<section class="panel-card report-plan state-{{ 'lagging' if report.plan.withheld else 'live' }}">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">PLAN vs ACTUAL <span class="panel-card__sub">plans.yaml registry</span></h2>
+    {{ m.asof_chip(report.chrome.events_as_of) }}
+  </header>
+  <div class="panel-card__body">
+    {% if report.plan.withheld %}
+      <p class="report-withheld">plan status unavailable — projection lagging (since {{ report.plan.withheld_since }})</p>
+      {% if report.plan.milestones %}
+      <ul class="plan-list plan-list--withheld">
+        {% for ms in report.plan.milestones %}
+          <li class="plan-row plan-row--withheld">
+            <span class="plan-row__id">{% if ms.milestone_id %}{{ ms.milestone_id }} {% endif %}"{{ ms.title }}"</span>
+            {% if ms.target_window %}<span class="plan-row__target">{{ ms.target_window }}</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    {% elif report.plan.milestones %}
+      <ul class="plan-list">
+        {% for ms in report.plan.milestones %}
+          <li class="plan-row plan-row--{{ ms.deviation }}">
+            {{ m.band_chip(ms.band) }}
+            {% if ms.milestone_id %}
+              <span class="plan-row__id">{{ ms.milestone_id }} "{{ ms.title }}"</span>
+              <span class="plan-row__detail">{{ ms.detail }}</span>
+            {% else %}
+              {# NO BASELINE — a named gap, never fake-on-target (§4.7). #}
+              <span class="plan-row__id">{{ ms.title }} <a class="feature-id" href="{{ ms.feature_link }}">⟨{{ ms.feature_id }}⟩</a></span>
+              <span class="plan-row__detail named-gap">{{ ms.detail }}</span>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="true-empty">No milestones in the plan registry for this engagement — add them to plans.yaml.</p>
+    {% endif %}
+  </div>
+</section>
+
+<div class="report-two-col">
+  {# --- DELIVERED THIS WEEK ------------------------------------------------ #}
+  <section class="panel-card report-delivered">
+    <header class="panel-card__header">
+      <h2 class="panel-card__title">DELIVERED THIS WEEK</h2>
+      {{ m.asof_chip(report.chrome.events_as_of) }}
+    </header>
+    <div class="panel-card__body">
+      {% if report.delivered_rows %}
+        <ul class="report-delivered__list">
+          {% for r in report.delivered_rows %}
+            <li class="report-delivered__row">
+              {% if r.title %}<span class="feature-title">{{ r.title }}</span>
+              {% else %}<span class="feature-title feature-title--missing">{{ r.feature_id }}</span>{% endif %}
+              <a class="feature-id" href="{{ r.feature_link }}">⟨{{ r.feature_id }}⟩</a>
+              {% if r.change_verified %}<a class="change-link" href="{{ r.change_link }}">merged ⟨change⟩</a>
+              {% else %}<span class="named-gap">merge unverified</span>{% endif %}
+              {{ m.provenance(r.provenance) }}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="true-empty">No features delivered in this window.</p>
+      {% endif %}
+    </div>
+  </section>
+
+  {# --- ISSUES ENCOUNTERED (window) ---------------------------------------- #}
+  <section class="panel-card report-issues">
+    <header class="panel-card__header">
+      <h2 class="panel-card__title">ISSUES ENCOUNTERED</h2>
+      {{ m.asof_chip(report.chrome.events_as_of) }}
+    </header>
+    <div class="panel-card__body">
+      <p class="report-issues__counts">
+        opened {{ report.issues.opened }} · closed {{ report.issues.closed }}{% if report.issues.oldest_open_age %} · oldest open {{ report.issues.oldest_open_age }}{% endif %}
+      </p>
+      {% if report.issues.rows %}
+        <ul class="report-issues__list">
+          {% for it in report.issues.rows %}
+            <li class="report-issues__row {% if not it.is_open %}report-issues__row--closed{% endif %}">
+              {{ m.band_chip(it.band) }}
+              <a href="{{ it.scope_link }}">{{ it.headline }}</a>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="true-empty">No issues opened or closed in this window.</p>
+      {% endif %}
+    </div>
+  </section>
+</div>
+
+{# --- WHERE WE ARE (in flight) -------------------------------------------- #}
+<section class="panel-card report-inflight state-{{ report.headline.withheld and 'lagging' or 'live' }}">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">WHERE WE ARE <span class="panel-card__sub">in flight</span></h2>
+    {{ m.asof_chip(report.chrome.events_as_of) }}
+  </header>
+  <div class="panel-card__body">
+    {% if report.in_flight_rows %}
+      {% for r in report.in_flight_rows %}
+        <article class="build-row">
+          <div class="build-row__head">
+            {% if r.title %}<span class="feature-title">{{ r.title }}</span>
+            {% else %}<span class="feature-title feature-title--missing">{{ r.feature_id }}</span>{% endif %}
+            <a class="feature-id" href="{{ r.feature_link }}">⟨{{ r.feature_id }}⟩</a>
+          </div>
+          {{ m.journey_bar(r.journey, mini=True) }}
+          <div class="build-row__foot">
+            <span class="build-row__station">{{ r.current_station_label }} · {{ r.project }}</span>
+            {{ m.band_chip(r.band) }}
+            <span class="build-row__detail">{{ r.detail }}</span>
+          </div>
+        </article>
+      {% endfor %}
+    {% else %}
+      <p class="true-empty">No builds in flight for this engagement.</p>
+    {% endif %}
   </div>
 </section>
 {% endblock %}

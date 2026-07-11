@@ -15,6 +15,7 @@ from backend import ledger
 from backend.projector.consumers import Projector, open_rw, write_heartbeat
 from backend.projector.forge_mirror import forge_db_path, mirror_loop
 from backend.projector.health_polls import health_loop
+from backend.projector.plan_mirror import mirror_plans_once, plan_mirror_loop
 from backend.projector.projections.base import record_change
 
 
@@ -34,12 +35,16 @@ async def _run() -> None:
     boot_panels = ledger.bootstrap_from_forge(boot_conn, forge_db_path(), now)
     if boot_panels:
         record_change(boot_conn, boot_panels, [], now)
+    # S4: mirror the plan registry (plans.yaml → plan_milestones) at startup — projector-owned,
+    # never a web-request write (design §7 / M-D4). The file-change re-mirror runs in the loop below.
+    mirror_plans_once(boot_conn, now=now)
 
     projector = Projector(db_path, nats_url)
     await asyncio.gather(
         projector.run(),
         mirror_loop(open_rw(db_path)),
         health_loop(open_rw(db_path)),
+        plan_mirror_loop(open_rw(db_path)),
     )
 
 

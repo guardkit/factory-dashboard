@@ -248,6 +248,36 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
 .kind-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 10px; }
 .kind-legend__entry { display: inline-flex; gap: 6px; align-items: baseline; }
 
+/* ---- weekly report (§4.7 / S4) ----------------------------------------- */
+.report-head { display: flex; gap: 16px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+.report-toolbar { display: flex; gap: 24px; flex-wrap: wrap; margin: 8px 0 14px; font-size: 12px; color: var(--muted); }
+.report-rendering__active { font-weight: 700; color: var(--ink); }
+.report-rendering__link, .report-engagements a { color: var(--accent); text-decoration: none; }
+.report-engagements__active { font-weight: 700; }
+.panel-card__sub { color: var(--muted); font-weight: 400; font-size: 12px; }
+.report-headline__line { font-size: 15px; margin: 0 0 8px; }
+.report-withheld { color: var(--warn); font-style: italic; margin: 0 0 8px; }
+.plan-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.plan-row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.plan-row__id { font-weight: 600; }
+.plan-row__detail { color: var(--muted); font-size: 12px; }
+.plan-row__target { color: var(--muted); font-size: 12px; }
+.plan-row--withheld { color: var(--muted); }
+.report-two-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.report-delivered__list, .report-issues__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.report-delivered__row, .report-issues__row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.report-issues__counts { color: var(--muted); font-size: 12px; margin: 0 0 6px; }
+.report-issues__row--closed { color: var(--muted); text-decoration: line-through; }
+
+/* ---- client-safe export (§4.7 firewall) — document-shaped, roomier ----- */
+.report-export { max-width: 820px; }
+.report-export__back { display: inline-block; margin-bottom: 12px; color: var(--accent); text-decoration: none; font-size: 13px; }
+.report-export__head h1 { margin: 0 0 4px; }
+.report-export__meta { display: flex; gap: 16px; align-items: baseline; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+.report-export__section { margin-top: 22px; }
+.report-export__section h2 { font-size: 16px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.report-export__foot { margin-top: 26px; color: var(--muted); font-size: 12px; font-style: italic; }
+
 /* ---- login -------------------------------------------------------------- */
 .layout-login { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
 .login-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; width: 320px; }
@@ -264,7 +294,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
 
 /* ---- responsive: single column below 1024px; chat is /chat route below 1280px --------- */
 @media (max-width: 1024px) {
-  .home-grid, .feature-lower, .fleet-grid { grid-template-columns: minmax(0, 1fr); }
+  .home-grid, .feature-lower, .fleet-grid, .report-two-col { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Wide content that must not scroll the page body: dense tables scroll inside their card. */

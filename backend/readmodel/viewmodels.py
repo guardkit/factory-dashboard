@@ -372,6 +372,135 @@ class FeaturePage:
 
 
 # ---------------------------------------------------------------------------
+# Weekly delivery report (§4.7 / S4) — weekly_report(tenant, window) rendered
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MilestoneRow:
+    """One plan-vs-actual row (§4.7). The FOUR client-safe fields are milestone_id, title,
+    target_window, and the deviation band; `detail` is operator-only (feature/merge counts) and
+    NEVER renders in the client-safe export. `no_baseline` marks work outside every milestone —
+    a named gap `[—] NO BASELINE`, never fake-on-target."""
+
+    milestone_id: str
+    title: str
+    target_window: str
+    band: BandChip           # [G] AHEAD / [G] ON TARGET / [R] BEHIND / [—] NO BASELINE
+    deviation: str           # 'ahead' | 'on_target' | 'behind' | 'no_baseline'
+    detail: str = ""         # operator-only: "target w/c 07-06 · 1/3 features merged"
+    feature_id: str = ""     # for NO BASELINE rows (the untracked feature); "" for milestones
+    feature_link: str = ""
+
+
+@dataclass(frozen=True)
+class ReportHeadline:
+    """The one-line headline (§4.7). Under a stale ledger/build watermark the counts are WITHHELD
+    (never dimmed-green): `withheld` renders the "plan status unavailable — projection lagging"
+    copy in place of the counts (§5.6/F-5 discipline applied to plan data)."""
+
+    delivered_count: int
+    in_flight_count: int
+    behind_count: int
+    on_target_count: int
+    ahead_count: int
+    spend: SpendSlot
+    withheld: bool = False
+    withheld_since: str = ""
+
+
+@dataclass(frozen=True)
+class PlanVsActual:
+    """The plan-vs-actual card (§4.7). `withheld` withholds ALL deviation chips under a stale
+    projection; the milestone rows still list (id/title/target) but no green/red claim is made."""
+
+    milestones: tuple[MilestoneRow, ...]
+    withheld: bool = False
+    withheld_since: str = ""
+
+
+@dataclass(frozen=True)
+class ReportIssueRow:
+    kind: str
+    band: BandChip
+    headline: str            # "gate REJECTED Payments API webhooks ⟨FEAT-9A21⟩ · build-3"
+    feature_id: str
+    scope_link: str
+    is_open: bool
+
+
+@dataclass(frozen=True)
+class IssuesEncountered:
+    """Issues opened OR closed in the window, scoped to the tenant's projects (§4.7). Leads with
+    counts; lists open reds first (§4.5 bands)."""
+
+    opened: int
+    closed: int
+    oldest_open_age: str     # "2d" | "" when nothing open
+    rows: tuple[ReportIssueRow, ...] = ()
+
+
+@dataclass(frozen=True)
+class WeeklyReport:
+    """The internal weekly-report view model (§4.7). One query-layer composition; the client-safe
+    export (`ExportReport`) is a strict subset of this, rendered by a separate template."""
+
+    chrome: PageChrome
+    tenant_slug: str
+    tenant_display: str
+    window_from: str
+    window_to: str
+    headline: ReportHeadline
+    plan: PlanVsActual
+    delivered_rows: tuple[DeliveredRow, ...]
+    in_flight_rows: tuple[BuildRow, ...]
+    issues: IssuesEncountered
+    client_tenants: tuple[tuple[str, str], ...] = ()  # (slug, display) picker for the operator
+
+
+# --- the client-safe export (§4.7 dated note) — DF-008 firewall, MECHANIZED --
+# ONLY DF-008-permitted fields (feature id/title/project/bar/date/change link + per-build spend
+# totals) PLUS the four sanctioned plan-milestone fields (id/title/target window/deviation state).
+# No issues, no in-flight internals, no coach scores, no agent/norm/planning internals. The
+# export template renders EXCLUSIVELY these shapes (coach greps it + positive-asserts the four).
+
+
+@dataclass(frozen=True)
+class ExportDeliveredRow:
+    feature_id: str
+    title: str
+    project: str
+    bar_label: str
+    change_link: str
+    change_verified: bool
+    delivered_date: str
+    spend: SpendSlot
+
+
+@dataclass(frozen=True)
+class ExportMilestone:
+    """The FOUR sanctioned client-safe milestone fields ONLY (§4.7 dated note)."""
+
+    milestone_id: str
+    title: str
+    target_window: str
+    band: BandChip           # the deviation-state, the fourth sanctioned field
+
+
+@dataclass(frozen=True)
+class ExportReport:
+    tenant_display: str
+    window_from: str
+    window_to: str
+    as_of: AsOf
+    delivered_rows: tuple[ExportDeliveredRow, ...]
+    milestones: tuple[ExportMilestone, ...]
+    spend: SpendSlot
+    milestones_withheld: bool = False
+    withheld_since: str = ""
+
+
+# ---------------------------------------------------------------------------
 # Page chrome (top bar + banner) — every operator page
 # ---------------------------------------------------------------------------
 

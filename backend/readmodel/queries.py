@@ -282,21 +282,3 @@ def fleet_view() -> FleetView:
         serving=fixtures.serving(PanelState.LIVE),
         projector=fixtures.projector(PanelState.LIVE),
     )
-
-
-# --- reports (S4 placeholder at D0) -----------------------------------------
-
-
-@dataclass(frozen=True)
-class ReportsPlaceholder:
-    chrome: PageChrome
-    message: str
-
-
-def reports_placeholder() -> ReportsPlaceholder:
-    """ux §2: D0 ships the nav item + route rendering a plain 'arrives at S4' placeholder — NOT
-    the §5.2 FEED-PENDING treatment (that names dark producer feeds, not unbuilt pages)."""
-    return ReportsPlaceholder(
-        chrome=fixtures.page_chrome(),
-        message="The weekly delivery report arrives at S4.",
-    )

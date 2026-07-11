@@ -22,11 +22,14 @@ def test_every_nav_item_resolves_to_a_live_route(operator_client: TestClient) ->
         assert r.status_code == 200, href
 
 
-def test_reports_is_plain_placeholder_not_feed_pending(operator_client: TestClient) -> None:
-    """ux §2: /reports renders a plain 'arrives at S4' placeholder, NOT the FEED-PENDING treatment."""
+def test_reports_renders_the_weekly_report(operator_client: TestClient) -> None:
+    """ux §4.7 (S4): /reports renders the weekly delivery report (headline + plan-vs-actual +
+    the client-safe export toggle), no longer the D0 'arrives at S4' placeholder."""
     body = operator_client.get("/reports").text
-    assert "arrives at S4" in body
-    assert "FEED PENDING" not in body
+    assert "Weekly delivery report" in body
+    assert "PLAN vs ACTUAL" in body
+    assert "client-safe export" in body
+    assert "arrives at S4" not in body
 
 
 def test_unauthenticated_redirects_to_login(client: TestClient) -> None:

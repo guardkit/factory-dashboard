@@ -183,6 +183,40 @@ def _render(request: Request, name: str, context: dict[str, object]) -> HTMLResp
     return templates.TemplateResponse(request, name, ctx)
 
 
+def _reports_response(
+    request: Request,
+    user: auth.ResolvedUser,
+    from_: str | None,
+    to: str | None,
+    view: str | None,
+    tenant: str | None,
+) -> HTMLResponse:
+    """ux §4.7 (S4): the weekly delivery report for ONE tenant engagement + window. The tenant is
+    an OPERATOR report filter over the operator store (the session stays operator — this is not the
+    §2 session-tenant rule), validated against the configured registry, defaulting to the fleet-wide
+    `operator` view. The internal|export toggle is two server-rendered GET variants (no JS tabs,
+    §1.6); the export is a SEPARATE, standalone template — the DF-008 outbound firewall, mechanized."""
+    tenants: dict[str, Tenant] = request.app.state.tenants
+    report_tenant = tenant if tenant in tenants else "operator"
+    window = (from_, to) if from_ and to else None
+    db_path = request.app.state.db_path
+    if view == "export":
+        export = dbread.export_report_view(db_path, report_tenant, window)
+        return _render(
+            request,
+            "reports_export.html",
+            {"report": export, "report_tenant": report_tenant, "nav_active": "reports",
+             "tenant": _tenant(request, user)},
+        )
+    report = dbread.weekly_report_view(db_path, report_tenant, window)
+    return _render(
+        request,
+        "reports.html",
+        {"report": report, "chrome": report.chrome, "report_tenant": report_tenant,
+         "nav_active": "reports", "tenant": _tenant(request, user)},
+    )
+
+
 def _register_routes(app: FastAPI) -> None:
     # --- auth ---------------------------------------------------------------
 
@@ -289,12 +323,15 @@ def _register_routes(app: FastAPI) -> None:
         )
 
     @app.get("/reports", response_class=HTMLResponse)
-    def reports(request: Request, user: OperatorPage) -> HTMLResponse:
-        return _render(
-            request,
-            "reports.html",
-            {"view": queries.reports_placeholder(), "nav_active": "reports", "tenant": _tenant(request, user)},
-        )
+    def reports(
+        request: Request,
+        user: OperatorPage,
+        from_: Annotated[str | None, Query(alias="from")] = None,
+        to: str | None = None,
+        view: str | None = None,
+        tenant: str | None = None,
+    ) -> HTMLResponse:
+        return _reports_response(request, user, from_, to, view, tenant)
 
     @app.get("/issues", response_class=HTMLResponse)
     def issues(request: Request, user: OperatorPage) -> HTMLResponse:

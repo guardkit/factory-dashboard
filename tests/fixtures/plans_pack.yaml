@@ -1,0 +1,21 @@
+# The `plan_pack` fixture (ux §4.8): one milestone BEHIND, one ON TARGET, one delivered AHEAD,
+# plus (realized in the DB by the test) one in-flight feature in NO milestone → `[—] NO BASELINE`.
+# Drives the §4.7 plan-vs-actual states + the client-safe export.
+plans:
+  finproxy:
+    - id: M2
+      title: "Payments API"
+      feature_ids:
+        - FEAT-9A21
+        - FEAT-AAAA
+        - FEAT-BBBB
+      target_window: "w/c 2026-07-06"      # this week; only 1/3 delivered → BEHIND
+    - id: M3
+      title: "Reporting"
+      project: finproxy-reporting
+      target_window: "w/c 2026-07-13"      # next week; build in flight → ON TARGET
+    - id: M1
+      title: "Onboarding"
+      feature_ids:
+        - FEAT-DONE
+      target_window: "w/c 2026-07-13"      # delivered 07-06, before target → AHEAD

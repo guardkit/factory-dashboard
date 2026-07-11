@@ -1,0 +1,18 @@
+# Test-only tenant registry for the S4 weekly-report tests: operator + a finproxy client
+# engagement that OWNS a project set (so the report's tenant scoping + plan-vs-actual are testable).
+tenants:
+  - tenant_slug: operator
+    display_name: "Factory (operator)"
+    nats_account: APPMILLA
+    subject_prefix: null
+    projects: []
+    store_path: null
+
+  - tenant_slug: finproxy
+    display_name: "FinProxy"
+    nats_account: FINPROXY
+    subject_prefix: finproxy
+    projects:
+      - finproxy-app
+      - finproxy-reporting
+    store_path: ledger_client_finproxy.db

@@ -16,6 +16,7 @@ projector feeds.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -35,20 +36,29 @@ from backend.readmodel.viewmodels import (
     BuildRow,
     DeliveredPanel,
     DeliveredRow,
+    ExportDeliveredRow,
+    ExportMilestone,
+    ExportReport,
     GateEventRow,
     GateEventsPanel,
+    IssuesEncountered,
+    MilestoneRow,
     NeedsYouItem,
     NeedsYouPanel,
     PageChrome,
     PanelState,
     PlanningPanel,
     PlanningRunRow,
+    PlanVsActual,
     ProjectorPanel,
     ProvenanceBadge,
+    ReportHeadline,
+    ReportIssueRow,
     ServiceRow,
     ServingPanel,
     SpendSlot,
     StreamRecency,
+    WeeklyReport,
 )
 
 
@@ -616,7 +626,408 @@ def delivered_panel(
     )
 
 
+# --- S4 weekly delivery report (ux §4.7) -------------------------------------
+#
+# `weekly_report(tenant, window)` — the SINGLE query-layer composition the /reports page renders
+# now and a D4 chat tool would call later (so page and chat can never disagree). Composition ONLY:
+# the ledger window + issues window + in-flight features + plan-vs-actual from `plan_milestones` +
+# the FEED-PENDING spend slot. No new feeds. Deviation is computed HERE, never stored; a stale
+# ledger/build watermark WITHHOLDS the deviation chips + headline counts (never a dimmed-green
+# claim — §5.6/F-5). The client-safe `export_report` is a strict subset rendered by its own template.
+
+_TARGET_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+
+def _tenant_projects(conn: sqlite3.Connection, tenant: str) -> tuple[str, ...]:
+    """The tenant's owned project set (from the mirrored `tenants` registry). An empty set means
+    fleet-wide (the reserved `operator` tenant) — no project filter is applied for it."""
+    row = conn.execute("SELECT projects_json FROM tenants WHERE tenant_slug=?", (tenant,)).fetchone()
+    if not row or not row[0]:
+        return ()
+    try:
+        data = json.loads(row[0])
+    except (ValueError, TypeError):
+        return ()
+    return tuple(str(p) for p in data) if isinstance(data, list) else ()
+
+
+def _in_scope(project: object, projects: tuple[str, ...]) -> bool:
+    """A row is in the tenant's scope when its project is owned by the tenant; a fleet-wide tenant
+    (empty project set) scopes everything."""
+    return not projects or str(project or "") in projects
+
+
+def _target_start(target_window: str) -> date | None:
+    """Parse the first ISO date out of a target window string (`"w/c 2026-07-06"` → 2026-07-06).
+    Undated windows return None (deviation then leans on delivered-vs-nothing, honestly)."""
+    m = _TARGET_DATE_RE.search(target_window or "")
+    if not m:
+        return None
+    try:
+        return date.fromisoformat(m.group(1))
+    except ValueError:
+        return None
+
+
+def _deviation(
+    *, tracked: set[str], delivered: dict[str, str], target_start: date | None, ref: date
+) -> tuple[str, BandChip]:
+    """Deviation state from delivered-vs-target (query-layer only — §4.7):
+    - all tracked features delivered BEFORE the target period began ⇒ AHEAD [G];
+    - all tracked features delivered (on/within target) ⇒ ON TARGET [G];
+    - not all delivered but the target period has been reached/passed ⇒ BEHIND [R];
+    - not all delivered and the target is still in the future ⇒ ON TARGET [G] (in flight is fine).
+    """
+    all_delivered = bool(tracked) and tracked <= set(delivered)
+    if all_delivered:
+        latest_iso = max(delivered[f] for f in tracked)
+        latest = _dt(latest_iso)
+        latest_date = vm.to_london(latest).date() if latest else None
+        if target_start and latest_date and latest_date < target_start:
+            return "ahead", BandChip("G", "AHEAD")
+        return "on_target", BandChip("G", "ON TARGET")
+    if target_start and target_start <= ref:
+        return "behind", BandChip("R", "BEHIND")
+    return "on_target", BandChip("G", "ON TARGET")
+
+
+def _delivered_map(conn: sqlite3.Connection, tenant: str, projects: tuple[str, ...]) -> dict[str, str]:
+    """{feature_id: earliest merged_pr delivered_at} across ALL time (a milestone is a cumulative
+    goal — delivery is not window-bounded), scoped to the tenant's projects."""
+    rows = conn.execute(
+        "SELECT feature_id, project, delivered_at FROM ledger WHERE bar='merged_pr'"
+    ).fetchall()
+    out: dict[str, str] = {}
+    for fid, project, dat in rows:
+        if dat is None or not _in_scope(project, projects):
+            continue
+        if fid not in out or str(dat) < out[fid]:
+            out[fid] = str(dat)
+    return out
+
+
+def _title_for(conn: sqlite3.Connection, feature_id: str) -> str:
+    """Best-effort projected title for a feature (builds first, then ledger). "" ⇒ id-fallback."""
+    for table in ("builds", "ledger"):
+        row = conn.execute(
+            f"SELECT title FROM {table} WHERE feature_id=? AND title IS NOT NULL AND title != '' LIMIT 1",
+            (feature_id,),
+        ).fetchone()
+        if row and row[0]:
+            return str(row[0])
+    return ""
+
+
+def _milestone_tracked(
+    conn: sqlite3.Connection, feature_ids: list[str], project: object
+) -> set[str]:
+    """The feature set a milestone tracks: an explicit `feature_ids` list, or (fallback) every
+    feature seen in the milestone's `project` (across builds + ledger)."""
+    if feature_ids:
+        return set(feature_ids)
+    if not project:
+        return set()
+    tracked: set[str] = set()
+    for table in ("builds", "ledger"):
+        for (fid,) in conn.execute(
+            f"SELECT DISTINCT feature_id FROM {table} WHERE project=?", (str(project),)
+        ).fetchall():
+            if fid:
+                tracked.add(str(fid))
+    return tracked
+
+
+def _plan_milestones(
+    conn: sqlite3.Connection,
+    tenant: str,
+    projects: tuple[str, ...],
+    delivered: dict[str, str],
+    in_flight: tuple[BuildRow, ...],
+    delivered_rows: tuple[DeliveredRow, ...],
+    ref: date,
+) -> tuple[list[MilestoneRow], int, int, int]:
+    """Compose the plan-vs-actual rows + the milestone deviation tallies. Returns
+    (rows, behind, on_target, ahead). Untracked active work becomes `[—] NO BASELINE` rows."""
+    milestones = conn.execute(
+        "SELECT milestone_id, title, feature_ids_json, project, target_window "
+        "FROM plan_milestones WHERE tenant=? ORDER BY milestone_id",
+        (tenant,),
+    ).fetchall()
+    rows: list[MilestoneRow] = []
+    covered_features: set[str] = set()
+    covered_projects: set[str] = set()
+    behind = on_target = ahead = 0
+    for mid, title, feature_ids_json, project, target_window in milestones:
+        try:
+            feature_ids = [str(f) for f in json.loads(feature_ids_json or "[]")]
+        except (ValueError, TypeError):
+            feature_ids = []
+        tracked = _milestone_tracked(conn, feature_ids, project)
+        covered_features |= tracked
+        if project:
+            covered_projects.add(str(project))
+        deliv_count = sum(1 for f in tracked if f in delivered)
+        deviation, band = _deviation(
+            tracked=tracked, delivered=delivered, target_start=_target_start(target_window), ref=ref
+        )
+        if deviation == "behind":
+            behind += 1
+        elif deviation == "ahead":
+            ahead += 1
+        else:
+            on_target += 1
+        detail = f"target {target_window} · {deliv_count}/{len(tracked)} features merged"
+        rows.append(MilestoneRow(
+            milestone_id=str(mid), title=str(title), target_window=str(target_window),
+            band=band, deviation=deviation, detail=detail,
+        ))
+    # NO BASELINE: active work (in-flight builds + delivered-in-window) outside every milestone.
+    active: dict[str, str] = {}
+    for br in in_flight:
+        active.setdefault(br.feature_id, br.title)
+    for dr in delivered_rows:
+        active.setdefault(dr.feature_id, dr.title)
+    for fid, title in active.items():
+        if fid in covered_features:
+            continue
+        rows.append(MilestoneRow(
+            milestone_id="", title=title or fid, target_window="",
+            band=BandChip("—", "NO BASELINE"), deviation="no_baseline",
+            detail="not in the plan registry (add to plans.yaml)",
+            feature_id=fid, feature_link=f"/features/{fid}",
+        ))
+    return rows, behind, on_target, ahead
+
+
+_ISSUE_VERB = {
+    "gate_rejected": "gate REJECTED", "escalation": "ESCALATION", "build_failed": "build FAILED",
+    "approval_waiting": "approval WAITING", "stalled": "STALLED", "seam_finding": "seam finding",
+}
+
+
+def _issues_encountered(
+    conn: sqlite3.Connection, lo: str, hi: str, now: datetime, projects: tuple[str, ...]
+) -> IssuesEncountered:
+    """Issues opened OR closed in the window `[lo, hi)`, scoped to the tenant's project set (§4.7).
+    Leads with counts; open reds first (§4.5 bands). Scope maps a scope_id feature → project via
+    builds/ledger; a fleet-wide tenant sees everything."""
+    rows = conn.execute(
+        """SELECT issue_id, kind, scope_id, opened_at, closed_at, detail FROM issues
+            WHERE (opened_at >= ? AND opened_at < ?) OR (closed_at >= ? AND closed_at < ?)""",
+        (lo, hi, lo, hi),
+    ).fetchall()
+    project_of = _feature_project_map(conn)
+    opened = closed = 0
+    issue_rows: list[ReportIssueRow] = []
+    oldest_open_secs = 0.0
+    for _iid, kind, scope_id, opened_at, closed_at, detail in rows:
+        if projects and project_of.get(str(scope_id or ""), "") not in projects:
+            continue
+        o_in = opened_at is not None and lo <= str(opened_at) < hi
+        c_in = closed_at is not None and lo <= str(closed_at) < hi
+        if o_in:
+            opened += 1
+        if c_in:
+            closed += 1
+        is_open = closed_at is None
+        if is_open:
+            odt = _dt(opened_at)
+            if odt:
+                oldest_open_secs = max(oldest_open_secs, (now - odt).total_seconds())
+        red_kinds = ("gate_rejected", "escalation", "build_failed", "stalled")
+        band = BandChip("R") if kind in red_kinds else BandChip("A")
+        sid = str(scope_id or "")
+        verb = _ISSUE_VERB.get(str(kind), str(kind))
+        if sid.startswith("FEAT-"):
+            title = _title_for(conn, sid) or sid
+            headline = f"{verb} {title} ⟨{sid}⟩"
+            scope_link = f"/features/{sid}"
+        else:
+            headline = f"{verb} {detail or sid}"
+            scope_link = "/issues"
+        issue_rows.append(ReportIssueRow(
+            kind=str(kind), band=band, headline=headline, feature_id=sid,
+            scope_link=scope_link, is_open=is_open,
+        ))
+    issue_rows.sort(key=lambda r: (0 if (r.is_open and r.band.band == "R") else 1 if r.is_open else 2))
+    oldest = vm.fmt_age(oldest_open_secs) if oldest_open_secs else ""
+    return IssuesEncountered(opened=opened, closed=closed, oldest_open_age=oldest, rows=tuple(issue_rows))
+
+
+def _feature_project_map(conn: sqlite3.Connection) -> dict[str, str]:
+    """{feature_id: project} across builds + ledger (for scoping issues to a tenant's projects)."""
+    out: dict[str, str] = {}
+    for table in ("builds", "ledger"):
+        for fid, project in conn.execute(
+            f"SELECT feature_id, project FROM {table} WHERE feature_id IS NOT NULL"
+        ).fetchall():
+            if fid and project and str(fid) not in out:
+                out[str(fid)] = str(project)
+    return out
+
+
+def _plan_status_stale(conn: sqlite3.Connection, now: datetime) -> tuple[bool, str]:
+    """Is the ledger/build watermark stale enough to WITHHOLD the plan verdict (§4.7 / §5.6)?
+    Returns (stale, since_label). A dead projector (whole projection suspect) withholds; so does a
+    stale build/ledger feeder watermark. `since` anchors the "projection lagging (since ⟨ts⟩)" copy."""
+    hb = _heartbeat_at(conn)
+    if not fr.projector_alive(hb, now):
+        return True, (vm.fmt_wall(hb, now=now) if hb else "startup")
+    feeder = max(
+        [t for t in (_watermark(conn, "PIPELINE"), _watermark(conn, "FORGE_MIRROR")) if t is not None],
+        default=None,
+    )
+    if feeder is None or (now - feeder).total_seconds() >= vm.MIRROR_FRESH_SECS:
+        return True, (vm.fmt_wall(feeder, now=now) if feeder else "startup")
+    return False, ""
+
+
+def _report_delivered(
+    conn: sqlite3.Connection, lo: str, hi: str, now: datetime, tenant: str | None
+) -> list[DeliveredRow]:
+    """The delivered-this-week list (verified merged rows only) — reuses the F-10b window core."""
+    delivered, _count, _gaps = _delivered_and_gaps(conn, lo, hi, now, tenant)
+    return delivered
+
+
+def weekly_report(
+    conn: sqlite3.Connection,
+    tenant: str,
+    now: datetime | None = None,
+    *,
+    window: tuple[str, str] | None = None,
+    client_tenants: tuple[tuple[str, str], ...] = (),
+) -> WeeklyReport:
+    """The §4.7 weekly delivery report for one tenant engagement + window. Composition only."""
+    now = now or _now()
+    win_from, win_to = window or default_window(now)
+    lo, hi = _window_bounds(win_from, win_to)
+    ref = date.fromisoformat(win_to) if _TARGET_DATE_RE.fullmatch(win_to) else vm.to_london(now).date()
+    projects = _tenant_projects(conn, tenant)
+    tenant_filter = None if not projects else tenant
+
+    delivered_rows = tuple(_report_delivered(conn, lo, hi, now, tenant_filter))
+    board = build_board(conn, now)
+    in_flight = tuple(r for r in board.rows if _in_scope(r.project, projects))
+    delivered_map = _delivered_map(conn, tenant, projects)
+    stale, since = _plan_status_stale(conn, now)
+
+    milestone_rows, behind, on_target, ahead = _plan_milestones(
+        conn, tenant, projects, delivered_map, in_flight, delivered_rows, ref
+    )
+    issues = _issues_encountered(conn, lo, hi, now, projects)
+
+    headline = ReportHeadline(
+        delivered_count=len(delivered_rows), in_flight_count=len(in_flight),
+        behind_count=behind, on_target_count=on_target, ahead_count=ahead,
+        spend=SpendSlot(), withheld=stale, withheld_since=since,
+    )
+    plan = PlanVsActual(milestones=tuple(milestone_rows), withheld=stale, withheld_since=since)
+    tenant_display = _tenant_display(conn, tenant)
+    return WeeklyReport(
+        chrome=page_chrome(conn, now), tenant_slug=tenant, tenant_display=tenant_display,
+        window_from=win_from, window_to=win_to, headline=headline, plan=plan,
+        delivered_rows=delivered_rows, in_flight_rows=in_flight, issues=issues,
+        client_tenants=client_tenants,
+    )
+
+
+def export_report(
+    conn: sqlite3.Connection,
+    tenant: str,
+    now: datetime | None = None,
+    *,
+    window: tuple[str, str] | None = None,
+) -> ExportReport:
+    """The CLIENT-SAFE export (§4.7 dated note) — a strict subset of `weekly_report`: ONLY
+    DF-008-permitted delivered fields (+ FEED-PENDING per-build spend) and the FOUR sanctioned
+    plan-milestone fields (id/title/target window/deviation state). No issues, no in-flight
+    internals, no coach scores, no agent/norm/planning internals. Rendered by its own template so
+    the outbound firewall is MECHANIZED, not remembered."""
+    now = now or _now()
+    win_from, win_to = window or default_window(now)
+    lo, hi = _window_bounds(win_from, win_to)
+    ref = date.fromisoformat(win_to) if _TARGET_DATE_RE.fullmatch(win_to) else vm.to_london(now).date()
+    projects = _tenant_projects(conn, tenant)
+    tenant_filter = None if not projects else tenant
+
+    delivered_rows = tuple(_report_delivered(conn, lo, hi, now, tenant_filter))
+    board = build_board(conn, now)
+    in_flight = tuple(r for r in board.rows if _in_scope(r.project, projects))
+    delivered_map = _delivered_map(conn, tenant, projects)
+    stale, since = _plan_status_stale(conn, now)
+    milestone_rows, _b, _o, _a = _plan_milestones(
+        conn, tenant, projects, delivered_map, in_flight, delivered_rows, ref
+    )
+
+    # Client surfaces use PLAIN-LANGUAGE spend — never cite internal ask ids (§7.2).
+    client_spend = SpendSlot(plain_language=True)
+    export_delivered = tuple(
+        ExportDeliveredRow(
+            feature_id=r.feature_id, title=r.title, project=r.project, bar_label=r.bar_label,
+            change_link=r.change_link, change_verified=r.change_verified,
+            delivered_date=r.delivered_date, spend=client_spend,
+        )
+        for r in delivered_rows
+    )
+    # ONLY the four sanctioned fields; NO BASELINE rows carry no client milestone identity and are
+    # dropped from the export (an operator prompt to file a plan, not client-facing content).
+    export_milestones = tuple(
+        ExportMilestone(milestone_id=m.milestone_id, title=m.title, target_window=m.target_window, band=m.band)
+        for m in milestone_rows
+        if m.deviation != "no_baseline"
+    )
+    events_ts = max(
+        [t for t in (_watermark(conn, s) for s in ("PIPELINE", "AGENTS", "FLEET")) if t is not None],
+        default=None,
+    )
+    return ExportReport(
+        tenant_display=_tenant_display(conn, tenant), window_from=win_from, window_to=win_to,
+        as_of=_chip("as of", events_ts, now, vm.BUS_FRESH_SECS, PanelState.LIVE),
+        delivered_rows=export_delivered, milestones=export_milestones, spend=client_spend,
+        milestones_withheld=stale, withheld_since=since,
+    )
+
+
+def _tenant_display(conn: sqlite3.Connection, tenant: str) -> str:
+    row = conn.execute("SELECT display_name FROM tenants WHERE tenant_slug=?", (tenant,)).fetchone()
+    return str(row[0]) if row and row[0] else tenant
+
+
 # --- composed page views -----------------------------------------------------
+
+
+def _client_tenants(conn: sqlite3.Connection) -> tuple[tuple[str, str], ...]:
+    """The configured non-operator tenants (slug, display) — the operator's report engagement
+    picker. Empty in the v1 config (client tenants are commented until D3)."""
+    rows = conn.execute(
+        "SELECT tenant_slug, display_name FROM tenants WHERE tenant_slug != 'operator' ORDER BY tenant_slug"
+    ).fetchall()
+    return tuple((str(s), str(d or s)) for s, d in rows)
+
+
+def weekly_report_view(
+    db_path: Path, tenant: str, window: tuple[str, str] | None = None, now: datetime | None = None
+) -> WeeklyReport:
+    """`/reports` — the internal weekly report, opening `mode=ro` (§4.7 / M-D4)."""
+    now = now or _now()
+    conn = db.connect_ro(db_path)
+    try:
+        return weekly_report(conn, tenant, now, window=window, client_tenants=_client_tenants(conn))
+    finally:
+        conn.close()
+
+
+def export_report_view(
+    db_path: Path, tenant: str, window: tuple[str, str] | None = None, now: datetime | None = None
+) -> ExportReport:
+    """`/reports?view=export` — the client-safe export, opening `mode=ro` (§4.7 / M-D4)."""
+    now = now or _now()
+    conn = db.connect_ro(db_path)
+    try:
+        return export_report(conn, tenant, now, window=window)
+    finally:
+        conn.close()
 
 
 def delivered_view(
