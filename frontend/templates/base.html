@@ -5,10 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}factory-dashboard{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
-  {# Vendored, no CDN (ADR-DASH-003 / fence: no CDN references). SSE wiring lands at S2. #}
+  {# Vendored, no CDN (ADR-DASH-003 / fence: no CDN references). #}
   <script src="/static/htmx.min.js" defer></script>
   <script src="/static/htmx-ext-sse.js" defer></script>
   <script src="/static/freshness.js" defer></script>
+  {# One EventSource per page: notification-only panel_update -> coalesced fragment refetch (§6). #}
+  <script src="/static/sse.js" defer></script>
 </head>
 <body class="layout-operator">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -25,9 +27,9 @@
       </ul>
     </nav>
     <div class="topbar__cluster">
-      {# SSE connection dot (§6.3) — browser-side truth, wired at D1. Placeholder at S1. #}
-      <span class="sse-dot" data-sse-state="idle" title="live updates wire at D1">
-        <span aria-hidden="true">●</span><span class="visually-hidden">SSE idle</span>
+      {# SSE connection dot (§6.3) — browser-side truth; sse.js drives it (open/reconnecting/down). #}
+      <span class="sse-dot" data-sse-state="idle" title="connecting to live updates…">
+        <span aria-hidden="true">●</span><span class="visually-hidden">SSE status</span>
       </span>
       {% if chrome is defined and chrome %}
       {# Projector liveness chip (§5.6) — the page-level honesty anchor. #}

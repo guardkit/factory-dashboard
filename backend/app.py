@@ -12,17 +12,19 @@ incidental DB-open failure (ux §2).
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import select_autoescape
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.templating import Jinja2Templates
 
-from backend import auth, db
+from backend import auth, db, sse
 from backend.config_loader import (
     PLANS_PATH,
     TENANTS_PATH,
@@ -30,7 +32,7 @@ from backend.config_loader import (
     load_plans,
     load_tenants,
 )
-from backend.readmodel import queries
+from backend.readmodel import dbread, queries
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = BASE_DIR / "frontend" / "templates"
@@ -107,6 +109,35 @@ def _resolve(request: Request) -> auth.ResolvedUser | None:
         return auth.resolve_user(conn, str(username))
     finally:
         conn.close()
+
+
+async def _sse_stream(
+    request: Request, db_path: Path, wanted: set[str], last_id: int, once: bool
+) -> AsyncIterator[bytes]:
+    """The /events body (design §6): replay/refetch-all on connect, then tail change_log. Kept at
+    module level so the route stays thin. Notification-only — no row data on the channel (§6.1)."""
+    conn = db.connect_ro(db_path)
+    try:
+        for upd in sse.replay_or_refetch(conn, last_id, wanted):
+            last_id = max(last_id, upd.seq)
+            yield upd.to_sse().encode()
+        if once:
+            return
+        while not await request.is_disconnected():  # pragma: no cover (streaming loop)
+            for upd in sse.events_since(conn, last_id, wanted):
+                last_id = upd.seq
+                yield upd.to_sse().encode()
+            yield b": keepalive\n\n"
+            await asyncio.sleep(1)
+    finally:
+        conn.close()
+
+
+def _last_event_id(request: Request) -> int:
+    """Reconnect resume point (design §6): the EventSource `Last-Event-ID` header, or a
+    `last_event_id` query fallback. Non-numeric or absent -> 0 (a fresh subscription)."""
+    raw = request.headers.get("last-event-id") or request.query_params.get("last_event_id") or ""
+    return int(raw) if raw.isdigit() else 0
 
 
 def operator_page(request: Request) -> auth.ResolvedUser:
@@ -194,7 +225,7 @@ def _register_routes(app: FastAPI) -> None:
         return _render(
             request,
             "home.html",
-            {"view": queries.home_view(), "nav_active": "now", "tenant": tenant},
+            {"view": dbread.home_view(request.app.state.db_path), "nav_active": "now", "tenant": tenant},
         )
 
     # --- operator pages -----------------------------------------------------
@@ -269,19 +300,41 @@ def _register_routes(app: FastAPI) -> None:
         return _render(
             request,
             "fleet.html",
-            {"view": queries.fleet_view(), "nav_active": "fleet", "tenant": _tenant(request, user)},
+            {"view": dbread.fleet_view(request.app.state.db_path), "nav_active": "fleet",
+             "tenant": _tenant(request, user)},
         )
 
-    # --- fragment API (HTMX refetch target; SSE wiring lands at S2) ----------
+    # --- fragment API (HTMX refetch target for the SSE panel_update, ux §6) --
 
     @app.get("/fragments/{panel}", response_class=HTMLResponse)
     def fragment(request: Request, panel: str, user: OperatorApi, state: str | None = None) -> HTMLResponse:
-        try:
-            view = queries.panel_view(panel, state)
-        except queries.UnknownPanel as exc:
-            raise HTTPException(status_code=404, detail="unknown panel") from exc
+        if panel not in _FRAGMENT_TEMPLATES:
+            raise HTTPException(status_code=404, detail="unknown panel")
+        if state is not None:
+            # The §4.8 states-pack demo (+ the hostile fixture): force a specific §5.2 state.
+            try:
+                view: object = queries.panel_view(panel, state)
+            except queries.UnknownPanel as exc:
+                raise HTTPException(status_code=404, detail="unknown panel") from exc
+        elif panel in dbread._PANEL_BUILDERS:
+            view = dbread.panel_view(request.app.state.db_path, panel)  # LIVE from the read model
+        else:  # p7 delivered ledger is fixture-backed until the S3 ledger bootstrap lands
+            view = queries.panel_view(panel, None)
         template = f"fragments/{_FRAGMENT_TEMPLATES[panel]}"
         return _render(request, template, {"panel": view, "standalone": True})
+
+    # --- SSE push channel (design §6): notification-only panel_update stream --
+
+    @app.get("/events")
+    async def events(request: Request, panels: str | None = None, once: bool = False) -> Response:
+        user = _resolve(request)
+        if user is None:
+            raise HTTPException(status_code=401, detail="login required")
+        if not user.is_operator:
+            raise HTTPException(status_code=403, detail="operator only")
+        gen = _sse_stream(request, request.app.state.db_path, sse.parse_panels(panels),
+                          _last_event_id(request), once)
+        return StreamingResponse(gen, media_type="text/event-stream")
 
 
 _FRAGMENT_TEMPLATES: dict[str, str] = {

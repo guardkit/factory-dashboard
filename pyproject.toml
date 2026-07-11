@@ -11,6 +11,8 @@ dependencies = [
     "itsdangerous>=2.2",
     "pyyaml>=6.0",
     "python-multipart>=0.0.18",
+    "nats-py>=2.15.0",
+    "httpx>=0.28.1",
 ]
 
 [dependency-groups]

@@ -43,6 +43,19 @@ CREATE TABLE IF NOT EXISTS consumer_watermarks (
     PRIMARY KEY (stream, consumer)
 );
 
+-- SSE change log (design §6): the `id:` on the /events push channel is a read-DB change counter.
+-- The projector appends ONE row per panel whose projected state changed (notification-only — no
+-- row data ever rides the push channel, DDR-DASH-002); the SSE endpoint tails this by `seq` and a
+-- reconnecting client sends Last-Event-ID to replay missed notifications (or refetch-all if its id
+-- predates the retained window). This is the concrete realisation of design §6's change counter;
+-- tests/fixtures additions to §4 are permitted (ux §9.1 coach note).
+CREATE TABLE IF NOT EXISTS change_log (
+    seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+    panel      TEXT NOT NULL,
+    scope_keys TEXT,               -- JSON list of scope keys (e.g. feature ids), nullable
+    at         TEXT NOT NULL
+);
+
 -- §4.2 — agents roster (P1). Dual-source: fleet.* subjects AND $KV.agent-registry.> re-puts
 -- (capability note drift 3). source_kind keeps register-only / kv-only / heartbeating honest.
 CREATE TABLE IF NOT EXISTS agents (

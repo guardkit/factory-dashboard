@@ -42,13 +42,25 @@ def test_client_templates_reference_no_operator_only_fields() -> None:
         assert not deny.search(text), name
 
 
-# --- fence 1-2 / M-D3: zero NATS, zero JetStream, zero publish (grep) -------
+# --- fence 1-2 / M-D3: NATS confined to the projector; zero JetStream / publish (grep) ------
 
 
-def test_no_nats_import_anywhere_at_s1() -> None:
-    """S1 ships NO NATS import anywhere (ux §9.1 / coach grep)."""
+def test_nats_import_confined_to_the_projector() -> None:
+    """S2 (D1): NATS is imported ONLY under backend/projector/ (connection A). No web/read-model/
+    chat layer touches NATS — credentials live in the projector's process only (design §7 / fence 3)."""
+    pat = re.compile(r"\bimport\s+nats\b|\bfrom\s+nats\b|nats_core")
+    projector = BACKEND / "projector"
+    for src in _py_sources():
+        if pat.search(src.read_text(encoding="utf-8")):
+            assert projector in src.parents, f"NATS imported outside the projector: {src}"
+
+
+def test_no_nats_import_outside_projector() -> None:
+    """The web/read-model/chat layers import no NATS anything (belt-and-braces on the above)."""
     pat = re.compile(r"\bimport\s+nats\b|\bfrom\s+nats\b|nats_core|nats\.aio")
     for src in _py_sources():
+        if (BACKEND / "projector") in src.parents:
+            continue
         assert not pat.search(src.read_text(encoding="utf-8")), src
 
 
