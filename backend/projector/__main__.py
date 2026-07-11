@@ -13,6 +13,7 @@ from pathlib import Path
 
 from backend import ledger
 from backend.projector.consumers import Projector, open_rw, write_heartbeat
+from backend.projector.dwell import dwell_loop
 from backend.projector.forge_mirror import forge_db_path, mirror_loop
 from backend.projector.health_polls import health_loop
 from backend.projector.plan_mirror import mirror_plans_once, plan_mirror_loop
@@ -45,6 +46,9 @@ async def _run() -> None:
         mirror_loop(open_rw(db_path)),
         health_loop(open_rw(db_path)),
         plan_mirror_loop(open_rw(db_path)),
+        # F-5 stalled-dwell monitor (same cadence class as the heartbeat) — the projector is the
+        # sole writer, so the dwell verdict is manufactured here, never on a web path (M-D4).
+        dwell_loop(open_rw(db_path)),
     )
 
 
