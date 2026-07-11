@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import select_autoescape
@@ -267,13 +267,22 @@ def _register_routes(app: FastAPI) -> None:
         )
 
     @app.get("/delivered", response_class=HTMLResponse)
-    def delivered(request: Request, user: OperatorPage) -> HTMLResponse:
+    def delivered(
+        request: Request,
+        user: OperatorPage,
+        from_: Annotated[str | None, Query(alias="from")] = None,
+        to: str | None = None,
+    ) -> HTMLResponse:
+        # ux §4.4: plain form GET window (two date inputs). A partial/absent window falls back to
+        # the default this-week window (dbread.default_window) — never an unbounded scan.
+        window = (from_, to) if from_ and to else None
+        view = dbread.delivered_view(request.app.state.db_path, window)
         return _render(
             request,
             "delivered.html",
             {
-                "panel": queries.delivered_view(),
-                "chrome": queries.chrome(),
+                "panel": view.panel,
+                "chrome": view.chrome,
                 "nav_active": "delivered",
                 "tenant": _tenant(request, user),
             },
@@ -317,8 +326,9 @@ def _register_routes(app: FastAPI) -> None:
             except queries.UnknownPanel as exc:
                 raise HTTPException(status_code=404, detail="unknown panel") from exc
         elif panel in dbread._PANEL_BUILDERS:
-            view = dbread.panel_view(request.app.state.db_path, panel)  # LIVE from the read model
-        else:  # p7 delivered ledger is fixture-backed until the S3 ledger bootstrap lands
+            # LIVE from the read model (p7 delivered uses the default this-week window on refetch).
+            view = dbread.panel_view(request.app.state.db_path, panel)
+        else:  # defensive: a fragment template with no live builder falls back to fixtures
             view = queries.panel_view(panel, None)
         template = f"fragments/{_FRAGMENT_TEMPLATES[panel]}"
         return _render(request, template, {"panel": view, "standalone": True})

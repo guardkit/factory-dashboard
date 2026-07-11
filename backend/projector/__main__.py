@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
+from backend import ledger
 from backend.projector.consumers import Projector, open_rw, write_heartbeat
-from backend.projector.forge_mirror import mirror_loop
+from backend.projector.forge_mirror import forge_db_path, mirror_loop
 from backend.projector.health_polls import health_loop
+from backend.projector.projections.base import record_change
 
 
 async def _run() -> None:
@@ -21,7 +24,17 @@ async def _run() -> None:
     if not nats_url:
         raise SystemExit("FACTORY_DASH_NATS_URL is unset — the projector needs a dev credential (IN-3 pending).")
 
-    write_heartbeat(open_rw(db_path))
+    boot_conn = open_rw(db_path)
+    write_heartbeat(boot_conn)
+    # S3 cold-start: bootstrap the delivery ledger from forge `builds` (mode=ro, WAL-courtesy —
+    # ledger.py owns the fence-4 open/close). A receipt-bearing COMPLETE lands a `merged_pr` row;
+    # a receipt-less COMPLETE is mirrored into `builds` and surfaces as the delivered "merge
+    # unverified" gap. Honestly near-empty at launch (pr_url never populated to date — drift 2).
+    now = datetime.now(UTC)
+    boot_panels = ledger.bootstrap_from_forge(boot_conn, forge_db_path(), now)
+    if boot_panels:
+        record_change(boot_conn, boot_panels, [], now)
+
     projector = Projector(db_path, nats_url)
     await asyncio.gather(
         projector.run(),

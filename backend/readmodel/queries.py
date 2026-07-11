@@ -158,6 +158,15 @@ def feature_page(feature_id: str) -> FeaturePage | None:
 # --- delivered --------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class DeliveredView:
+    """`/delivered` composed view (ux §4.4): the page chrome + the P7 panel for a window. The
+    LIVE realisation is `dbread.delivered_view`; this fixture path backs the `?state=` demo."""
+
+    chrome: PageChrome
+    panel: DeliveredPanel
+
+
 def delivered_view(raw_state: str | None = None) -> DeliveredPanel:
     return fixtures.delivered(parse_state(raw_state))
 

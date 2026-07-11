@@ -26,6 +26,7 @@ import nats
 from nats.aio.client import Client
 from nats.aio.msg import Msg
 
+from backend import ledger
 from backend.projector.projections import p1_agents, p2_builds, p3_stage, p4_approvals
 from backend.projector.projections.base import (
     ChangeSet,
@@ -74,7 +75,18 @@ def route(conn: sqlite3.Connection, subject: str, data: bytes, now: datetime) ->
         return ChangeSet()
     for prefix, handler in _ROUTES:
         if subject.startswith(prefix):
-            return handler(conn, subject, env, now)
+            changes = handler(conn, subject, env, now)
+            # S3: a build_complete carrying a merge receipt also appends a `merged_pr` ledger row
+            # (idempotent, keyed (feature_id, bar) — design §5 steady state). No receipt ⇒ no
+            # ledger row (the delivered page renders the complete as its "merge unverified" gap).
+            if prefix == "pipeline.build-" and env.event_type == "build_complete":
+                ledger_panels = ledger.append_from_build_complete(conn, env, now)
+                if ledger_panels:
+                    changes.panels |= ledger_panels
+                    fid = str(env.payload.get("feature_id") or "")
+                    if fid and fid not in changes.scope_keys:
+                        changes.scope_keys = [*changes.scope_keys, fid]
+            return changes
     return ChangeSet()  # other pipeline./agents.* events: watermark-only (advanced by the caller)
 
 
