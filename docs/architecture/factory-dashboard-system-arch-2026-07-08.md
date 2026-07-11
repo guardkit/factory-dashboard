@@ -179,6 +179,15 @@ These reshape the design and are carried into every companion doc:
 **Decision (2026-07-08): tenancy is enforced at the NATS account boundary and at the tool layer —
 never in the UI.** Restates and mechanizes starter D3.
 
+> **Dated amendment 2026-07-11 (Rich's steer): James is an OPERATOR-side delivery-manager
+> persona, not a FinProxy-account user** — he authors the weekly client report (spend ·
+> features implemented · issues encountered · progress · plan deviations) and curates what
+> reaches clients, so the §1 C4 grouping "FinProxy (Mark; James as PO later)" over-placed him.
+> Client-tenant personas remain Mark (+ future client users). Consequence: an operator-side
+> weekly-report surface (`weekly_report(tenant, window)` — ux-spec-2026-07-11.md §4.7, with a
+> DF-008-clean client-safe export rendering) joins the build as stage S4; **DF-008 and the
+> A-8 reduced event are unchanged** — the boundary did not move, James's classification did.
+
 > **Dated amendment 2026-07-08 (Rich's steer, same day): nothing is hardcoded to FinProxy.**
 > The client side of the model is a **configured tenant registry**, not a named client: each
 > client tenant is a config row `{tenant_slug, display_name, nats_account, subject_prefix,

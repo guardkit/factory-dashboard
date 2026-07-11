@@ -53,6 +53,14 @@ run attended rather than autobuild); D2 immediately after; D4 next (it is the pr
 prioritize over D3/D5 if asks are still pending); D3/D5a whenever their operator/infra asks
 land; D6 aligns naturally with WS2's V1/V2 validation window.
 
+> **Dated note 2026-07-11 (Rich's Phase-A steer):** the D0–D2 run gains **S4 — weekly
+> delivery report v1** (James = operator-side delivery-manager persona per the arch §4 dated
+> amendment; `plans.yaml` per-tenant plan registry mirrored by the projector; DF-008-clean
+> client-safe export with the four plan-milestone fields sanctioned by dated note). Stage
+> definition + acceptance: `ux-spec-2026-07-11.md` §4.7/§9.4 + items 16–18, with an **M-D4
+> re-audit at S4 close** (the config mirror is a read-DB write — sole-writer rules apply).
+> The Lovable design-mirror loop (ux-spec §7.4) is a separate follow-up lane, not this run.
+
 ## 2 · Pre-registered value measures (recorded before any build; judged at each phase's close)
 
 | M | Measure | Bar |
