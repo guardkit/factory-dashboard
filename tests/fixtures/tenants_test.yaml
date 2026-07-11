@@ -1,0 +1,18 @@
+# Test-only tenant registry: operator + one CLIENT tenant, so the operator-only route guard and
+# the client dark-layout are testable without provisioning a live client (D3). The client tenant's
+# view is honestly dark at S1 (no IN-4/A-8 feed), which is exactly the correct v1 behaviour.
+tenants:
+  - tenant_slug: operator
+    display_name: "Factory (operator)"
+    nats_account: APPMILLA
+    subject_prefix: null
+    projects: []
+    store_path: null
+
+  - tenant_slug: clientco
+    display_name: "ClientCo"
+    nats_account: CLIENTCO
+    subject_prefix: clientco
+    projects:
+      - clientco-app
+    store_path: ledger_client_clientco.db

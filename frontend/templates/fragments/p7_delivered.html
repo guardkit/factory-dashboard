@@ -1,0 +1,69 @@
+{% import 'macros.html' as m %}
+{# P7 — delivered ledger (§4.4). UI name is "Delivered" everywhere; "ledger" appears in NO rendered
+   copy (it is the internal schema/module name only). Bar label VERBATIM: "Delivered — merged
+   ⟨change⟩"; a COMPLETE build with neither receipt renders "complete — merge unverified" (named
+   gap), never a delivered row. Upgrades slot is FEED-PENDING (never a numeric 0). #}
+<section class="panel-card delivered state-{{ panel.state.value }}" id="panel-p7" data-panel="p7">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">DELIVERED</h2>
+    {{ m.asof_chip(panel.as_of) }}
+  </header>
+  <div class="panel-card__body">
+    <div class="delivered__summary">
+      <span class="delivered__count">delivered in window: {{ panel.delivered_count }} features</span>
+      <span class="delivered__upgrades state-pending" data-state="pending">
+        upgrades: ░ graduation feed pending ({{ panel.upgrades_gate }}) ░
+      </span>
+    </div>
+
+    {% if panel.state.value == 'pending' %}
+      <div class="state-pending delivered__pending" data-state="pending">
+        <span class="state-pending__label">FEED PENDING</span>
+        <span class="state-pending__gate">{{ panel.empty_copy }}</span>
+      </div>
+    {% elif panel.rows %}
+      {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+      <table class="dense-table delivered__table">
+        <thead>
+          <tr>
+            <th scope="col">delivered</th><th scope="col">feature</th><th scope="col">project</th>
+            <th scope="col">bar</th><th scope="col">spend</th><th scope="col">src</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in panel.rows %}
+          <tr class="delivered__row {% if not r.change_verified %}delivered__row--unverified{% endif %}">
+            <td class="num">{{ r.delivered_date }}</td>
+            <td>
+              {% if r.title %}
+                <span class="feature-title">{{ r.title }}</span>
+              {% else %}
+                <span class="feature-title feature-title--missing">{{ r.feature_id }}</span>
+              {% endif %}
+              <a class="feature-id" href="{{ r.feature_link }}">⟨{{ r.feature_id }}⟩</a>
+            </td>
+            <td>{{ r.project }}</td>
+            <td>
+              {% if r.change_verified %}
+                {{ r.bar_label.split('⟨')[0] }}<a class="change-link" href="{{ r.change_link }}">⟨change⟩</a>
+              {% else %}
+                <span class="named-gap">{{ r.bar_label }}</span>
+              {% endif %}
+            </td>
+            <td>{{ m.spend_slot(r.spend) }}</td>
+            <td>{{ m.provenance(r.provenance) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% if panel.title_gap_note %}<p class="coverage-gaps__note">{{ panel.title_gap_note }}</p>{% endif %}
+    {% else %}
+      <p class="true-empty">{{ panel.empty_copy }}</p>
+    {% endif %}
+
+    <footer class="delivered__footer">
+      <span>window: {{ panel.window_from }} → {{ panel.window_to }}</span>
+      <span class="delivered__parity">{{ panel.parity_footer }}</span>
+    </footer>
+  </div>
+</section>

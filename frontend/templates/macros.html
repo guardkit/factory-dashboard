@@ -1,0 +1,74 @@
+{# Shared honesty-surface macros (ux §5). Every panel renders through these so the honesty
+   treatments are structural, not per-page. Stable class names are a public contract (§7.4). #}
+
+{% macro station_glyph(state) -%}
+{{ {'passed':'●','current':'◉','future':'○','pending':'░'}.get(state, '○') }}
+{%- endmacro %}
+
+{# §5.1 The as-of chip — never omitted. FEED-PENDING renders the inert marker with no timestamp.
+   data-asof / data-threshold are read by static/freshness.js to drift the dot on the wall clock. #}
+{% macro asof_chip(a) -%}
+<span class="asof-chip asof-chip--{{ a.dot_state }}"
+      {% if a.title_iso %}title="{{ a.title_iso }}"{% endif %}
+      {% if a.asof_epoch is not none %}data-asof="{{ a.asof_epoch }}" data-threshold="{{ a.threshold_secs }}"{% endif %}>
+  <span class="asof-chip__label">{{ a.prefix }} {{ a.label }}</span>
+  <span class="asof-dot asof-dot--{{ a.dot_state }}" aria-hidden="true">●</span>
+  <span class="visually-hidden">freshness: {{ a.dot_state }}</span>
+</span>
+{%- endmacro %}
+
+{# §5.5 Norm band chip — colour + letter ALWAYS together (colour is never the only signal). #}
+{% macro band_chip(chip) -%}
+{% set cls = ('g' if chip.band == 'G' else 'a' if chip.band == 'A' else 'r' if chip.band == 'R' else 'none') %}
+<span class="band-chip band-chip--{{ cls }}">[{{ chip.band }}]{% if chip.label %} {{ chip.label }}{% endif %}</span>
+{%- endmacro %}
+
+{# §5.3 Journey bar — all 8 stations, never a truncated subset. Mini variant used in P2 rows. #}
+{% macro journey_bar(j, mini=False) -%}
+<div class="journey-bar {% if mini %}journey-bar--mini{% endif %}">
+  <ol class="journey-bar__stations">
+  {% for st in j.stations %}
+    <li class="journey-station journey-station--{{ st.glyph_state }}" title="{{ st.name }}">
+      <span class="journey-station__glyph" aria-hidden="true">{{ station_glyph(st.glyph_state) }}</span>
+      {% if not mini %}<span class="journey-station__name">{{ st.name }}</span>{% endif %}
+    </li>
+  {% endfor %}
+  </ol>
+  <div class="journey-bar__meta">
+    <span class="journey-bar__current">{{ j.current_label }}</span>
+    {% if j.progress_line %}<span class="journey-bar__progress">{{ j.progress_line }}</span>{% endif %}
+  </div>
+</div>
+{%- endmacro %}
+
+{# §5.4 Provenance badge — keeps bootstrap-vs-live honest at the row level. #}
+{% macro provenance(b) -%}
+<span class="provenance-badge" title="src: {{ b.source }}">{{ b.short }}</span>
+{%- endmacro %}
+
+{# §7.3 FEED-PENDING spend slot — present from D0, never a numeric 0. Names its gate (operator)
+   or plain language (client). #}
+{% macro spend_slot(s) -%}
+<div class="spend-slot state-pending" data-state="pending">
+  <span class="spend-slot__label">SPEND — FEED PENDING</span>
+  <span class="spend-slot__gate">{% if s.plain_language %}Cost reporting is being provisioned.{% else %}{{ s.gate_label }}{% endif %}</span>
+  <span class="spend-slot__share">captured share: {{ s.captured_share }}</span>
+</div>
+{%- endmacro %}
+
+{# In-panel LAGGING note (panel-level §5.2 / §5.6): a stale feeding stream's watermark. #}
+{% macro lagging_note(a) -%}
+<p class="lagging-note">projection lagging (since {{ a.label }})</p>
+{%- endmacro %}
+
+{# Named coverage gaps (§4.2 Q2/Q3) — blind spots stated, never zeroed away. #}
+{% macro coverage_gaps(gaps) -%}
+{% if gaps %}
+<div class="coverage-gaps">
+  <span class="coverage-gaps__label">COVERAGE GAPS</span>
+  <ul class="coverage-gaps__list">
+    {% for g in gaps %}<li>{{ g }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+{%- endmacro %}

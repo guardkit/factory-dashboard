@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% import 'macros.html' as m %}
+{% block title %}{{ page.title if not page.title_missing else page.feature_id }} · factory-dashboard{% endblock %}
+{% block content %}
+{# ux §4.2 — the rendered form of the feature_status contract. FEAT-3ED2 is the pinned fixture.
+   Every card carries its OWN as-of chip with its OWN feed's recency (design §3 dual as_of):
+   Q1 = mirror_ts, stage history = watermark_ts — a lagging mirror can never read as live. #}
+<header class="feature-header">
+  <div class="feature-header__title">
+    {% if page.title_missing %}
+      <span class="feature-title feature-title--missing">{{ page.feature_id }}</span>
+    {% else %}
+      <span class="feature-title">{{ page.title }}</span>
+    {% endif %}
+    <a class="feature-id" href="/features/{{ page.feature_id }}">⟨{{ page.feature_id }}⟩</a>
+    <a class="feature-header__project" href="/projects/{{ page.project }}">{{ page.project }} ▸</a>
+  </div>
+  <div class="feature-header__meta">
+    <span>created {{ page.created }}</span>
+    {{ m.asof_chip(page.as_of_events) }}
+    {{ m.asof_chip(page.as_of_mirror) }}
+  </div>
+</header>
+
+{# Q1 — HOW FAR THROUGH #}
+<section class="panel-card feature-q1">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">Q1 · HOW FAR THROUGH</h2>
+    <span class="q1-source">src: {{ page.q1_source }}</span>
+    {{ m.asof_chip(page.q1_as_of) }}
+  </header>
+  <div class="panel-card__body">
+    {{ m.journey_bar(page.journey) }}
+    <p class="feature-q1__delivered">{{ page.delivered_line }}</p>
+    <p class="feed-pending state-pending" data-state="pending">░ {{ page.feed_pending_note }}</p>
+  </div>
+</section>
+
+{# Q2 — ON TRACK (verdict always carries "on the measured signals"; unmeasured rows stay, banded — ) #}
+<section class="panel-card feature-q2">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">Q2 · ON TRACK — {{ m.band_chip(page.verdict) }} {{ page.verdict_qualifier }}</h2>
+    {{ m.asof_chip(page.q2_as_of) }}
+  </header>
+  <div class="panel-card__body">
+    <table class="dense-table signals-table">
+      <thead>
+        <tr><th scope="col">signal</th><th scope="col">value</th><th scope="col">norm G/A/R</th>
+          <th scope="col">band</th><th scope="col">measured</th></tr>
+      </thead>
+      <tbody>
+      {% for s in page.signals %}
+        <tr class="signal-row {% if not s.measured %}signal-row--unmeasured{% endif %}">
+          <td>{{ s.metric_label }}</td>
+          <td class="num">{{ s.value }}</td>
+          <td>{{ s.norm }}</td>
+          <td>{{ m.band_chip(s.band) }}</td>
+          <td>
+            {% if s.measured %}<span class="measured-yes" title="measured">✓</span>
+            {% else %}<span class="measured-no" title="unmeasured">✗</span> <span class="unmeasured-note">{{ s.reason }}</span>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="context-counters">context counters (not norm-banded): {{ page.context_counters }}</p>
+    {{ m.coverage_gaps(page.q2_coverage_gaps) }}
+  </div>
+</section>
+
+<div class="feature-lower">
+  {# Q3 — ISSUES (register rows vs coverage gaps) #}
+  <section class="panel-card feature-q3">
+    <header class="panel-card__header">
+      <h2 class="panel-card__title">Q3 · ISSUES ({{ page.issue_rows | length }} machine-visible)</h2>
+      {{ m.asof_chip(page.q3_as_of) }}
+    </header>
+    <div class="panel-card__body">
+      {% if page.issue_rows %}
+        <ul class="issue-list">{% for i in page.issue_rows %}<li>{{ i }}</li>{% endfor %}</ul>
+      {% else %}
+        <p class="true-empty">{{ page.q3_empty_copy }}</p>
+      {% endif %}
+      {{ m.coverage_gaps(page.q3_coverage_gaps) }}
+    </div>
+  </section>
+
+  {# Stage & gate history #}
+  <section class="panel-card feature-history">
+    <header class="panel-card__header">
+      <h2 class="panel-card__title">STAGE &amp; GATE HISTORY</h2>
+      {{ m.asof_chip(page.as_of_events) }}
+    </header>
+    <div class="panel-card__body">
+      <table class="dense-table">
+        <tbody>
+        {% for e in page.stage_history %}
+          <tr>
+            <td class="num" title="{{ e.time_title }}">{{ e.time_label }}</td>
+            <td>{{ e.stage_label }}</td>
+            <td class="gate-status gate-status--{{ e.status|lower }}">{{ e.status }}</td>
+            <td>{{ e.gate_mode }}</td>
+            <td class="num coach-score">{{ e.coach_score }}</td>
+            <td>{{ m.provenance(e.origin) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {# Spend — FEED PENDING from D0 (§4.2). #}
+  <section class="panel-card feature-spend">
+    <header class="panel-card__header"><h2 class="panel-card__title">SPEND</h2></header>
+    <div class="panel-card__body">{{ m.spend_slot(page.spend) }}</div>
+  </section>
+</div>
+{% endblock %}

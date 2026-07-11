@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Now · factory-dashboard{% endblock %}
+{% block content %}
+<h1 class="page-title visually-hidden">Now</h1>
+
+{# ux §4.1 — leads with Q3 (needs-you), then Q1/Q2 fleet-wide (build board), machinery to the
+   right, planning + gate history below. Every card carries its own as-of chip (§5.1). #}
+
+{% with panel = view.needs_you %}{% include "fragments/p4_needs_you.html" %}{% endwith %}
+
+<div class="home-grid">
+  <div class="home-grid__main">
+    {% with panel = view.build_board %}{% include "fragments/p2_build_board.html" %}{% endwith %}
+    {% with panel = view.gate_events %}{% include "fragments/p3_gate_events.html" %}{% endwith %}
+    {% with panel = view.planning %}{% include "fragments/p5_planning.html" %}{% endwith %}
+  </div>
+  <aside class="home-grid__rail">
+    <h2 class="rail-title">MACHINERY</h2>
+    {% with panel = view.agents %}{% include "fragments/p1_agents.html" %}{% endwith %}
+    {% with panel = view.serving %}{% include "fragments/p6_serving.html" %}{% endwith %}
+    {% with panel = view.projector %}{% include "fragments/projector.html" %}{% endwith %}
+  </aside>
+</div>
+{% endblock %}

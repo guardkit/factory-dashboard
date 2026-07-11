@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Reports · factory-dashboard{% endblock %}
+{% block content %}
+<h1 class="page-title">Reports</h1>
+{# ux §2 — D0 ships the nav item + route rendering a plain "arrives at S4" placeholder. This is
+   NOT the §5.2 FEED-PENDING treatment (that names dark producer feeds, not unbuilt pages). #}
+<section class="panel-card reports-placeholder">
+  <div class="panel-card__body">
+    <p class="placeholder-note">{{ view.message }}</p>
+  </div>
+</section>
+{% endblock %}

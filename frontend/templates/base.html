@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}factory-dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  {# Vendored, no CDN (ADR-DASH-003 / fence: no CDN references). SSE wiring lands at S2. #}
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/htmx-ext-sse.js" defer></script>
+  <script src="/static/freshness.js" defer></script>
+</head>
+<body class="layout-operator">
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  {# ux §3 — the layout frame (every operator page). #}
+  <header class="topbar">
+    <div class="topbar__brand">factory-dashboard</div>
+    <nav class="topnav" aria-label="Primary">
+      <ul>
+        {% for label, href, key in nav %}
+          <li><a href="{{ href }}" class="topnav__item {% if key == nav_active %}topnav__item--active{% endif %}"
+                 {% if key == nav_active %}aria-current="page"{% endif %}>{{ label }}</a></li>
+        {% endfor %}
+      </ul>
+    </nav>
+    <div class="topbar__cluster">
+      {# SSE connection dot (§6.3) — browser-side truth, wired at D1. Placeholder at S1. #}
+      <span class="sse-dot" data-sse-state="idle" title="live updates wire at D1">
+        <span aria-hidden="true">●</span><span class="visually-hidden">SSE idle</span>
+      </span>
+      {% if chrome is defined and chrome %}
+      {# Projector liveness chip (§5.6) — the page-level honesty anchor. #}
+      <span class="projector-chip projector-chip--{{ chrome.projector_state }}">
+        {{ chrome.projector_label }}
+      </span>
+      {% import 'macros.html' as m %}
+      <span class="events-asof">{{ m.asof_chip(chrome.events_as_of) }}</span>
+      {% endif %}
+      <details class="user-menu">
+        <summary>{{ tenant.display_name if tenant is defined and tenant else 'session' }}</summary>
+        <ul><li><a href="/logout">Log out</a></li></ul>
+      </details>
+    </div>
+  </header>
+
+  {# Banner slot — at most one, worse condition wins (§3): projector-stalled (red) or SSE-paused. #}
+  <div class="banner-slot">
+    {% if chrome is defined and chrome and chrome.banner %}
+      <div class="banner banner--{{ chrome.banner.kind }}" role="status">{{ chrome.banner.text }}</div>
+    {% endif %}
+  </div>
+
+  <div class="frame">
+    <main id="main" class="content">
+      {% block content %}{% endblock %}
+    </main>
+
+    {# Chat drawer slot (§7.1) — grid column reserved from D0; collapsed + toggle hidden until D4. #}
+    <button type="button" class="chat-toggle" hidden aria-hidden="true">Chat</button>
+    <aside class="chat-drawer" hidden aria-hidden="true">
+      {% block chat_drawer %}{% endblock %}
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <span class="site-footer__repo">factory-dashboard · v1 scaffold (S1 / D0)</span>
+    <span class="site-footer__docs">docs/architecture · read-model, writes nothing (ADR-DASH-007)</span>
+  </footer>
+</body>
+</html>

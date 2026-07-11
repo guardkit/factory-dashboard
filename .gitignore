@@ -1,4 +1,22 @@
-# macOS
+# --- Python / project ---
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+
+# Runtime read-model artifacts (disposable projections, never committed)
+*.db
+*.db-wal
+*.db-shm
+
+# Agent/tooling state — never commit
+.claude/
+.guardkit/
+
+# --- macOS ---
 .DS_Store
 .DS_Store?
 ._*

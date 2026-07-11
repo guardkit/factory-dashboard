@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Delivered · factory-dashboard{% endblock %}
+{% block content %}
+{# ux §4.4 — user-facing name is "Delivered" everywhere; "ledger" appears in NO rendered copy. #}
+<h1 class="page-title">Delivered</h1>
+<form class="window-form" method="get" action="/delivered">
+  <label>from <input type="date" name="from" value="{{ panel.window_from }}"></label>
+  <label>to <input type="date" name="to" value="{{ panel.window_to }}"></label>
+  <button type="submit">Apply window</button>
+</form>
+{% include "fragments/p7_delivered.html" %}
+{% endblock %}

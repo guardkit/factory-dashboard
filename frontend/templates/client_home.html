@@ -1,0 +1,12 @@
+{% extends "client_base.html" %}
+{% block title %}{{ tenant.display_name }} · Delivery{% endblock %}
+{% block content %}
+<h1 class="page-title">Delivery</h1>
+{# ux §7.2 — plain-language dark state; NEVER cites internal ask ids (operator surfaces do). #}
+<section class="panel-card state-pending client-dark" data-state="pending">
+  <div class="panel-card__body">
+    <p class="client-dark__lead">Your delivery feed is being provisioned — delivered work will
+      appear here automatically.</p>
+  </div>
+</section>
+{% endblock %}

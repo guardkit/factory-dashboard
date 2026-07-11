@@ -1,0 +1,25 @@
+{% import 'macros.html' as m %}
+{# Projector liveness (§5.6) — three signals, never conflated: heartbeat (page-level), per-stream
+   recency (F-5 verbatim), forge-mirror pass. The operator's answer to "is the dashboard itself
+   telling the truth right now?" #}
+<section class="panel-card projector state-{{ panel.state.value }}" id="panel-proj" data-panel="proj">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">PROJECTOR</h2>
+    {{ m.asof_chip(panel.as_of) }}
+  </header>
+  <div class="panel-card__body">
+    <p class="projector__heartbeat projector__heartbeat--{{ panel.heartbeat_state }}">
+      <span class="status-dot status-dot--{{ 'ok' if panel.heartbeat_state == 'live' else 'fail' }}" aria-hidden="true">●</span>
+      heartbeat {{ panel.heartbeat_label }}
+    </p>
+    <ul class="projector__streams">
+    {% for st in panel.streams %}
+      <li class="stream-recency stream-recency--{{ st.dot_state }}">
+        <span class="stream-recency__name">{{ st.name }}</span>
+        <span class="stream-recency__label">{{ st.label }}</span>
+      </li>
+    {% endfor %}
+    </ul>
+    <p class="projector__mirror">{{ panel.forge_mirror_label }}</p>
+  </div>
+</section>

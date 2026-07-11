@@ -1,0 +1,31 @@
+{% import 'macros.html' as m %}
+{# P1 — agent roster (condensed). Dual-source (drift 3): fleet.* AND $KV.agent-registry.>.
+   KV-sourced agents show kv ⟨age⟩ with queue/tasks UNMEASURED; register-only agents render a
+   named gap ("no heartbeat feed"), never a fake stale-alarm. 1h stream — live only, no history. #}
+<section class="panel-card agents state-{{ panel.state.value }}" id="panel-p1" data-panel="p1">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">AGENTS</h2>
+    {{ m.asof_chip(panel.as_of) }}
+  </header>
+  <div class="panel-card__body">
+    {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+    {% if panel.agents %}
+      <ul class="agent-list">
+      {% for a in panel.agents %}
+        <li class="agent-row agent-row--{{ a.source_kind }}">
+          <span class="status-dot status-dot--{{ a.status_dot }}" aria-hidden="true">●</span>
+          <span class="agent-row__name">{{ a.name }}</span>
+          <span class="agent-row__status">{{ a.status_text }}</span>
+          <span class="agent-row__liveness">{{ a.liveness }}</span>
+          {% if a.unmeasured_note %}
+            <span class="unmeasured-note">{{ a.unmeasured_note }}</span>
+          {% endif %}
+        </li>
+      {% endfor %}
+      </ul>
+      <p class="agents__note">1h stream — live only, no history claimed</p>
+    {% else %}
+      <p class="true-empty">{{ panel.empty_copy }}</p>
+    {% endif %}
+  </div>
+</section>

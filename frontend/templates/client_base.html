@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ tenant.display_name if tenant is defined else 'Delivery' }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/freshness.js" defer></script>
+</head>
+{# ux §7.2 — the client-tenant layout. Reduced top bar, NO operator nav, roomier density, and the
+   plain-language honesty rule: client surfaces never cite internal ask ids. Dark at birth; D3
+   lights the feed. The template layer additionally references NO operator-only fields. #}
+<body class="layout-client">
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="topbar topbar--client">
+    <div class="topbar__brand">{{ tenant.display_name if tenant is defined and tenant else 'Delivery' }}</div>
+    <nav class="topnav topnav--client" aria-label="Primary">
+      <ul>
+        <li><a href="/" class="topnav__item topnav__item--active" aria-current="page">Delivered</a></li>
+        <li><a href="/" class="topnav__item">Projects</a></li>
+        {# Chat appears at D4+. #}
+      </ul>
+    </nav>
+    <div class="topbar__cluster">
+      <details class="user-menu">
+        <summary>{{ tenant.display_name if tenant is defined and tenant else 'session' }}</summary>
+        <ul><li><a href="/logout">Log out</a></li></ul>
+      </details>
+    </div>
+  </header>
+
+  <div class="frame frame--client">
+    <main id="main" class="content content--client">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <span class="site-footer__repo">Delivery view · v1</span>
+  </footer>
+</body>
+</html>

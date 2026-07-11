@@ -1,0 +1,43 @@
+{% import 'macros.html' as m %}
+{# P2 — build board. Row leads with the feature TITLE (§5.8), then the mini journey bar + band.
+   In-flight progress is WAVE-LEVEL only (BuildProgress carries no task counters — drift 6). #}
+<section class="panel-card build-board state-{{ panel.state.value }}" id="panel-p2" data-panel="p2">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">WORK IN FLIGHT</h2>
+    {{ m.asof_chip(panel.as_of) }}
+  </header>
+  <div class="panel-card__body">
+    {% if panel.state.value == 'pending' %}
+      <div class="state-pending build-board__pending" data-state="pending">
+        <span class="state-pending__label">FEED PENDING</span>
+        <span class="state-pending__gate">{{ panel.empty_copy }}</span>
+      </div>
+    {% elif panel.rows %}
+      {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+      {% for r in panel.rows %}
+        <article class="build-row {% if r.terminal %}build-row--terminal{% endif %}">
+          <div class="build-row__head">
+            {% if r.title %}
+              <span class="feature-title">{{ r.title }}</span>
+            {% else %}
+              <span class="feature-title feature-title--missing">{{ r.feature_id }}</span>
+            {% endif %}
+            <a class="feature-id" href="{{ r.feature_link }}">⟨{{ r.feature_id }}⟩</a>
+            {{ m.provenance(r.provenance) }}
+          </div>
+          {{ m.journey_bar(r.journey, mini=True) }}
+          <div class="build-row__foot">
+            <span class="build-row__station">{{ r.current_station_label }} · {{ r.project }}</span>
+            {{ m.band_chip(r.band) }}
+            <span class="build-row__detail">{{ r.detail }}</span>
+          </div>
+        </article>
+      {% endfor %}
+      {% if panel.title_gap_note %}
+        <p class="coverage-gaps__note">{{ panel.title_gap_note }}</p>
+      {% endif %}
+    {% else %}
+      <p class="true-empty">{{ panel.empty_copy }}</p>
+    {% endif %}
+  </div>
+</section>

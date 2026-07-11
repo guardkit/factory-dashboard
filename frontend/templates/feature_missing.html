@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ feature_id }} · factory-dashboard{% endblock %}
+{% block content %}
+<h1 class="page-title">{{ feature_id }}</h1>
+<section class="panel-card">
+  <div class="panel-card__body">
+    <p class="true-empty">No projected state for this feature yet. It appears here once build or
+      forge-mirror events land for it.</p>
+  </div>
+</section>
+{% endblock %}

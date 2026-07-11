@@ -1,0 +1,25 @@
+{% import 'macros.html' as m %}
+{# P6 — serving health (condensed). Load-neutral polls only (fence 5). Dot demotion (§5.2): when a
+   service's checked_at crosses threshold the ok/fail dot demotes to a grey '?' unknown — last-
+   known-ok never masquerades as currently-ok. #}
+<section class="panel-card serving state-{{ panel.state.value }}" id="panel-p6" data-panel="p6">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">SERVING</h2>
+    {{ m.asof_chip(panel.as_of) }}
+  </header>
+  <div class="panel-card__body">
+    <ul class="service-list">
+    {% for s in panel.services %}
+      <li class="service-row service-row--{{ s.dot }}">
+        <span class="status-dot status-dot--{{ s.dot }}" aria-hidden="true">{% if s.dot == 'unknown' %}?{% else %}●{% endif %}</span>
+        <span class="service-row__name">{{ s.name }}</span>
+        <span class="service-row__endpoint num">{{ s.endpoint }}</span>
+        <span class="service-row__detail">{{ s.detail }}</span>
+        {% if s.resident_models %}
+          <span class="service-row__resident">resident: {{ s.resident_models | join(', ') }}</span>
+        {% endif %}
+      </li>
+    {% endfor %}
+    </ul>
+  </div>
+</section>

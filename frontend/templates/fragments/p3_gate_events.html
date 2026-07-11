@@ -1,0 +1,39 @@
+{% import 'macros.html' as m %}
+{# P3 — recent gate events. Dense operator table: id-first for scanability is permitted (§5.8).
+   coach_score is operator-view ONLY (DF-008) — it never appears in any client template. #}
+<section class="panel-card gate-events state-{{ panel.state.value }}" id="panel-p3" data-panel="p3">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">RECENT GATE EVENTS</h2>
+    {{ m.asof_chip(panel.as_of) }}
+  </header>
+  <div class="panel-card__body">
+    {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+    {% if panel.rows %}
+      <table class="dense-table gate-events__table">
+        <thead>
+          <tr>
+            <th scope="col">time</th><th scope="col">feature</th><th scope="col">stage</th>
+            <th scope="col">status</th><th scope="col">gate</th><th scope="col">score</th>
+            <th scope="col">dur</th><th scope="col">src</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for e in panel.rows %}
+          <tr class="gate-events__row gate-events__row--{{ e.status|lower }}">
+            <td class="num" title="{{ e.time_title }}">{{ e.time_label }}</td>
+            <td><a class="feature-id" href="{{ e.feature_link }}">{{ e.feature_id }}</a></td>
+            <td>{{ e.stage_label }}</td>
+            <td class="gate-status gate-status--{{ e.status|lower }}">{{ e.status }}</td>
+            <td>{{ e.gate_mode }}</td>
+            <td class="num coach-score">{{ e.coach_score }}</td>
+            <td class="num">{{ e.duration }}</td>
+            <td>{{ m.provenance(e.origin) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="true-empty">{{ panel.empty_copy }}</p>
+    {% endif %}
+  </div>
+</section>

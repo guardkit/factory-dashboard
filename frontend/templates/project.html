@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% import 'macros.html' as m %}
+{% block title %}{{ view.project }} · factory-dashboard{% endblock %}
+{% block content %}
+{# ux §4.3 — one card per question at fleet-of-features scale; composed entirely of §5 components
+   plus the FEED-PENDING spend block. No new components. #}
+<h1 class="page-title">{{ view.project }}</h1>
+
+{% with panel = view.build_board %}{% include "fragments/p2_build_board.html" %}{% endwith %}
+{% with panel = view.delivered %}{% include "fragments/p7_delivered.html" %}{% endwith %}
+
+<section class="panel-card project-issues">
+  <header class="panel-card__header"><h2 class="panel-card__title">OPEN ISSUES</h2></header>
+  <div class="panel-card__body">
+    <p>open issues for this project: <span class="num">{{ view.open_issue_count }}</span></p>
+  </div>
+</section>
+
+<section class="panel-card project-spend">
+  <header class="panel-card__header"><h2 class="panel-card__title">SPEND</h2></header>
+  <div class="panel-card__body">{{ m.spend_slot(view.spend) }}</div>
+</section>
+{% endblock %}

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · factory-dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="layout-login">
+  <main id="main" class="login-card">
+    <h1 class="login-card__title">factory-dashboard</h1>
+    <p class="login-card__note">Read-model view over the factory bus + forge state. Observes only.</p>
+    {% if error %}<p class="login-card__error" role="alert">{{ error }}</p>{% endif %}
+    <form method="post" action="/login" class="login-form">
+      <label>Username <input type="text" name="username" autocomplete="username" required></label>
+      <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
+      <button type="submit">Sign in</button>
+    </form>
+  </main>
+</body>
+</html>

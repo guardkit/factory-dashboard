@@ -1,0 +1,271 @@
+/* factory-dashboard — the one stylesheet (ux §8 / arch §6). Hand-written, CSS custom properties,
+   no framework, no build step, no CDN. §7.4 design-portability contract: EVERY visual decision is
+   expressible as a custom property; the class names below are a stable, semantic PUBLIC contract
+   (panel-card, asof-chip, journey-bar, band-chip, state-pending, …) — a redesign round-trips
+   tokens/layout/copy through these names and can never delete the honesty surfaces.
+   Status colours (--ok/--warn/--bad/--pending) are reserved EXCLUSIVELY for status semantics. */
+
+:root {
+  /* palette — paper/ink neutrals (light theme v1; a dark block is a later variable swap) */
+  --bg: #fafaf8;
+  --card: #ffffff;
+  --ink: #1a1d21;
+  --muted: #5c6570;
+  --line: #e2e4e8;
+  --accent: #2456a4;
+  /* semantic status — never decorative */
+  --ok: #1a7f37;
+  --warn: #b58a00;
+  --bad: #c62828;
+  --pending: #6b7280;
+  --pending-hatch: repeating-linear-gradient(45deg, #eceef1 0 4px, #f6f7f9 4px 8px);
+
+  /* type */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --fs-base: 16px;
+  --fs-operator: 14px;
+  --lh: 1.5;
+
+  /* structure */
+  --radius: 6px;
+  --pad-card: 14px;
+  --pad-cell-operator: 8px;
+  --pad-cell-client: 12px;
+  --content-max: 1440px;
+  --rail-width: 340px;
+  --chat-width: 400px;
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: var(--fs-base); }
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  line-height: var(--lh);
+  color: var(--ink);
+  background: var(--bg);
+}
+
+.num, .num * { font-variant-numeric: tabular-nums; }
+
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.skip-link {
+  position: absolute; left: -999px;
+}
+.skip-link:focus { left: 8px; top: 8px; background: var(--card); padding: 6px 10px; z-index: 10; }
+
+/* ---- top bar (ux §3) ---------------------------------------------------- */
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+  font-size: var(--fs-operator);
+}
+.topbar__brand { font-weight: 700; }
+.topnav ul { list-style: none; display: flex; gap: 14px; margin: 0; padding: 0; }
+.topnav__item { text-decoration: none; color: var(--muted); }
+.topnav__item--active { color: var(--ink); font-weight: 600; border-bottom: 2px solid var(--accent); }
+.topbar__cluster { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.user-menu summary { cursor: pointer; color: var(--muted); }
+
+.sse-dot { color: var(--muted); }
+.projector-chip { font-size: 12px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; }
+.projector-chip--live { color: var(--ok); }
+.projector-chip--stale { color: var(--bad); font-weight: 700; }
+
+/* ---- banner slot (§3 / §5.6) ------------------------------------------- */
+.banner-slot:empty { display: none; }
+.banner { padding: 8px 16px; font-weight: 600; }
+.banner--projector_stalled { background: #fbe9e9; color: var(--bad); border-bottom: 2px solid var(--bad); }
+.banner--sse_paused { background: #fdf5e3; color: var(--warn); border-bottom: 2px solid var(--warn); }
+
+/* ---- frame (content + chat drawer grid) -------------------------------- */
+.frame {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 0;
+  max-width: var(--content-max);
+  margin: 0 auto;
+}
+.content { padding: 16px; min-width: 0; }
+.chat-drawer[hidden], .chat-toggle[hidden] { display: none; }
+/* The chat drawer column is reserved; it opens (D4) to var(--chat-width) at >=1280px. */
+
+.site-footer {
+  display: flex; gap: 16px; justify-content: space-between;
+  padding: 10px 16px; border-top: 1px solid var(--line); color: var(--muted);
+  font-size: 12px; max-width: var(--content-max); margin: 0 auto;
+}
+
+.page-title { font-size: 20px; margin: 4px 0 12px; }
+.page-lead, .placeholder-note { color: var(--muted); }
+
+/* ---- panel card (the §5 surface) --------------------------------------- */
+.panel-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 14px;
+}
+.panel-card__header {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: var(--pad-card); border-bottom: 1px solid var(--line);
+}
+.panel-card__title { font-size: 13px; letter-spacing: 0.02em; margin: 0; }
+.panel-card__header .asof-chip { margin-left: auto; }
+.panel-card__body { padding: var(--pad-card); font-size: var(--fs-operator); }
+
+/* LAGGING: dim content 55%, amber/red dot. TRUE-EMPTY: plain text. FEED-PENDING: hatch. */
+.state-lagging .panel-card__body { opacity: 0.55; }
+.lagging-note { color: var(--warn); font-style: italic; margin: 0 0 8px; }
+.true-empty { color: var(--muted); }
+
+/* ---- as-of chip (§5.1) -------------------------------------------------- */
+.asof-chip { font-size: 12px; color: var(--muted); white-space: nowrap; display: inline-flex; gap: 4px; align-items: center; }
+.asof-dot { font-size: 10px; }
+.asof-dot--live, .asof-chip--live .asof-dot { color: var(--ok); }
+.asof-dot--lagging, .asof-chip--lagging .asof-dot { color: var(--warn); }
+.asof-dot--stale, .asof-chip--stale .asof-dot { color: var(--bad); }
+.asof-dot--empty, .asof-chip--empty .asof-dot { color: var(--ok); }
+.asof-dot--pending, .asof-chip--pending .asof-dot { color: var(--pending); }
+
+/* ---- band chip (§5.5) — colour + letter always together ---------------- */
+.band-chip { font-size: 12px; font-weight: 700; padding: 0 4px; border-radius: 3px; }
+.band-chip--g { color: var(--ok); }
+.band-chip--a { color: var(--warn); }
+.band-chip--r { color: var(--bad); }
+.band-chip--none { color: var(--muted); }
+
+/* ---- journey bar (§5.3) ------------------------------------------------- */
+.journey-bar__stations { list-style: none; display: flex; gap: 6px; margin: 0; padding: 0; flex-wrap: wrap; }
+.journey-station { display: inline-flex; flex-direction: column; align-items: center; font-size: 11px; color: var(--muted); }
+.journey-station__glyph { font-size: 14px; }
+.journey-station--passed .journey-station__glyph { color: var(--ok); }
+.journey-station--current .journey-station__glyph { color: var(--accent); font-weight: 700; }
+.journey-station--future .journey-station__glyph { color: var(--muted); }
+.journey-station--pending .journey-station__glyph { color: var(--pending); }
+.journey-bar--mini .journey-station__glyph { font-size: 12px; }
+.journey-bar__meta { display: flex; gap: 10px; margin-top: 4px; font-size: 12px; }
+.journey-bar__current { font-weight: 600; }
+.journey-bar__progress { color: var(--muted); }
+
+/* ---- provenance badge (§5.4) ------------------------------------------- */
+.provenance-badge { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
+
+/* ---- feed-pending / spend slot (§5.2 / §7.3) --------------------------- */
+.state-pending, .spend-slot {
+  background: var(--pending-hatch);
+  border: 1px dashed var(--pending);
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  display: inline-flex; flex-direction: column; gap: 2px;
+}
+.state-pending__label, .spend-slot__label { font-weight: 700; color: var(--pending); }
+
+/* ---- feature naming (§5.8) — titles lead, ids follow ------------------- */
+.feature-title { font-weight: 600; }
+.feature-title--missing { font-weight: 600; color: var(--muted); font-style: italic; }
+.feature-id { font-size: 12px; color: var(--muted); text-decoration: none; }
+
+/* ---- home grid ---------------------------------------------------------- */
+.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) var(--rail-width); gap: 16px; }
+.home-grid__main { min-width: 0; }
+.rail-title { font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+
+/* ---- needs-you strip ---------------------------------------------------- */
+.needs-you__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.needs-you__item { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.needs-you__age { font-variant-numeric: tabular-nums; color: var(--muted); }
+.needs-you__meta { color: var(--muted); font-size: 12px; }
+.observes-only { color: var(--muted); font-style: italic; font-size: 12px; }
+
+/* ---- build board -------------------------------------------------------- */
+.build-row { padding: 8px 0; border-top: 1px solid var(--line); }
+.build-row:first-child { border-top: 0; }
+.build-row--terminal { opacity: 0.6; }
+.build-row__head, .build-row__foot { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.build-row__detail { color: var(--muted); }
+
+/* ---- dense tables (operator) ------------------------------------------- */
+.dense-table { width: 100%; border-collapse: collapse; font-size: var(--fs-operator); }
+.dense-table th { text-align: left; color: var(--muted); font-weight: 600; }
+.dense-table th, .dense-table td { padding: var(--pad-cell-operator); border-bottom: 1px solid var(--line); vertical-align: top; }
+.dense-table .num { font-variant-numeric: tabular-nums; }
+.gate-status--passed { color: var(--ok); }
+.gate-status--gated { color: var(--warn); }
+.gate-status--rejected, .gate-status--failed { color: var(--bad); }
+
+/* ---- agents / serving --------------------------------------------------- */
+.agent-list, .service-list, .planning-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.agent-row, .service-row, .planning-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.status-dot--ok { color: var(--ok); }
+.status-dot--idle { color: var(--muted); }
+.status-dot--fail { color: var(--bad); }
+.status-dot--unknown { color: var(--pending); font-weight: 700; }
+.unmeasured-note, .agents__note, .coverage-gaps__note { color: var(--muted); font-size: 12px; font-style: italic; }
+.service-row__resident { color: var(--muted); font-size: 12px; }
+
+/* ---- projector ---------------------------------------------------------- */
+.projector__streams { list-style: none; margin: 6px 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.stream-recency { display: flex; gap: 8px; font-size: 12px; }
+.stream-recency--lagging .stream-recency__label { color: var(--warn); }
+.projector__heartbeat--stale { color: var(--bad); font-weight: 700; }
+.projector__mirror { color: var(--muted); font-size: 12px; }
+
+/* ---- delivered ---------------------------------------------------------- */
+.delivered__summary { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+.delivered__row--unverified { color: var(--muted); }
+.named-gap { color: var(--warn); font-style: italic; }
+.change-link { text-decoration: none; }
+.delivered__footer { display: flex; gap: 16px; justify-content: space-between; margin-top: 8px; color: var(--muted); font-size: 12px; }
+
+/* ---- feature page ------------------------------------------------------- */
+.feature-header { margin-bottom: 12px; }
+.feature-header__title { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.feature-header__meta { display: flex; gap: 12px; color: var(--muted); font-size: 12px; margin-top: 4px; flex-wrap: wrap; }
+.signal-row--unmeasured { color: var(--muted); }
+.context-counters { color: var(--muted); font-size: 12px; }
+.coverage-gaps { margin-top: 8px; border-left: 3px solid var(--pending); padding-left: 8px; }
+.coverage-gaps__label { font-weight: 700; color: var(--pending); font-size: 12px; }
+.coverage-gaps__list { margin: 4px 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
+.feature-lower { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.feed-pending { margin-top: 8px; }
+
+/* ---- issues legend ------------------------------------------------------ */
+.kind-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 10px; }
+.kind-legend__entry { display: inline-flex; gap: 6px; align-items: baseline; }
+
+/* ---- login -------------------------------------------------------------- */
+.layout-login { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+.login-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; width: 320px; }
+.login-form { display: flex; flex-direction: column; gap: 10px; }
+.login-form label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-operator); }
+.login-form input { padding: 6px; border: 1px solid var(--line); border-radius: 4px; }
+.login-card__error { color: var(--bad); }
+.login-card__note { color: var(--muted); font-size: 12px; }
+
+/* ---- client layout (§7.2) — roomier density --------------------------- */
+.layout-client { font-size: var(--fs-base); }
+.content--client { padding: 24px; max-width: 900px; margin: 0 auto; }
+.client-dark__lead { font-size: 18px; color: var(--muted); }
+
+/* ---- responsive: single column below 1024px; chat is /chat route below 1280px --------- */
+@media (max-width: 1024px) {
+  .home-grid, .feature-lower, .fleet-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Wide content that must not scroll the page body: dense tables scroll inside their card. */
+.panel-card__body { overflow-x: auto; }

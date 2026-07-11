@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Features · factory-dashboard{% endblock %}
+{% block content %}
+<h1 class="page-title">Features</h1>
+<p class="page-lead">The build board expanded to all known features (same fragment as P2,
+  unfiltered, plus terminal builds).</p>
+{% with panel = view.build_board %}{% include "fragments/p2_build_board.html" %}{% endwith %}
+{% endblock %}

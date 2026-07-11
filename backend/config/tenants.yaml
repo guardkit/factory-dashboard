@@ -1,0 +1,38 @@
+# factory-dashboard — tenant registry (design §4.0 / arch §4).
+#
+# CONFIG-IS-DATA: tenancy is a configured registry, never a hardcoded enum. Adding a client is a
+# config edit + WS5 provisioning (a new NATS account pair per IN-4, a new client store) — never a
+# code change (arch §4 dated amendment 2026-07-08). The projector mirrors this file into the
+# `tenants` table (startup + on file change; never a web-request write).
+#
+# A tenant may own ONE OR MORE repos/projects (a real client engagement is often several).
+# `operator` is reserved: it has no client store and sees the operational projections.
+#
+# Fields per row:
+#   tenant_slug    — stable key (also the NATS subject prefix token for client-visible events)
+#   display_name   — human label rendered in the client top bar
+#   nats_account   — the NATS account this tenant's users live in (transport tenancy boundary)
+#   subject_prefix — the subject space a client's own NATS users can physically see ({prefix}.>)
+#   projects       — the repo/project set this tenant owns (per-project rollups nest inside)
+#   store_path     — the tenant's own reduced client DB file (ledger_client_{tenant}.db)
+
+tenants:
+  - tenant_slug: operator
+    display_name: "Factory (operator)"
+    nats_account: APPMILLA
+    subject_prefix: null          # operator sees the operational store, not a prefixed feed
+    projects: []                  # operator is fleet-wide, not scoped to a project set
+    store_path: null              # no client store; reads readmodel.db
+
+  # --- Example client tenant (COMMENTED — first live instance lands at D3 once IN-4 + A-8 land).
+  # Until a tenant's IN-4 (account export/import) + A-8 (reduced delivery event) land, its view is
+  # honestly DARK (arch §4). Uncommenting alone does not light it — the wire pair must exist too.
+  #
+  # - tenant_slug: finproxy
+  #   display_name: "FinProxy"
+  #   nats_account: FINPROXY
+  #   subject_prefix: finproxy      # client's `mark` subscribes finproxy.> directly (raw creds)
+  #   projects:
+  #     - lpa-platform-poc
+  #     - finproxy-reporting
+  #   store_path: ledger_client_finproxy.db

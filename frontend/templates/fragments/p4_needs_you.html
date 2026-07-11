@@ -1,0 +1,30 @@
+{% import 'macros.html' as m %}
+{# P4 — needs-you strip. Leads with age + who/what is waited on; ordered RED band first (§4.1). #}
+<section class="panel-card needs-you state-{{ panel.state.value }}" id="panel-p4" data-panel="p4">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">NEEDS YOU ({{ panel.count }})</h2>
+    {{ m.asof_chip(panel.as_of) }}
+  </header>
+  <div class="panel-card__body">
+    {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+    {% if panel.items %}
+      <ul class="needs-you__list">
+      {% for it in panel.items %}
+        <li class="needs-you__item needs-you__item--{{ it.kind }}">
+          <span class="needs-you__glyph" aria-hidden="true">{{ it.kind_glyph }}</span>
+          {{ m.band_chip(it.band) }}
+          <span class="needs-you__age" title="{{ it.age_title }}">{{ it.age_label }}</span>
+          <span class="needs-you__headline">{{ it.headline }}</span>
+          {% if it.meta %}<span class="needs-you__meta">{{ it.meta }}</span>{% endif %}
+          <a class="needs-you__link" href="{{ it.scope_link }}">details</a>
+          {% if it.observes_only %}
+            <span class="observes-only">decide in the existing approval channel — this dashboard observes</span>
+          {% endif %}
+        </li>
+      {% endfor %}
+      </ul>
+    {% else %}
+      <p class="true-empty">{{ panel.empty_copy }}</p>
+    {% endif %}
+  </div>
+</section>

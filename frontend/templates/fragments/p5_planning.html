@@ -1,0 +1,29 @@
+{% import 'macros.html' as m %}
+{# P5 — planning runs (from planning_mirror). TRUE-EMPTY is asserted ONLY off a fresh mirror pass;
+   a stale or never-run mirror renders LAGGING (§4.1), so an un-updated mirror can never read as
+   "genuinely no runs". #}
+<section class="panel-card planning state-{{ panel.state.value }}" id="panel-p5" data-panel="p5">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">PLANNING RUNS</h2>
+    {{ m.asof_chip(panel.as_of) }}
+  </header>
+  <div class="panel-card__body">
+    {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+    {% if panel.rows %}
+      <ul class="planning-list">
+      {% for r in panel.rows %}
+        <li class="planning-row">
+          <span class="planning-row__id">{{ r.plan_id }}</span>
+          <span class="planning-row__project">{{ r.project }}</span>
+          <span class="planning-row__state">{{ r.state }}</span>
+          <span class="planning-row__user">{{ r.originating_user }}</span>
+          <span class="planning-row__age">{{ r.age }}</span>
+          <span class="planning-row__deferred">deferred: {{ r.deferred_count }}</span>
+        </li>
+      {% endfor %}
+      </ul>
+    {% else %}
+      <p class="true-empty">{{ panel.empty_copy }}</p>
+    {% endif %}
+  </div>
+</section>

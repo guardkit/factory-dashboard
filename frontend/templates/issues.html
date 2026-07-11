@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% import 'macros.html' as m %}
+{% block title %}Issues · factory-dashboard{% endblock %}
+{% block content %}
+{# ux §4.5 — register table, open first. seam_finding renders FEED-PENDING in the legend (no
+   producer exists yet — ask A-7), never a fake row. #}
+<h1 class="page-title">Issues</h1>
+
+<section class="panel-card issues-legend">
+  <header class="panel-card__header"><h2 class="panel-card__title">KINDS</h2></header>
+  <div class="panel-card__body">
+    <ul class="kind-legend">
+    {% for k in view.legend %}
+      <li class="kind-legend__entry {% if k.feed_pending %}state-pending{% endif %}" data-kind="{{ k.kind }}">
+        {{ m.band_chip(k.band) }} <span class="kind-legend__name">{{ k.kind }}</span>
+        {% if k.feed_pending %}<span class="state-pending__gate">FEED PENDING — {{ k.gate }}</span>{% endif %}
+      </li>
+    {% endfor %}
+    </ul>
+  </div>
+</section>
+
+<section class="panel-card issues-register">
+  <header class="panel-card__header"><h2 class="panel-card__title">OPEN</h2></header>
+  <div class="panel-card__body">
+    {% if view.rows %}
+      <table class="dense-table issues__table">
+        <thead>
+          <tr><th scope="col">kind</th><th scope="col">scope</th><th scope="col">age</th>
+            <th scope="col">detail</th><th scope="col">source</th></tr>
+        </thead>
+        <tbody>
+        {% for r in view.rows %}
+          <tr class="issue-row issue-row--{{ r.kind }}">
+            <td>{{ m.band_chip(r.band) }} {{ r.kind }}</td>
+            <td><a class="feature-id" href="{{ r.scope_link }}">{{ r.scope_id }}</a></td>
+            <td class="num">{{ r.age }}</td>
+            <td>{{ r.detail }}</td>
+            <td>{{ r.source_ref }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="true-empty">No open issues in the register.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

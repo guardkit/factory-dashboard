@@ -1,0 +1,33 @@
+# factory-dashboard — per-tenant plan registry (ux-spec-2026-07-11.md §4.7; amendment 2026-07-11).
+#
+# CONFIG-IS-DATA, exactly like tenants.yaml: the plan baseline is config the dashboard READS. The
+# projector mirrors it into the `plan_milestones` table the same way tenants.yaml -> tenants
+# (startup + on file change; NEVER a web-request write — design §7 / M-D4). This table SHIPS EMPTY
+# at S1; the mirror logic is implemented in the projector at S4.
+#
+# Deviation ("behind / on_target / ahead / NO BASELINE") is computed by the query layer ONLY, from
+# delivered-vs-target — never stored, never rendered green when the projection is stale (§4.7 /
+# §5.6 F-5: a stale ledger/build watermark WITHHOLDS the verdict, it is not dimmed-green).
+#
+# Milestone fields:
+#   id            — stable milestone key
+#   title         — human label (client-safe; renders in the export)
+#   feature_ids   — the features this milestone tracks (use EITHER feature_ids OR project)
+#   project       — alternatively, a whole project maps to the milestone
+#   target_window — the week/period the milestone is due (client-safe; renders in the export)
+#
+# Only four fields per milestone are client-safe in the export (id, title, target_window,
+# deviation-state) — sanctioned by dated note 2026-07-11. No other plan internals ever export.
+
+plans:
+  # --- Example plan registry (COMMENTED — lands with the first live client tenant). ------------
+  # finproxy:
+  #   - id: M2
+  #     title: "Payments API"
+  #     feature_ids:
+  #       - FEAT-9A21
+  #     target_window: "w/c 2026-07-06"
+  #   - id: M3
+  #     title: "Reporting"
+  #     project: finproxy-reporting
+  #     target_window: "w/c 2026-07-13"

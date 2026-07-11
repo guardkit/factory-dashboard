@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Fleet · factory-dashboard{% endblock %}
+{% block content %}
+{# ux §4.6 — full P1 roster + P6 services + the §5.6 projector two-signal model in full. The
+   operator's answer to "is the dashboard itself telling the truth right now?" #}
+<h1 class="page-title">Fleet &amp; machinery</h1>
+<div class="fleet-grid">
+  {% with panel = view.agents %}{% include "fragments/p1_agents.html" %}{% endwith %}
+  {% with panel = view.serving %}{% include "fragments/p6_serving.html" %}{% endwith %}
+  {% with panel = view.projector %}{% include "fragments/projector.html" %}{% endwith %}
+</div>
+{% endblock %}
