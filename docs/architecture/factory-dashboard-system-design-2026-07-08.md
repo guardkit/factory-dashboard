@@ -447,3 +447,33 @@ its payload, existing or asked.
 
 *Corrections require a dated note, never a silent edit. Field-level asks extracted from every 📋
 row live in `wire-consumer-requirements-2026-07-08.md`; sequencing in `build-plan-2026-07-08.md`.*
+
+---
+
+> **Dated addendum 2026-07-11 — pre-build capability verification (full evidence:
+> `docs/notes/capability-verification-2026-07-11.md`; repos pinned nats-core `e46a419` /
+> nats-infrastructure `f008c05` / forge `c583050` / jarvis `73b8476`).** The matrix corrections:
+> **(P1)** the roster is dual-source — some agents heartbeat on `fleet.*` subjects (524 live
+> msgs), but jarvis registers via the `agent-registry` KV bucket ONLY (periodic re-put = its
+> heartbeat); the projection additionally core-subscribes `$KV.agent-registry.>` (no JS API).
+> forge registers at boot but its `heartbeat_loop` is defined-yet-unstarted (ask A-10) —
+> register-only agents render "no heartbeat feed", never a fake stale-alarm.
+> **(P2)** `BuildProgressPayload` carries wave/wave_total/overall_progress_pct/elapsed_seconds
+> ONLY — task counters arrive at BuildComplete; §1 Q1's "wave/task counters" mid-build is
+> wave-level only. **(P3)** `pipeline.stage-gated` has NO producer anywhere, and
+> StageGatedPayload diverges (`stage` not `stage_label`; 2-value lowercase gate_mode; no
+> status/duration_secs) — GATED state derives from StageComplete.gate_mode + `stage_log`.
+> **(P4)** ApprovalRequestPayload has `request_id`, not `slot_id` (schema §4.5's slot_id is
+> vestigial/unfed); decision enum is approve|reject|defer|override. **(P5)** the live-arrival
+> emitter has LANDED (jarvis slack_planning_intake → `pipeline.planning-queued.{cid}`,
+> config-gated) — the "🟡 inert until MP-010/J04" marker is superseded. **(P7/§5)** `pr_url`
+> has never been populated in any forge DB to date; the ledger bootstrap is honestly
+> near-empty until forge-daemon builds complete with PRs (pre-daemon deliveries live only in
+> guardkit artifacts, by design unscraped — M-D2 names them as feed-gap discrepancies).
+> **(§4.7 mirror)** on the GB10 the live forge state is the `forge-prod` bind-mount
+> (`~/forge-prod-state/.forge/forge.db`); the `~/.forge` default is a stale dev DB written by
+> a `langgraph dev` process — the mirror path is explicit config, never the default.
+> **(§3 envelope)** envelope-level `correlation_id` is nullable — projectors guard it; v1
+> payloads (BuildProgress/Complete, _fleet/_agent/_memory, the envelope) are `extra="ignore"`
+> (unknown fields DROPPED at parse), only v2.2 payloads are `extra="allow"` — see the wire
+> note's A-4 correction. `Topics.for_project` now lives at topics.py:232-260.

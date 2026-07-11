@@ -73,3 +73,28 @@ gateway box, independent of everything else.
 
 *Asks only; owners decide. Where an owner declines, the dashboard's design already names its
 fallback (mirror-fed, coverage-noted, or honestly dark). Corrections by dated note.*
+
+---
+
+> **Dated addendum 2026-07-11 — from the pre-build capability verification
+> (`docs/notes/capability-verification-2026-07-11.md`):**
+> **A-4 premise CORRECTION:** §5's "nats-core payloads are `extra="allow"`; the block is
+> additive" holds only for the v2.2 payloads — `BuildCompletePayload` (and the whole v1
+> family) is **`extra="ignore"`**: an additive usage/loop-stats block emitted ahead of a
+> nats-core model bump is silently STRIPPED at parse. A-4 therefore requires a nats-core
+> model change, not just producer-side emission — B7 should treat the model bump as part of
+> the ask.
+> **A-9 (new, to WS2 B7 / nats-core):** carry the Mode-P-minted feature **`title`** on
+> `BuildQueuedPayload` + `BuildCompletePayload` (and the spec-ready handoff event). No human
+> feature title exists anywhere in today's feeds or forge state (grep-proven); until A-9
+> lands the dashboard renders id-fallbacks (ux-spec §5.8).
+> **A-10 (new, to the forge lane):** start the existing-but-unwired `heartbeat_loop`
+> (`adapters/nats/fleet_publisher.py:230-305`) in the daemon boot path — forge currently
+> registers once and never heartbeats, so its roster row can never go live.
+> **IN-3 amendment:** add **`$KV.agent-registry.>`** to `dashboard_ro`'s subscribe list
+> (a plain core-NATS subject-space read of KV puts — no `$JS.>` grant needed): jarvis and
+> KV-registering agents are invisible to `fleet.*` subscribers. Priority note: verification
+> confirmed **no read-only APPMILLA credential exists at all** (every scoped user also
+> publishes; only rich/james subscribe the full space) — until IN-3 lands the projector runs
+> on a borrowed human credential with read-only enforced by app discipline (M-D3) rather than
+> the broker.
