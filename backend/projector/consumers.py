@@ -27,7 +27,7 @@ from nats.aio.client import Client
 from nats.aio.msg import Msg
 
 from backend import ledger
-from backend.projector.projections import p1_agents, p2_builds, p3_stage, p4_approvals
+from backend.projector.projections import p1_agents, p2_builds, p3_stage, p4_approvals, p5_deploys
 from backend.projector.projections.base import (
     ChangeSet,
     Envelope,
@@ -38,8 +38,9 @@ from backend.projector.projections.base import (
     stream_for_subject,
 )
 
-# The four subject spaces the roster/board/gate/approval projections consume (all core-NATS).
-SUBJECTS: tuple[str, ...] = ("pipeline.>", "agents.>", "fleet.>", "$KV.agent-registry.>")
+# The subject spaces the projections consume (all core-NATS — fence 1, no JetStream consumer).
+# `deploy.>` (G-01) carries the back-half deploy/QA-verdict/live-gate receipts (nats-core Topics.Deploy).
+SUBJECTS: tuple[str, ...] = ("pipeline.>", "agents.>", "fleet.>", "deploy.>", "$KV.agent-registry.>")
 
 HEARTBEAT_SECS = 10
 
@@ -62,6 +63,7 @@ _ROUTES: tuple[tuple[str, Callable[[sqlite3.Connection, str, Envelope, datetime]
     ("agents.approval.", p4_approvals.project),
     ("pipeline.build-", p2_builds.project),
     ("pipeline.stage-", p3_stage.project),
+    ("deploy.", p5_deploys.project),  # G-01: deploy/QA-verdict/live-gate receipts
 )
 
 

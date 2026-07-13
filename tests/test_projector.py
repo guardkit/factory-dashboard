@@ -8,7 +8,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import nats
+from backend.projector import consumers
 from backend.projector.consumers import Projector, apply_message
+from backend.projector.projections import p5_deploys
 
 from tests.nats_util import envelope, make_projected_db, nats_server  # noqa: F401
 
@@ -113,6 +115,121 @@ def test_approval_request_then_response(tmp_path: Path) -> None:
     row = conn.execute("SELECT state, decision, decided_by FROM approvals WHERE request_id='req-1'").fetchone()
     assert row == ("decided", "approve", "rich")
     assert conn.execute("SELECT closed_at FROM issues WHERE issue_id='approval:req-1'").fetchone()[0] is not None
+
+
+# --- P5 deploy / QA-verdict / live-gate (G-01) -------------------------------
+
+
+def test_deploy_lifecycle_projects_timeline_per_deploy(tmp_path: Path) -> None:
+    """QUEUED -> STARTED -> COMPLETE transition the SAME `deploys` row (keyed on deploy_run_id),
+    carrying feat_id (⇐ feature_id) and env_id (⇐ target_env) and the F7 record ref at complete."""
+    _db, conn = make_projected_db(tmp_path)
+    apply_message(conn, "deploy.queued.cid-1",
+                  envelope("deploy_queued", {"correlation_id": "cid-1", "deploy_run_id": "dr-1",
+                                             "env_id": "gb10-prod", "feat_id": "FEAT-51B0",
+                                             "queued_at": "2026-07-13T10:00:00+00:00"}), NOW)
+    apply_message(conn, "deploy.started.cid-1",
+                  envelope("deploy_started", {"correlation_id": "cid-1", "deploy_run_id": "dr-1",
+                                              "env_id": "gb10-prod", "feat_id": "FEAT-51B0",
+                                              "started_at": "2026-07-13T10:01:00+00:00"}), NOW)
+    apply_message(conn, "deploy.complete.cid-1",
+                  envelope("deploy_complete", {"correlation_id": "cid-1", "deploy_run_id": "dr-1",
+                                               "env_id": "gb10-prod", "feat_id": "FEAT-51B0",
+                                               "artifact_digest": "sha256:abc",
+                                               "image_digests": {"web": "sha256:def"},
+                                               "deploy_record_ref": "deploys/dr-1.yaml",
+                                               "duration_seconds": 42,
+                                               "completed_at": "2026-07-13T10:02:00+00:00"}), NOW)
+    row = conn.execute(
+        "SELECT feature_id, env_id, status, correlation_id, artifact_digest, image_digests, "
+        "deploy_record_ref, duration_seconds FROM deploys WHERE deploy_id='dr-1'"
+    ).fetchone()
+    assert row == ("FEAT-51B0", "gb10-prod", "COMPLETE", "cid-1", "sha256:abc",
+                   '{"web": "sha256:def"}', "deploys/dr-1.yaml", 42)
+    # one row only — the lifecycle transitioned in place, it did not fan out
+    assert conn.execute("SELECT COUNT(*) FROM deploys").fetchone()[0] == 1
+
+
+def test_deploy_failed_carries_failed_step(tmp_path: Path) -> None:
+    _db, conn = make_projected_db(tmp_path)
+    apply_message(conn, "deploy.failed.cid-2",
+                  envelope("deploy_failed", {"correlation_id": "cid-2", "deploy_run_id": "dr-2",
+                                             "env_id": "gb10-prod", "feat_id": "FEAT-3ED2",
+                                             "failed_step": "health_check",
+                                             "failure_reason": "port unreachable",
+                                             "failed_at": "2026-07-13T11:00:00+00:00"}), NOW)
+    row = conn.execute("SELECT status, failed_step FROM deploys WHERE deploy_id='dr-2'").fetchone()
+    assert row == ("FAILED", "health_check")
+
+
+def test_deploy_reverted_transitions_status_when_present(tmp_path: Path) -> None:
+    """The O-32 revert-on-gate-fail receipt is a named-future; when a producer emits it on the
+    correlation spine the timeline carries REVERTED without any invented shape."""
+    _db, conn = make_projected_db(tmp_path)
+    apply_message(conn, "deploy.complete.cid-3",
+                  envelope("deploy_complete", {"correlation_id": "cid-3", "deploy_run_id": "dr-3",
+                                               "env_id": "gb10-prod", "feat_id": "FEAT-9A21",
+                                               "deploy_record_ref": "deploys/dr-3.yaml",
+                                               "completed_at": "2026-07-13T12:00:00+00:00"}), NOW)
+    apply_message(conn, "deploy.reverted.cid-3",
+                  envelope("deploy_reverted", {"correlation_id": "cid-3", "deploy_run_id": "dr-3",
+                                               "env_id": "gb10-prod", "feat_id": "FEAT-9A21"}), NOW)
+    assert conn.execute("SELECT status FROM deploys WHERE deploy_id='dr-3'").fetchone()[0] == "REVERTED"
+
+
+def test_qa_verdict_and_live_gate_coexist_in_live_verdicts(tmp_path: Path) -> None:
+    """QAVerdict (overall) and LiveGateResult (per-run detail) share a (correlation, run, attempt)
+    spine but land as distinct rows (source-tagged verdict_id); replay is idempotent."""
+    _db, conn = make_projected_db(tmp_path)
+    qa = envelope("qa_verdict", {"correlation_id": "cid-4", "run_id": "run-9", "env_id": "gb10-prod",
+                                 "verdict": "pass", "gate_ids": ["G-smoke", "G-api"],
+                                 "assertions": [{"id": "a1", "gate_id": "G-api", "status": "pass"}],
+                                 "evidence_index_ref": "ev/idx.json", "attempt": 1,
+                                 "feat_id": "FEAT-51B0", "app_url": "http://localhost:8080",
+                                 "decided_at": "2026-07-13T13:00:00+00:00"})
+    lg = envelope("live_gate_result", {"correlation_id": "cid-4", "run_id": "run-9", "env_id": "gb10-prod",
+                                       "verdict": "pass", "gate_ids": ["G-smoke", "G-api"],
+                                       "assertions": [{"id": "a1", "gate_id": "G-api", "status": "pass"}],
+                                       "evidence_index_ref": "ev/idx.json", "attempt": 1,
+                                       "feat_id": "FEAT-51B0", "app_url": "http://localhost:8080",
+                                       "finished_at": "2026-07-13T13:01:00+00:00"})
+    apply_message(conn, "deploy.qa-verdict.cid-4", qa, NOW)
+    apply_message(conn, "deploy.live-gate-result.cid-4", lg, NOW)
+    apply_message(conn, "deploy.qa-verdict.cid-4", qa, NOW)  # replay — must not duplicate
+
+    rows = conn.execute(
+        "SELECT verdict_id, feature_id, verdict, run_id, attempt FROM live_verdicts ORDER BY verdict_id"
+    ).fetchall()
+    assert len(rows) == 2  # one qa: row, one live-gate: row — replay collapsed onto the PK
+    assert rows[0][0] == "live-gate:cid-4:run-9:1" and rows[0][2] == "pass"
+    assert rows[1][0] == "qa:cid-4:run-9:1" and rows[1][1] == "FEAT-51B0"
+    # gate_ids / assertions persisted as JSON (renderable by the UI grammar)
+    gate_ids = conn.execute("SELECT gate_ids FROM live_verdicts WHERE verdict_id='qa:cid-4:run-9:1'").fetchone()[0]
+    assert gate_ids == '["G-smoke", "G-api"]'
+
+
+def test_deploy_events_advance_the_deploy_watermark_and_change_log(tmp_path: Path) -> None:
+    _db, conn = make_projected_db(tmp_path)
+    apply_message(conn, "deploy.queued.cid-5",
+                  envelope("deploy_queued", {"correlation_id": "cid-5", "deploy_run_id": "dr-5",
+                                             "env_id": "gb10-prod", "feat_id": "FEAT-51B0",
+                                             "queued_at": "2026-07-13T14:00:00+00:00"}), NOW)
+    wm = conn.execute(
+        "SELECT last_stream_seq, last_event_at FROM consumer_watermarks WHERE stream='DEPLOY'"
+    ).fetchone()
+    assert wm[0] == 1 and wm[1] is not None
+    # the deploy panel channel is p8 (the design-doc P8/deploy slot — NOT p5/planning)
+    assert conn.execute("SELECT COUNT(*) FROM change_log WHERE panel='p8'").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM change_log WHERE panel='p5'").fetchone()[0] == 0
+
+
+def test_deploy_routes_are_registered_beside_the_existing_four() -> None:
+    """Route-registration assertion (G-01 acceptance): deploy.> is subscribed and dispatches to p5."""
+    assert "deploy.>" in consumers.SUBJECTS
+    assert ("deploy.", p5_deploys.project) in consumers._ROUTES
+    # the pre-existing four subjects are untouched
+    for subj in ("pipeline.>", "agents.>", "fleet.>", "$KV.agent-registry.>"):
+        assert subj in consumers.SUBJECTS
 
 
 # --- watermarks + change log -------------------------------------------------

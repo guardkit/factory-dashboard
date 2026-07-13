@@ -131,4 +131,6 @@ def stream_for_subject(subject: str) -> str:
         return "AGENTS"
     if subject.startswith("fleet.") or subject.startswith("$KV.agent-registry."):
         return "FLEET"
+    if subject.startswith("deploy."):
+        return "DEPLOY"
     return "OTHER"
