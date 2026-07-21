@@ -34,3 +34,9 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# The composed read-model volume (projection history — never committed)
+/data/
+
+# The projector's NATS credential (see .env.example) — never committed
+.env

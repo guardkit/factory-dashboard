@@ -13,6 +13,7 @@ incidental DB-open failure (ux §2).
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated
@@ -64,7 +65,10 @@ def create_app(
     plans_path: Path = PLANS_PATH,
     secret_key: str = "dev-insecure-key-change-me",
 ) -> FastAPI:
-    db_path = db_path or (BASE_DIR / "readmodel.db")
+    # The same env contract the projector honours (FACTORY_DASH_DB), so the composed container
+    # points BOTH processes at the one mounted read-model; bare/dev runs keep the repo-root default.
+    env_db = os.environ.get("FACTORY_DASH_DB")
+    db_path = db_path or (Path(env_db) if env_db else BASE_DIR / "readmodel.db")
     tenants = load_tenants(tenants_path)
     load_plans(plans_path)  # validated at boot; mirrored by the projector at S4
     db.init_db(db_path, tenants.values())

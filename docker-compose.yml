@@ -1,0 +1,47 @@
+# The factory board's compose front door (closes L4 supervision + the G-02 front-door gap; the
+# L7 residue — the IN-3 `dashboard_ro` NATS identity (escrow-gated) and the two fixture-backed
+# nav pages — stays on the register).
+#
+# `docker compose up -d` replaces the two bare host processes that ran unsupervised on :8090
+# since 2026-07-14 (pids 4444/4445, killed silently by the 2026-07-21 reboot — the O-30 class
+# the completeness review predicted).
+#
+# network_mode: host, deliberately: the projector and the health polls read the estate's
+# LOOPBACK surfaces exactly as the bare processes did (NATS :4222, llama-swap :9000,
+# litellm :4000, the NATS monitor :8222), and the board binds 127.0.0.1:8090 itself — so the
+# exposure is byte-identical to what it replaces: loopback-only, nothing published.
+#
+# The read-model lives on ./data (bind mount) so a rebuild/recreate never loses projection
+# history; the forge DB is mounted READ-ONLY (the mirror opens it `mode=ro` — fence 4).
+
+services:
+  board:
+    build: .
+    image: factory-dashboard:local
+    command: ["uvicorn", "backend.app:app", "--host", "127.0.0.1", "--port", "8090"]
+    network_mode: host
+    user: "${FACTORY_UID:-1000}:${FACTORY_GID:-1000}"
+    environment:
+      FACTORY_DASH_DB: /data/readmodel.db
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+
+  projector:
+    build: .
+    image: factory-dashboard:local
+    command: ["python", "-m", "backend.projector"]
+    network_mode: host
+    user: "${FACTORY_UID:-1000}:${FACTORY_GID:-1000}"
+    # FACTORY_DASH_NATS_URL comes from ./.env (gitignored, mode 600 — see .env.example): the
+    # estate's NATS enforces APPMILLA-account auth, and until the escrow-gated IN-3 cutover mints
+    # the scoped `dashboard_ro` identity, the projector rides the broad operator credential the
+    # bare process used — a register item, named, not hidden.
+    env_file: .env
+    environment:
+      FACTORY_DASH_DB: /data/readmodel.db
+      FACTORY_FORGE_DB_PATH: /forge-state/.forge/forge.db
+    volumes:
+      - ./data:/data
+      - ~/forge-prod-state/.forge:/forge-state/.forge:ro
+    restart: unless-stopped
