@@ -34,6 +34,11 @@ class Endpoints:
     litellm_base: str = os.environ.get("FACTORY_LITELLM_URL", "http://127.0.0.1:4000")
     llama_swap_base: str = os.environ.get("FACTORY_LLAMASWAP_URL", "http://127.0.0.1:9000")
     nats_monitor: str = os.environ.get("FACTORY_NATS_MONITOR_URL", "http://127.0.0.1:8222")
+    # 2026-09-03: LiteLLM refuses an unauthenticated `GET /v1/models` (401), so for four weeks this
+    # poll wrote two failure rows a minute into LiteLLM's own spend log and the dashboard showed
+    # LiteLLM as failing. The key is a dashboard-only LiteLLM key (see .env.example); it is sent
+    # to the LiteLLM base ONLY, never to llama-swap or NATS.
+    litellm_key: str = os.environ.get("FACTORY_LITELLM_KEY", "")
 
 
 def _upsert(conn: sqlite3.Connection, service: str, status: str, detail: str, now: datetime) -> None:
@@ -46,11 +51,18 @@ def _upsert(conn: sqlite3.Connection, service: str, status: str, detail: str, no
     )
 
 
-async def _get(client: httpx.AsyncClient, url: str) -> httpx.Response | None:
+async def _get(
+    client: httpx.AsyncClient, url: str, headers: dict[str, str] | None = None
+) -> httpx.Response | None:
     try:
-        return await client.get(url, timeout=_TIMEOUT)
+        return await client.get(url, timeout=_TIMEOUT, headers=headers)
     except httpx.HTTPError:
         return None
+
+
+def _litellm_headers(ep: Endpoints) -> dict[str, str] | None:
+    """Bearer header for LiteLLM only; None when no key is configured (the old, refused behaviour)."""
+    return {"Authorization": f"Bearer {ep.litellm_key}"} if ep.litellm_key else None
 
 
 async def poll_once(
@@ -67,7 +79,7 @@ async def poll_once(
     http = client or httpx.AsyncClient()
     try:
         # LiteLLM — GET /v1/models ONLY (never /health — it fires real completions, fence 5).
-        r = await _get(http, f"{ep.litellm_base}/v1/models")
+        r = await _get(http, f"{ep.litellm_base}/v1/models", headers=_litellm_headers(ep))
         _upsert(conn, "litellm", "ok" if _ok(r) else "fail", "ok" if _ok(r) else _err(r), now)
 
         # llama-swap — GET /health then GET /v1/models for the resident list.
