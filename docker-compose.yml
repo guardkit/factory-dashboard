@@ -40,8 +40,16 @@ services:
     env_file: .env
     environment:
       FACTORY_DASH_DB: /data/readmodel.db
-      FACTORY_FORGE_DB_PATH: /forge-state/.forge/forge.db
+      FACTORY_FORGE_DB_PATH: /forge-state/forge.db
     volumes:
       - ./data:/data
-      - ~/forge-prod-state/.forge:/forge-state/.forge:ro
+      # Forge's live build record (since the 1 October 2026 rollout it lives in the estate's
+      # ledger volume, not ~/forge-prod-state). Mounted read-only: SQLite 3.22+ can read a WAL
+      # database from a read-only mount while Forge holds it open (its -wal and -shm files exist).
+      - forge-ledger:/forge-state:ro
     restart: unless-stopped
+
+volumes:
+  forge-ledger:
+    external: true
+    name: ${FACTORY_FORGE_LEDGER_VOLUME:-forge-estate_forge-ledger}
