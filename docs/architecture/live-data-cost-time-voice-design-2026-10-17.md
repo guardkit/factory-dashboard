@@ -92,8 +92,9 @@ login.
   - **Accounts:**
     - Stored in `accounts.yaml` in a configuration folder outside the repository, mounted
       read-only into the board (default `~/.config/factory-dashboard/`).
-    - Each entry has a username, a display name and a password hash (scrypt, the same function
-      the code already uses).
+    - Each entry has a username, a display name and a password hash in the format the code
+      already uses (`pbkdf2_sha256`, `backend/auth.py`), so generation and checking share one
+      function.
     - A small command prints a hash for a password typed at the terminal; Rich or this lane runs
       it, James never does.
     - The July seed users (`username == tenant slug`) are removed.
@@ -123,21 +124,43 @@ login.
 - **Reading it:**
   - A read-only Postgres login for the dashboard in LiteLLM's database, allowed `SELECT` on
     `"LiteLLM_SpendLogs"` only. Its password is kept in the dashboard's private environment file.
-  - The feed reads new rows every 60 seconds, by `"startTime"` with a watermark. It stores
-    per-call summaries in the dashboard's own store:
-    - time;
-    - model name;
+  - LiteLLM writes a call's row after the call ends, in batches, so rows can arrive late and out
+    of `"startTime"` order. The import is therefore **idempotent and overlapping**:
+    - every row is stored under LiteLLM's unique `request_id` (insert, or ignore if present);
+    - every 60 seconds the feed re-reads all rows whose `"startTime"` is after the latest stored
+      start time **minus 3 hours**. That covers the longest call seen (well under an hour) plus
+      the batch delay, with room to spare. Rows already stored are ignored.
+    - once a day the feed re-reads the previous 3 full days and compares the row count per day
+      with its own. A difference is logged and the missing rows are inserted.
+    - after an outage the same rule applies: the next pass starts 3 hours before the latest
+      stored row and runs forward to now, so nothing is skipped.
+  - It stores per-call summaries in the dashboard's own store:
+    - `request_id`;
+    - start and end time;
+    - model name (which shows the role);
     - prompt and completion tokens;
     - LiteLLM's `spend`;
     - the feature tag (or none);
     - the key alias.
-  - About 2,500 calls a day at today's rate is small. Rows older than 180 days are summed per day
-    and per feature, then dropped.
+  - About 2,500 calls a day is small (well under 100 MB a year), so every row is kept. No
+    compaction or retention machinery is built.
+  - **Freshness of cost data**, kept separately from Forge's:
+    - The feed records the time of the last successful import and the earliest date covered.
+    - If the last success is older than 10 minutes, every cost figure on pages, reports, the
+      CSV and the export is shown as "cost data last read at 08:14 — may be incomplete", and
+      the page banner adds that line. The chat says the same in its answer.
+    - If no import has ever succeeded, cost cells say "cost data not available", never 0.
+    - A Forge mirror outage and a cost import outage are reported separately: one can be
+      healthy while the other is stale.
+  - **Checks for the import:** a call that ends after a later-starting call is already stored;
+    two calls with the same start time; a row inserted 2 hours late; the same pass run twice;
+    a 30-minute outage followed by catch-up; Postgres unavailable while Forge is healthy (cost
+    marked stale, Forge pages unaffected).
 - **Shown per feature:** model calls, tokens in, tokens out, and nominal cost, with the price
   source and date. Machine and waiting time come from requirement 6.
 - **The planner/coder/coach split** (Rich, 17 October: "might be interesting data for future
   analysis but not required to be surfaced on the dashboard"):
-  - The model name (which shows the role) is stored with each call.
+  - The model name (which shows the role) is stored with every call, and every call is kept.
   - No page or chart shows the split.
   - The July table row asked for a split "by stage". This design follows Rich's later answer and
     shows feature and project totals, with stage *time* (requirement 6) but not stage *cost*.
@@ -188,13 +211,44 @@ Forge's record already holds every timestamp needed. Checked on a feature built 
 |---|---|---|---|
 | In the queue | `work_queue.queued_at` | `work_queue.admitted_at` | waiting (queue) |
 | Planning | `planning_runs.started_at` | `planning_runs.completed_at` | machine, minus the approval waits inside it |
-| Spec or plan approval | a planning event `GATED` | the next event for that stage answered by a person (`actor_identity` not a factory component) | waiting (approval) |
-| Build gate | `stage_log` `autobuild` `GATED` | the `gate-resume` row | waiting (approval) |
-| Build | `builds.started_at` | `builds.completed_at` | machine, minus the build gate wait |
-| Merge decision | the first `the merge word` `GATED` row for the build | the decision row (`merge_decision.decided_by`, `decision`) | waiting (merge decision) |
+| Spec or plan approval | a planning event `GATED` for a stage | the next event for that same stage whose status is a decision (`approved`, `rejected`, `deferred`) | waiting (approval) |
+| Build gate | a `stage_log` row with a `gate_pause` detail | the matching `gate_resume` row, or a person's skip (`SKIPPED` from `cli-skip`) | waiting (approval) |
+| Build | `builds.started_at` | `builds.completed_at` | machine, minus the build gate waits |
+| Merge decision | a `the merge word` row with a `merge_offer` detail | the row with a `merge_decision` detail, or a `SKIPPED` merge-word row | waiting (merge decision) |
 | Merge and check | the decision | the final `merge-deploy` `PASSED` row | machine |
 
-- **Elapsed** is the first queue time to delivery, or to now while in progress.
+**How waits are paired.** The dashboard uses the rule Forge itself uses to count a build's
+waiting (`seconds_spent_waiting_for_a_person` in Forge's `gating/sqlite_adapters.py`), applied to
+each kind of wait above, walking rows oldest first:
+
+- Only the **first** of a run of pause or offer rows opens a wait. Re-offers (Forge re-posts a
+  card after a restart) do not open a new one, so a night of re-offers is still one wait.
+- A decision, resume or skip **closes** the open wait. A decision with no open wait closes
+  nothing, so a decision recorded twice counts once.
+- If the record shows work after a pause and then a **second** pause, the first wait is closed
+  at the last moment it was seen waiting, and a new one starts.
+- A wait that is **still open** runs to now while the feature is paused at that gate, and is
+  shown as "waiting now". If the feature has since ended (failed, cancelled), the open wait is
+  closed at the last row that showed it waiting.
+
+**Where elapsed time ends:**
+
+| Outcome | Elapsed ends at |
+|---|---|
+| Merged and checked | the final `merge-deploy` `PASSED` row |
+| Merge declined ("built, not merged") | the merge decision row |
+| Merge check failed | the `merge-deploy` `FAILED` row |
+| Build failed or cancelled | `builds.completed_at` |
+| Planning failed or cancelled | `planning_runs.completed_at` |
+| Still in progress | now, and the figure is marked "so far" |
+
+**Checks for part B:** a build with three re-offers of one gate; a still-paused build; a
+person's skip; a build that went back to work silently and paused again; a failed build with an
+open wait; a declined merge; a merged feature. Each has an expected waiting and machine time
+worked out by hand from the rows.
+
+- **Elapsed** starts at the first queue time (or the planning queue time when there is no
+  queue row).
 - `stage_log.duration_secs` is not used: Forge records 0 for every build stage.
 - Approvals given by an automatic card policy (evaluation runs) show 0 wait.
 - **Delivered** means the final `merge-deploy` stage `PASSED`. Its details name the commit that
@@ -217,7 +271,7 @@ the data:
 
 | Signal | Green | Amber | Red |
 |---|---|---|---|
-| Attempts (builds per request) | 1 | 2 | 3 or more |
+| Attempts (builds per feature code; each request gets one build) | 1 | 2 | 3 or more |
 | Planning time | ≤ the 75th percentile | ≤ the 95th percentile | above it |
 | Build time | ≤ the 75th percentile | ≤ the 95th percentile | above it |
 | No activity while running (stall) | under 30 min | 30–60 min | over 60 min |
@@ -280,7 +334,12 @@ tables:
   - Never the study tutor's model.
   - At most 30 questions an hour across all users, and one at a time; more are refused with a
     plain sentence.
-- **Tools:** the same query functions the pages use, read-only:
+- **How an answer is made.** The model never writes facts. It does two things only: chooses
+  which query to run (with its arguments), and, when the question is unclear, asks one short
+  clarifying question. The server runs the query and renders the answer from a plain-English
+  template for that query, filled only with the returned values. So every number, status, name
+  and reason in an answer is a field of a named record, by construction.
+- **Queries** (the same functions the pages use, read-only):
   - `feature_status(title or code)`;
   - `project_summary(project, week)`;
   - `open_issues(project?)`;
@@ -290,15 +349,24 @@ tables:
   - `weekly_report(week, project?)`.
 
   Each returns plain figures plus a list of record references (feature code, build id, period).
-- **Grounding:**
-  - The system prompt allows answers only from tool results, in plain English, with the title
-    before the code.
-  - After the model answers, the server checks that every feature code, number of minutes and
-    cost figure in the answer appears in that turn's tool results. If not, the answer is replaced
-    with "I can't answer that from the dashboard's records" plus the records it did find.
+  Each has one answer template, for example: "Search box that filters notes by title
+  (FEAT-2555) was merged and checked on 16 October. It took 1 h 43 min from sending: 19 min
+  planning, 83 min building, 1 min waiting. Nominal cost £…, from 312 model calls."
+- **Grounding by construction:**
+  - The model's reply must be JSON naming one of the queries and its arguments, or a
+    clarifying question with no digits, feature codes or status words in it. Anything else is
+    refused with "I can't answer that from the dashboard's records — I can tell you about a
+    feature, a project, issues, deliveries, cost or time".
+  - A query that finds nothing says so ("I have no record of a feature called …"), never a
+    guess.
   - The answer is shown with its references as links to the pages.
-- **Limits:** at most four tool calls and 600 output tokens per answer, and a 60-second limit.
-  A failure says why in one sentence.
+  - **Rejection checks:** a model reply that contains its own figures or status in free text;
+    a reply naming an unknown query; a feature name that matches two features (the answer
+    lists both and asks which); a question about something outside the records ("why did the
+    planner do that?").
+- **Limits:** at most two model calls per question (choose, then optionally re-choose after a
+  clarifying answer), 300 output tokens each, and a 60-second limit. A failure says why in one
+  sentence.
 - **Later, not built:** Jarvis (Slack) could call the same tool functions over a small read-only
   HTTP endpoint. That needs a Jarvis change, and it is not in this task.
 
