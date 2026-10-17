@@ -211,7 +211,7 @@ Forge's record already holds every timestamp needed. Checked on a feature built 
 |---|---|---|---|
 | In the queue | `work_queue.queued_at` | `work_queue.admitted_at` | waiting (queue) |
 | Planning | `planning_runs.started_at` | `planning_runs.completed_at` | machine, minus the approval waits inside it |
-| Spec or plan approval | a planning event `GATED` for a stage | the next event for that same stage whose status is a decision (`approved`, `rejected`, `deferred`) | waiting (approval) |
+| Spec approval (and the older product-docs checkpoint) | a planning event `GATED` (or `PAUSED`) for that stage label | the next event for that same stage label with any other status: `approved`, `revise`, `cancelled`/`CANCELLED`, `timed_out`, `checkpoint_cleared` (the statuses Forge's record holds on 17 October) | waiting (approval) |
 | Build gate | a `stage_log` row with a `gate_pause` detail | the matching `gate_resume` row, or a person's skip (`SKIPPED` from `cli-skip`) | waiting (approval) |
 | Build | `builds.started_at` | `builds.completed_at` | machine, minus the build gate waits |
 | Merge decision | a `the merge word` row with a `merge_offer` detail | the row with a `merge_decision` detail, or a `SKIPPED` merge-word row | waiting (merge decision) |
