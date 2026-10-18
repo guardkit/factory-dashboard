@@ -1,23 +1,46 @@
 {% extends "base.html" %}
 {% import 'macros.html' as m %}
-{% block title %}{{ view.project }} · factory-dashboard{% endblock %}
+{% block title %}{{ view.project }} · Factory dashboard{% endblock %}
 {% block content %}
-{# ux §4.3 — one card per question at fleet-of-features scale; composed entirely of §5 components
-   plus the FEED-PENDING spend block. No new components. #}
 <h1 class="page-title">{{ view.project }}</h1>
 
-{% with panel = view.build_board %}{% include "fragments/p2_build_board.html" %}{% endwith %}
-{% with panel = view.delivered %}{% include "fragments/p7_delivered.html" %}{% endwith %}
-
-<section class="panel-card project-issues">
-  <header class="panel-card__header"><h2 class="panel-card__title">OPEN ISSUES</h2></header>
+<section class="panel-card project-summary">
+  <header class="panel-card__header"><h2 class="panel-card__title">Summary</h2></header>
   <div class="panel-card__body">
-    <p>open issues for this project: <span class="num">{{ view.open_issue_count }}</span></p>
+    <ul class="project-summary__list">
+      <li><span class="num">{{ view.in_progress }}</span> in progress</li>
+      <li><span class="num">{{ view.delivered_7d }}</span> merged and checked in the last 7 days
+        (<span class="num">{{ view.delivered_total }}</span> in all)</li>
+      <li><span class="num">{{ view.issues | length }}</span> open issues</li>
+      <li>{{ m.spend_slot(view.spend) }}</li>
+    </ul>
   </div>
 </section>
 
-<section class="panel-card project-spend">
-  <header class="panel-card__header"><h2 class="panel-card__title">SPEND</h2></header>
-  <div class="panel-card__body">{{ m.spend_slot(view.spend) }}</div>
+{% set panel = view.features %}
+<section class="panel-card project-features state-{{ panel.state.value }}">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">{{ panel.title }}</h2>
+    {{ m.asof_chip(panel.as_of) }}
+  </header>
+  <div class="panel-card__body">
+    {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+    <p class="page-lead">{{ panel.note }}</p>
+    {% if panel.rows %}{{ m.feature_table(panel.rows, show_project=False) }}{% else %}<p class="true-empty">{{ panel.empty_copy }}</p>{% endif %}
+  </div>
+</section>
+
+<section class="panel-card project-issues">
+  <header class="panel-card__header"><h2 class="panel-card__title">Open issues</h2></header>
+  <div class="panel-card__body">
+    {% if view.issues %}
+      <ul class="issue-list">
+      {% for i in view.issues %}
+        <li>{{ m.band_chip(i.band) }} <strong>{{ i.kind }}</strong>: <a href="{{ i.link }}">{{ i.subject }}</a>
+          <span title="{{ i.opened_title }}">({{ i.opened_label }})</span>. {{ i.detail }}</li>
+      {% endfor %}
+      </ul>
+    {% else %}<p class="true-empty">No open issues for this project.</p>{% endif %}
+  </div>
 </section>
 {% endblock %}

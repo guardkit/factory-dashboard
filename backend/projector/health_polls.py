@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 
 import httpx
 
-from backend.projector.projections.base import iso
+from backend.projector.store import iso
 
 POLL_INTERVAL_SECS = 30
 _TIMEOUT = 5.0

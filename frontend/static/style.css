@@ -299,3 +299,22 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
 
 /* Wide content that must not scroll the page body: dense tables scroll inside their card. */
 .panel-card__body { overflow-x: auto; }
+
+/* ---- October 2026, part A: live data pages (minimal; a brand stylesheet comes later) ---------- */
+.banner--stale { background: #fbe9e9; color: var(--bad); border-bottom: 2px solid var(--bad); }
+.journey-station--stopped .journey-station__glyph { color: var(--bad); font-weight: 700; }
+.feature-list__row--finished { color: var(--muted); }
+.window-links { display: flex; gap: 14px; margin-bottom: 10px; font-size: var(--fs-operator); }
+.window-links a[aria-current="page"] { font-weight: 700; color: var(--ink); }
+.feed__error, .delivered__others, .norms-line, .feature-mission { color: var(--muted); font-size: 12px; }
+.project-summary__list { list-style: none; margin: 0; padding: 0; display: flex; gap: 24px; flex-wrap: wrap; }
+.issue-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.issue-row--closed { color: var(--muted); }
+.feature-request summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.spend-slot { flex-direction: row; }
+.journey-bar--mini .journey-bar__stations { flex-wrap: nowrap; gap: 3px; }
+@media (max-width: 700px) {
+  .topbar { flex-wrap: wrap; }
+  .topnav ul { flex-wrap: wrap; }
+  .topbar__cluster { margin-left: 0; }
+}

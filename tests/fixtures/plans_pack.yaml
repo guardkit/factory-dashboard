@@ -1,21 +1,19 @@
-# The `plan_pack` fixture (ux §4.8): one milestone BEHIND, one ON TARGET, one delivered AHEAD,
-# plus (realized in the DB by the test) one in-flight feature in NO milestone → `[—] NO BASELINE`.
-# Drives the §4.7 plan-vs-actual states + the client-safe export.
+# Plan fixture for the weekly-report tests: one milestone behind, one on target, one ahead.
+# The report week is 12-18 October 2026 (tests/forge_fake.py builds everything on 16 October).
 plans:
-  finproxy:
+  acme:
     - id: M2
-      title: "Payments API"
+      title: "Notes search"
       feature_ids:
-        - FEAT-9A21
+        - FEAT-0001
         - FEAT-AAAA
-        - FEAT-BBBB
-      target_window: "w/c 2026-07-06"      # this week; only 1/3 delivered → BEHIND
+      target_window: "w/c 2026-10-12"      # this week; only 1 of 2 delivered -> behind
     - id: M3
       title: "Reporting"
-      project: finproxy-reporting
-      target_window: "w/c 2026-07-13"      # next week; build in flight → ON TARGET
+      project: acme/reporting
+      target_window: "w/c 2026-10-19"      # next week; nothing delivered yet -> on target
     - id: M1
       title: "Onboarding"
       feature_ids:
-        - FEAT-DONE
-      target_window: "w/c 2026-07-13"      # delivered 07-06, before target → AHEAD
+        - FEAT-0005
+      target_window: "w/c 2026-10-19"      # delivered this week, before its target -> ahead

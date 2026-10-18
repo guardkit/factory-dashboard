@@ -1,18 +1,18 @@
-# The factory board's compose front door (closes L4 supervision + the G-02 front-door gap; the
-# L7 residue — the IN-3 `dashboard_ro` NATS identity (escrow-gated) and the two fixture-backed
-# nav pages — stays on the register).
+# The factory dashboard: one image, two containers.
 #
-# `docker compose up -d` replaces the two bare host processes that ran unsupervised on :8090
-# since 2026-07-14 (pids 4444/4445, killed silently by the 2026-07-21 reboot — the O-30 class
-# the completeness review predicted).
+#   board  — the web pages, on 127.0.0.1:8090 (loopback only; nothing is published).
+#   projector ("the feed") — copies Forge's build record into ./data every 15 s, read-only, and checks the model
+#            gateway, the model server and the bus monitor every 30 s. No bus connection.
 #
-# network_mode: host, deliberately: the projector and the health polls read the estate's
-# LOOPBACK surfaces exactly as the bare processes did (NATS :4222, llama-swap :9000,
-# litellm :4000, the NATS monitor :8222), and the board binds 127.0.0.1:8090 itself — so the
-# exposure is byte-identical to what it replaces: loopback-only, nothing published.
+# Start (or restart after a rollout):  deploy/dashboard-up.sh   (see docs/runbook.md)
 #
-# The read-model lives on ./data (bind mount) so a rebuild/recreate never loses projection
-# history; the forge DB is mounted READ-ONLY (the mirror opens it `mode=ro` — fence 4).
+# network_mode: host, so the feed reaches the estate's loopback services (LiteLLM :4000,
+# llama-swap :9000, the NATS monitor :8222) and the board binds 127.0.0.1:8090 itself.
+#
+# The store lives on ./data (a bind mount), so recreating the containers keeps it; it is also
+# disposable — delete it and the feed rebuilds it from Forge's record. Forge's record is mounted
+# READ-ONLY and opened read-only (URI mode=ro). Both containers create the store's tables at start,
+# so they can start in either order. `restart: unless-stopped` brings both back after a reboot.
 
 services:
   board:
@@ -33,19 +33,17 @@ services:
     command: ["python", "-m", "backend.projector"]
     network_mode: host
     user: "${FACTORY_UID:-1000}:${FACTORY_GID:-1000}"
-    # FACTORY_DASH_NATS_URL comes from ./.env (gitignored, mode 600 — see .env.example): the
-    # estate's NATS enforces APPMILLA-account auth, and until the escrow-gated IN-3 cutover mints
-    # the scoped `dashboard_ro` identity, the projector rides the broad operator credential the
-    # bare process used — a register item, named, not hidden.
+    # ./.env (gitignored, mode 600 — see .env.example) carries the dashboard's own LiteLLM key for
+    # the models-list health check. Nothing else.
     env_file: .env
     environment:
       FACTORY_DASH_DB: /data/readmodel.db
       FACTORY_FORGE_DB_PATH: /forge-state/forge.db
     volumes:
       - ./data:/data
-      # Forge's live build record (since the 1 October 2026 rollout it lives in the estate's
-      # ledger volume, not ~/forge-prod-state). Mounted read-only: SQLite 3.22+ can read a WAL
+      # Forge's live build record (the estate's ledger volume), read-only. SQLite can read a WAL
       # database from a read-only mount while Forge holds it open (its -wal and -shm files exist).
+      # While Forge is stopped the reader cannot open it; the pages then show the stale-data banner.
       - forge-ledger:/forge-state:ro
     restart: unless-stopped
 

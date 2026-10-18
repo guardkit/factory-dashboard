@@ -9,7 +9,7 @@ from pathlib import Path
 from backend import sse
 from starlette.testclient import TestClient
 
-from tests.nats_util import make_projected_db
+from tests.forge_fake import make_projected_db
 
 
 def _log(conn: sqlite3.Connection, panel: str, at: str = "2026-07-11T14:13:00+00:00") -> None:

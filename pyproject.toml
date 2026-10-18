@@ -1,7 +1,7 @@
 [project]
 name = "factory-dashboard"
 version = "0.1.0"
-description = "Read-model web app + grounded delivery-status chat over the factory bus and forge durable state. Projection-not-participant: reads only, writes nothing in v1."
+description = "A read-only web dashboard over the software factory's build record: how far each feature has got, whether it is on track, and what the issues are."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -11,7 +11,6 @@ dependencies = [
     "itsdangerous>=2.2",
     "pyyaml>=6.0",
     "python-multipart>=0.0.18",
-    "nats-py>=2.15.0",
     "httpx>=0.28.1",
 ]
 

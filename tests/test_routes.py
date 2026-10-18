@@ -5,8 +5,9 @@ from __future__ import annotations
 from backend.app import NAV
 from starlette.testclient import TestClient
 
-OPERATOR_PAGES = ["/", "/features", "/features/FEAT-3ED2", "/projects/study-tutor",
-                  "/delivered", "/reports", "/issues", "/fleet"]
+# On an empty store (the factory's record not read yet) every page still renders, honestly.
+OPERATOR_PAGES = ["/", "/features", "/features/FEAT-3ED2", "/projects/acme/notes", "/projects/single",
+                  "/delivered", "/reports", "/reports?view=export", "/issues", "/fleet"]
 
 
 def test_every_operator_page_200(operator_client: TestClient) -> None:
@@ -23,13 +24,16 @@ def test_every_nav_item_resolves_to_a_live_route(operator_client: TestClient) ->
 
 
 def test_reports_renders_the_weekly_report(operator_client: TestClient) -> None:
-    """ux §4.7 (S4): /reports renders the weekly delivery report (headline + plan-vs-actual +
-    the client-safe export toggle), no longer the D0 'arrives at S4' placeholder."""
     body = operator_client.get("/reports").text
-    assert "Weekly delivery report" in body
-    assert "PLAN vs ACTUAL" in body
-    assert "client-safe export" in body
-    assert "arrives at S4" not in body
+    assert "Weekly report" in body
+    assert "Plan against actual" in body
+    assert "Client-safe version" in body
+
+
+def test_an_unread_store_says_so(operator_client: TestClient) -> None:
+    body = operator_client.get("/").text
+    assert "banner--stale" in body
+    assert "not read the factory&#39;s record yet" in body
 
 
 def test_unauthenticated_redirects_to_login(client: TestClient) -> None:
@@ -40,7 +44,7 @@ def test_unauthenticated_redirects_to_login(client: TestClient) -> None:
 
 
 def test_fragment_api_requires_login(client: TestClient) -> None:
-    r = client.get("/fragments/p1", follow_redirects=False)
+    r = client.get("/fragments/p2", follow_redirects=False)
     assert r.status_code == 401
 
 
@@ -53,7 +57,7 @@ def test_client_session_redirected_from_operator_pages(clientco_client: TestClie
 
 
 def test_client_session_gets_403_on_fragment_api(clientco_client: TestClient) -> None:
-    r = clientco_client.get("/fragments/p1", follow_redirects=False)
+    r = clientco_client.get("/fragments/p2", follow_redirects=False)
     assert r.status_code == 403
 
 

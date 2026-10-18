@@ -1,164 +1,242 @@
-"""Read-only forge SQLite mirror (WAL-courtesy — design §4.7 / fence 4).
+"""Copy Forge's build record into the dashboard's store, read-only, every 15 seconds.
 
-Mirrors forge durable state into the read model on a periodic pass: `planning_runs` → P5
-`planning_mirror`, and `stage_log` → P3 `stage_events` (the SQLite backfill/reconcile that carries
-GATED where no bus producer exists — drift 5). The ledger bootstrap from forge `builds` is S3's, not
-here.
+Design, 17 October 2026, requirement 1: Forge's record is the dashboard's single source of truth,
+so the feed copies all of it that the pages read: builds, stage rows, planning runs, planning
+events, queue items and missions. It does this in one short read transaction and closes Forge's
+database between passes, so it never holds a read open long enough to get in Forge's way.
 
-**Fence 4 discipline (verbatim):** URI `mode=ro`; autocommit; per-query transactions <100 ms;
-the forge connection is CLOSED between passes — a long-lived read transaction would block forge's
-WAL checkpointing (the factory caring about the dashboard, which is forbidden).
-
-**The mirror path is EXPLICIT CONFIG** (`FACTORY_FORGE_DB_PATH`), pinned on this host to the
-forge-prod bind-mount — NEVER the `~/.forge` default, which is a stale dev DB written by a
-`langgraph dev` process (capability note drift 1).
+- Forge's database is opened URI `mode=ro` from a read-only mount; a write on that handle fails.
+- Builds, planning runs, queue items and missions change in place, so each pass replaces them.
+- Stage rows and planning events are only ever added, so each pass adds the rows after the last
+  id already copied. If Forge's newest id is lower than ours (its record was restored or
+  replaced), the copy of that table is thrown away and read again in full.
+- A pass that cannot read Forge records the error and keeps the last good copy; the pages then
+  show the stale-data banner with the time of the last good read. It never crashes the feed.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
+import hashlib
 import os
 import sqlite3
-from datetime import UTC, datetime
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from backend.projector.projections.base import iso
+from backend.projector.store import iso, record_change
 
-# The forge-prod bind-mount on this host. NEVER ~/.forge (a stale dev DB — drift 1).
-DEFAULT_FORGE_DB_PATH = "/home/richardwoollcott/forge-prod-state/.forge/forge.db"
-MIRROR_INTERVAL_SECS = 30
+# The feed's container mounts Forge's ledger volume read-only here (docker-compose.yml).
+DEFAULT_FORGE_DB_PATH = "/forge-state/forge.db"
+MIRROR_INTERVAL_SECS = 15
+# Live-update notifications older than this are pruned; a client that missed them refetches all.
+CHANGE_LOG_KEEP = timedelta(hours=1)
+
+# Every page section that reads the copy is told to refresh when the copy changes.
+MIRROR_PANELS: frozenset[str] = frozenset({"p2", "p3", "p4", "p5", "p7", "proj"})
+
+# Columns copied, by table. Forge's own names; a column Forge's schema lacks (an older ledger) is
+# copied as NULL rather than failing the pass.
+_REPLACED: dict[str, tuple[str, tuple[str, ...], str]] = {
+    # dashboard table: (forge table, columns, primary key)
+    "forge_builds": ("builds", (
+        "build_id", "feature_id", "repo", "branch", "project", "status", "triggered_by",
+        "originating_user", "correlation_id", "queued_at", "started_at", "completed_at", "error",
+        "terminal_class", "mission_id", "mission_role"), "build_id"),
+    "forge_planning_runs": ("planning_runs", (
+        "correlation_id", "state", "originating_user", "expected_approver", "request_text",
+        "target_repo", "triggered_by", "defer_count", "paused_at", "escalated_at", "queued_at",
+        "started_at", "completed_at", "error"), "correlation_id"),
+    "forge_queue": ("work_queue", (
+        "id", "sentence", "target_repo", "kind", "status", "originating_user", "correlation_id",
+        "queued_at", "admitted_at", "closed_at", "closed_reason"), "id"),
+    "forge_missions": ("missions", (
+        "id", "title", "target_repo", "status", "correlation_id", "created_at", "closed_at",
+        "closed_reason"), "id"),
+}
+_APPENDED: dict[str, tuple[str, tuple[str, ...]]] = {
+    "forge_stage_log": ("stage_log", (
+        "id", "build_id", "stage_label", "target_identifier", "status", "gate_mode", "started_at",
+        "completed_at", "details_json")),
+    "forge_planning_events": ("planning_run_events", (
+        "id", "correlation_id", "stage_label", "status", "gate_mode", "actor_identity",
+        "details_json", "recorded_at")),
+}
 
 
 def forge_db_path() -> Path:
-    """The configured forge DB path. Explicit env override; the pinned prod bind-mount default."""
+    """Where Forge's record is mounted. `FACTORY_FORGE_DB_PATH` overrides the compose default."""
     return Path(os.environ.get("FACTORY_FORGE_DB_PATH", DEFAULT_FORGE_DB_PATH))
 
 
 def connect_forge_ro(path: Path) -> sqlite3.Connection:
-    """Open the forge DB URI `mode=ro` (fence 4). A write attempt on this handle MUST fail."""
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    """Open Forge's database URI `mode=ro`. A write attempt on this handle fails."""
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5.0)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def _feature_id_from(row: sqlite3.Row) -> str | None:
-    cols = set(row.keys())
-    details = row["details_json"] if "details_json" in cols else None
-    if details:
-        try:
-            parsed = json.loads(details)
-            if isinstance(parsed, dict) and parsed.get("feature_id"):
-                return str(parsed["feature_id"])
-        except (ValueError, TypeError):
-            pass
-    if "target_identifier" in cols and row["target_identifier"]:
-        return str(row["target_identifier"])
-    build_id = row["build_id"] if "build_id" in cols else ""
-    if build_id and build_id.startswith("build-"):
-        # build-FEAT-XXXX-<ts> -> FEAT-XXXX
-        parts = build_id.split("-")
-        if len(parts) >= 3:
-            return f"{parts[1]}-{parts[2]}"
-    return None
+@dataclass
+class _Snapshot:
+    replaced: dict[str, list[tuple[object, ...]]]
+    appended: dict[str, list[tuple[object, ...]]]
+    forge_max_ids: dict[str, int]
 
 
-def mirror_once(dash: sqlite3.Connection, forge_path: Path, now: datetime | None = None) -> set[str]:
-    """One mirror pass. Opens the forge DB `mode=ro`, mirrors planning + stage rows, CLOSES it,
-    and stamps the FORGE_MIRROR watermark. Returns the panel ids that changed."""
-    now = now or datetime.now(UTC)
-    panels: set[str] = set()
-    if not forge_path.exists():
-        _stamp_pass(dash, now)  # a missing forge DB is honestly recorded as a pass with no rows
-        return panels
+def _columns(forge: sqlite3.Connection, table: str) -> set[str] | None:
+    rows = forge.execute(f"PRAGMA table_info({table})").fetchall()
+    return {str(r[1]) for r in rows} if rows else None
 
-    forge = connect_forge_ro(forge_path)
+
+def _select(table: str, wanted: Sequence[str], have: set[str]) -> str:
+    cols = ", ".join(c if c in have else f"NULL AS {c}" for c in wanted)
+    return f"SELECT {cols} FROM {table}"
+
+
+def _read_forge(forge: sqlite3.Connection, after_ids: dict[str, int]) -> _Snapshot:
+    """One read transaction over Forge's tables: the whole of each replaced table, and the rows
+    after `after_ids` of each appended table."""
+    snap = _Snapshot({}, {}, {})
+    forge.execute("BEGIN")
     try:
-        panels |= _mirror_planning(dash, forge, now)
-        panels |= _mirror_stage_log(dash, forge, now)
+        for dash_table, (table, cols, key) in _REPLACED.items():
+            have = _columns(forge, table)
+            if have is None:  # e.g. a ledger from before missions existed
+                snap.replaced[dash_table] = []
+                continue
+            snap.replaced[dash_table] = [
+                tuple(r) for r in forge.execute(f"{_select(table, cols, have)} ORDER BY {key}")
+            ]
+        for dash_table, (table, cols) in _APPENDED.items():
+            have = _columns(forge, table)
+            if have is None:
+                snap.appended[dash_table] = []
+                snap.forge_max_ids[dash_table] = 0
+                continue
+            max_id = forge.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table}").fetchone()[0]
+            snap.forge_max_ids[dash_table] = int(max_id)
+            after = after_ids[dash_table] if after_ids[dash_table] <= max_id else 0
+            snap.appended[dash_table] = [
+                tuple(r) for r in forge.execute(
+                    f"{_select(table, cols, have)} WHERE id > ? ORDER BY id", (after,)
+                )
+            ]
     finally:
-        forge.close()  # closed between passes — WAL-courtesy (fence 4)
-    _stamp_pass(dash, now)
-    return panels
+        forge.execute("COMMIT")
+    return snap
 
 
-def _mirror_planning(dash: sqlite3.Connection, forge: sqlite3.Connection, now: datetime) -> set[str]:
-    rows = forge.execute(
-        """SELECT correlation_id, state, originating_user, expected_approver, request_text,
-                  target_repo, defer_count, escalated_at, handoff_branch, handoff_path,
-                  queued_at, started_at, completed_at, error
-             FROM planning_runs"""
-    ).fetchall()
-    changed = False
-    for r in rows:
+def _local_max_ids(dash: sqlite3.Connection) -> dict[str, int]:
+    return {
+        t: int(dash.execute(f"SELECT COALESCE(MAX(id), 0) FROM {t}").fetchone()[0]) for t in _APPENDED
+    }
+
+
+def _hash(snap: _Snapshot) -> str:
+    h = hashlib.sha256()
+    for table in sorted(snap.replaced):
+        h.update(table.encode())
+        for row in snap.replaced[table]:
+            h.update(repr(row).encode())
+    return h.hexdigest()
+
+
+def _write(dash: sqlite3.Connection, snap: _Snapshot, local_max: dict[str, int]) -> bool:
+    """Apply a snapshot in one write transaction. Returns True when anything changed."""
+    new_hash = _hash(snap)
+    row = dash.execute("SELECT content_hash FROM mirror_status WHERE source='forge'").fetchone()
+    replaced_changed = row is None or row[0] != new_hash
+    appended_changed = False
+    dash.execute("BEGIN IMMEDIATE")
+    try:
+        if replaced_changed:
+            for dash_table, rows in snap.replaced.items():
+                cols = _REPLACED[dash_table][1]
+                dash.execute(f"DELETE FROM {dash_table}")
+                dash.executemany(
+                    f"INSERT INTO {dash_table} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                    rows,
+                )
+        for dash_table, rows in snap.appended.items():
+            cols = _APPENDED[dash_table][1]
+            if snap.forge_max_ids[dash_table] < local_max[dash_table]:
+                # Forge's record was replaced by an older or different one: start this table again.
+                dash.execute(f"DELETE FROM {dash_table}")
+                appended_changed = True
+            if rows:
+                dash.executemany(
+                    f"INSERT OR REPLACE INTO {dash_table} ({', '.join(cols)}) "
+                    f"VALUES ({', '.join('?' * len(cols))})",
+                    rows,
+                )
+                appended_changed = True
         dash.execute(
-            """INSERT INTO planning_mirror (correlation_id, state, originating_user, expected_approver,
-                   request_text, target_repo, queued_at, started_at, completed_at, handoff_branch,
-                   handoff_path, defer_count, escalated_at, error, mirrored_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(correlation_id) DO UPDATE SET
-                   state=excluded.state, originating_user=excluded.originating_user,
-                   expected_approver=excluded.expected_approver, request_text=excluded.request_text,
-                   target_repo=excluded.target_repo, queued_at=excluded.queued_at,
-                   started_at=excluded.started_at, completed_at=excluded.completed_at,
-                   handoff_branch=excluded.handoff_branch, handoff_path=excluded.handoff_path,
-                   defer_count=excluded.defer_count, escalated_at=excluded.escalated_at,
-                   error=excluded.error, mirrored_at=excluded.mirrored_at""",
-            (r["correlation_id"], r["state"], r["originating_user"], r["expected_approver"],
-             r["request_text"], r["target_repo"], r["queued_at"], r["started_at"], r["completed_at"],
-             r["handoff_branch"], r["handoff_path"], r["defer_count"], r["escalated_at"], r["error"],
-             iso(now)),
+            """INSERT INTO mirror_status (source, content_hash) VALUES ('forge', ?)
+               ON CONFLICT(source) DO UPDATE SET content_hash=excluded.content_hash""",
+            (new_hash,),
         )
-        changed = True
-    return {"p5"} if changed else set()
+        dash.execute("COMMIT")
+    except BaseException:
+        dash.execute("ROLLBACK")
+        raise
+    return replaced_changed or appended_changed
 
 
-def _mirror_stage_log(dash: sqlite3.Connection, forge: sqlite3.Connection, now: datetime) -> set[str]:
-    rows = forge.execute(
-        """SELECT build_id, stage_label, target_kind, target_identifier, status, gate_mode,
-                  coach_score, duration_secs, completed_at, details_json
-             FROM stage_log"""
-    ).fetchall()
-    changed = False
-    for r in rows:
-        feature_id = _feature_id_from(r)
-        completed = r["completed_at"]
-        # Idempotent + de-duped against the bus projection (same feature/stage/completed/status).
-        dup = dash.execute(
-            "SELECT 1 FROM stage_events WHERE feature_id=? AND stage_label=? AND completed_at=? AND status=?",
-            (feature_id, r["stage_label"], completed, r["status"]),
-        ).fetchone()
-        if dup is not None:
-            continue
+def _stamp(dash: sqlite3.Connection, now: datetime, *, ok: bool, error: str | None) -> None:
+    if ok:
         dash.execute(
-            """INSERT INTO stage_events (build_id, feature_id, stage_label, target_kind, status,
-                   gate_mode, coach_score, duration_secs, completed_at, origin)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'forge_sqlite')""",
-            (r["build_id"], feature_id, r["stage_label"], r["target_kind"], r["status"],
-             r["gate_mode"], r["coach_score"], r["duration_secs"], completed),
+            """INSERT INTO mirror_status (source, last_attempt_at, last_success_at, last_error)
+               VALUES ('forge', ?, ?, NULL)
+               ON CONFLICT(source) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,
+                   last_success_at=excluded.last_success_at, last_error=NULL""",
+            (iso(now), iso(now)),
         )
-        changed = True
-    return {"p3"} if changed else set()
+    else:
+        dash.execute(
+            """INSERT INTO mirror_status (source, last_attempt_at, last_error) VALUES ('forge', ?, ?)
+               ON CONFLICT(source) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,
+                   last_error=excluded.last_error""",
+            (iso(now), error),
+        )
 
 
-def _stamp_pass(dash: sqlite3.Connection, now: datetime) -> None:
-    """Record the forge-mirror pass time as a watermark (drives the §5.6 'forge mirror ⟨ts⟩' chip
-    and P5's mirror-freshness gate — a stale/never-run mirror renders LAGGING, never TRUE-EMPTY)."""
-    dash.execute(
-        """INSERT INTO consumer_watermarks (stream, consumer, last_stream_seq, last_event_at, updated_at)
-           VALUES ('FORGE_MIRROR', 'mirror', 1, ?, ?)
-           ON CONFLICT(stream, consumer) DO UPDATE SET
-               last_stream_seq=consumer_watermarks.last_stream_seq+1,
-               last_event_at=excluded.last_event_at, updated_at=excluded.updated_at""",
-        (iso(now), iso(now)),
-    )
+def mirror_once(dash: sqlite3.Connection, forge_path: Path, now: datetime | None = None) -> bool:
+    """One pass. Returns True when the copy changed (and records a live-update notification).
+
+    A missing or unreadable Forge database is recorded as a failed read, never as an empty
+    factory: the last good copy stays and the stale-data banner shows when it was read."""
+    now = now or datetime.now(UTC)
+    if not forge_path.exists():
+        _stamp(dash, now, ok=False, error=f"the factory's record is not at {forge_path}")
+        return False
+    try:
+        forge = connect_forge_ro(forge_path)
+        try:
+            snap = _read_forge(forge, _local_max_ids(dash))
+        finally:
+            forge.close()  # closed between passes, so no read stays open on Forge's database
+    except sqlite3.Error as exc:
+        _stamp(dash, now, ok=False, error=f"could not read the factory's record: {exc}")
+        return False
+    changed = _write(dash, snap, _local_max_ids(dash))
+    _stamp(dash, now, ok=True, error=None)
+    if changed:
+        record_change(dash, set(MIRROR_PANELS), [], now)
+    return changed
+
+
+def prune_change_log(dash: sqlite3.Connection, now: datetime) -> None:
+    dash.execute("DELETE FROM change_log WHERE at < ?", (iso(now - CHANGE_LOG_KEEP),))
 
 
 async def mirror_loop(dash: sqlite3.Connection, *, interval: int = MIRROR_INTERVAL_SECS) -> None:  # pragma: no cover
     path = forge_db_path()
     while True:
-        # a mirror hiccup is honestly reflected by a stale FORGE_MIRROR watermark, never a crash
-        with contextlib.suppress(sqlite3.Error):
-            mirror_once(dash, path)
+        now = datetime.now(UTC)
+        # A failed pass is recorded by mirror_once; anything unexpected must not stop the loop.
+        with contextlib.suppress(Exception):
+            mirror_once(dash, path, now)
+            prune_change_log(dash, now)
         await asyncio.sleep(interval)

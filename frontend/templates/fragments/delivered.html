@@ -1,0 +1,34 @@
+{% import 'macros.html' as m %}
+{# Delivered = merged and checked: the merge step passed and named the commit it checked and published. #}
+<section class="panel-card delivered state-{{ panel.state.value }}" id="panel-p7" data-panel="p7">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">{{ panel.title }}</h2>
+    {{ m.asof_chip(panel.as_of) }}
+  </header>
+  <div class="panel-card__body">
+    <p class="delivered__summary"><span class="delivered__count">{{ panel.delivered_count }} feature{{ '' if panel.delivered_count == 1 else 's' }} merged and checked from {{ panel.window_from }} to {{ panel.window_to }}.</span></p>
+    {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+    {% if panel.rows %}
+      <table class="dense-table delivered__table">
+        <thead>
+          <tr><th scope="col">Delivered</th><th scope="col">Feature</th><th scope="col">Project</th>
+            <th scope="col">Commit</th><th scope="col">Cost</th></tr>
+        </thead>
+        <tbody>
+        {% for r in panel.rows %}
+          <tr class="delivered__row">
+            <td class="num" title="{{ r.delivered_title }}">{{ r.delivered_date }}</td>
+            <td><a class="feature-title" href="{{ r.link }}">{{ r.title }}</a> <span class="feature-id">({{ r.code }})</span></td>
+            <td>{% if r.project_link %}<a href="{{ r.project_link }}">{{ r.project }}</a>{% endif %}</td>
+            <td class="num">{{ r.commit or '—' }}</td>
+            <td>{{ m.spend_slot(r.spend) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="true-empty">{{ panel.empty_copy }}</p>
+    {% endif %}
+    {% if panel.other_endings %}<p class="delivered__others">{{ panel.other_endings }}</p>{% endif %}
+  </div>
+</section>

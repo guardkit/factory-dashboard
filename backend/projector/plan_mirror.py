@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from backend.config_loader import PLANS_PATH, load_plans
-from backend.projector.projections.base import iso
+from backend.projector.store import iso
 
 PLAN_MIRROR_INTERVAL_SECS = 30
 

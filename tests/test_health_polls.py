@@ -10,7 +10,7 @@ import httpx
 from backend.projector import health_polls
 from backend.projector.health_polls import Endpoints, poll_once
 
-from tests.nats_util import make_projected_db
+from tests.forge_fake import make_projected_db
 
 REQUESTED: list[str] = []
 AUTH_SEEN: dict[str, str | None] = {}  # "host:port/path" -> Authorization header value (or None)

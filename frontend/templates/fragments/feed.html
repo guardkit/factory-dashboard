@@ -1,0 +1,16 @@
+{% import 'macros.html' as m %}
+{# Is the dashboard itself up to date? #}
+<section class="panel-card feed state-{{ panel.state.value }}" id="panel-proj" data-panel="proj">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">{{ panel.title }}</h2>
+    {{ m.asof_chip(panel.as_of) }}
+  </header>
+  <div class="panel-card__body">
+    <p class="feed__heartbeat">
+      <span class="status-dot status-dot--{{ 'ok' if panel.heartbeat_ok else 'fail' }}" aria-hidden="true">●</span>
+      The feed is {{ panel.heartbeat_label }}.
+    </p>
+    <p class="feed__read">{{ panel.read_label }}, every 15 seconds while the feed runs.</p>
+    {% if panel.error %}<p class="feed__error">Last attempt failed: {{ panel.error }}</p>{% endif %}
+  </div>
+</section>

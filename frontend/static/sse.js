@@ -60,12 +60,15 @@
       return;
     }
     lastFetch[panel] = now;
+    // Keep the page's own query (for example the Delivered page's date window): without it the
+    // refetch fell back to the default week and replaced what the page was asked to show.
+    var url = "/fragments/" + panel + window.location.search;
     if (window.htmx) {
-      window.htmx.ajax("GET", "/fragments/" + panel, { target: target, swap: "outerHTML" }).then(function () {
+      window.htmx.ajax("GET", url, { target: target, swap: "outerHTML" }).then(function () {
         highlight(document.querySelector('[data-panel="' + panel + '"]'));
       });
     } else {
-      fetch("/fragments/" + panel).then(function (r) { return r.text(); }).then(function (html) {
+      fetch(url).then(function (r) { return r.text(); }).then(function (html) {
         target.outerHTML = html;
         highlight(document.querySelector('[data-panel="' + panel + '"]'));
       });

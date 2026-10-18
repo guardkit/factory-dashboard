@@ -1,11 +1,11 @@
-"""Autoescape (hostile_strings inert), DF-008 client-clean, and the S1 fences (no NATS / M-D3)."""
+"""Autoescape, client templates clean, no bus client, no writes, read-only store opens, no CDN."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-from starlette.testclient import TestClient
+from backend.app import create_app
 
 BACKEND = Path(__file__).resolve().parent.parent / "backend"
 TEMPLATES = Path(__file__).resolve().parent.parent / "frontend" / "templates"
@@ -15,20 +15,14 @@ def _py_sources() -> list[Path]:
     return list(BACKEND.rglob("*.py"))
 
 
-# --- fence 6: Jinja autoescape ON; hostile strings render inert ------------
+# --- autoescape: hostile strings from Forge's record render inert (tests/test_pages.py renders a
+# request sentence carrying a <script> tag through the real feed and pages; this checks the setting).
 
 
-def test_hostile_strings_render_inert(operator_client: TestClient) -> None:
-    body = operator_client.get("/fragments/p2?state=hostile").text
-    # NO raw tag opener survives — the XSS vector is neutralised at the '<' (autoescape ON).
-    # (onerror=… / hx-get=… surviving as inert TEXT is harmless once the '<' is escaped.)
-    assert "<script" not in body
-    assert "<img" not in body
-    assert "<a hx-get" not in body
-    assert 'hx-get="/steal"' not in body   # real attribute quotes are escaped to &#34;
-    # the payloads appear ESCAPED instead
-    assert "&lt;script&gt;" in body
-    assert "&lt;img" in body or "&lt;a" in body
+def test_autoescape_is_on(tmp_path: Path) -> None:
+    app = create_app(db_path=tmp_path / "rm.db")
+    env = app.state.templates.env
+    assert env.from_string("{{ x }}").render(x="<script>") == "&lt;script&gt;"
 
 
 # --- acceptance item 11: coach_score in operator templates only ------------
@@ -42,25 +36,14 @@ def test_client_templates_reference_no_operator_only_fields() -> None:
         assert not deny.search(text), name
 
 
-# --- fence 1-2 / M-D3: NATS confined to the projector; zero JetStream / publish (grep) ------
+# --- no bus connection anywhere (design of 17 October 2026) and nothing written to the bus ------
 
 
-def test_nats_import_confined_to_the_projector() -> None:
-    """S2 (D1): NATS is imported ONLY under backend/projector/ (connection A). No web/read-model/
-    chat layer touches NATS — credentials live in the projector's process only (design §7 / fence 3)."""
-    pat = re.compile(r"\bimport\s+nats\b|\bfrom\s+nats\b|nats_core")
-    projector = BACKEND / "projector"
+def test_no_nats_client_anywhere() -> None:
+    """Build, planning, approval and delivery state come from Forge's record; the dashboard has no
+    bus connection at all (the NATS monitor's HTTP health page is polled, which needs no client)."""
+    pat = re.compile(r"\bimport\s+nats\b|\bfrom\s+nats\b|nats_core|nats\.aio|FACTORY_DASH_NATS_URL")
     for src in _py_sources():
-        if pat.search(src.read_text(encoding="utf-8")):
-            assert projector in src.parents, f"NATS imported outside the projector: {src}"
-
-
-def test_no_nats_import_outside_projector() -> None:
-    """The web/read-model/chat layers import no NATS anything (belt-and-braces on the above)."""
-    pat = re.compile(r"\bimport\s+nats\b|\bfrom\s+nats\b|nats_core|nats\.aio")
-    for src in _py_sources():
-        if (BACKEND / "projector") in src.parents:
-            continue
         assert not pat.search(src.read_text(encoding="utf-8")), src
 
 
