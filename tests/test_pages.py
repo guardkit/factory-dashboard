@@ -198,7 +198,8 @@ def test_the_delivered_window_survives_a_live_update(world: tuple[TestClient, Pa
     """17 October evaluation: the date window was ignored. The page's live-update refetch dropped it."""
     client, _, _ = world
     body = client.get("/fragments/p7?from=2026-01-01&to=2026-01-31").text
-    assert "0 features merged and checked from 2026-01-01 to 2026-01-31." in body
+    words = re.sub(r"<[^>]+>", "", body)  # each date sits in a no-wrap span
+    assert "0 features merged and checked from 2026-01-01 to 2026-01-31." in words
 
 
 SSE_JS = Path(__file__).resolve().parent.parent / "frontend" / "static" / "sse.js"

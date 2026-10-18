@@ -131,7 +131,7 @@ def test_hostile_words_stay_inert_on_the_stage_3_pages(world: World) -> None:  #
         "/projects": ("acme/x",),
     }
     for path, starts in pages.items():
-        body = client.get(path).text
+        body = client.get(path).text.replace("\u200b", "")  # /projects lets names wrap after "/"
         assert "<script" not in _main(body), path
         for start in starts:
             assert f"{start} {escaped}" in body or f"{start}{escaped}" in body, (path, start)

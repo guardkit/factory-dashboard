@@ -146,6 +146,8 @@ def test_export_heading_names_the_reports_client_and_week_not_the_signed_in_acco
     assert f'<span class="report-export__date">{export.window_from}</span>' in html
     assert "factory record" not in words and "asof-chip" not in html
     assert "Prepared <time" in html
+    # A client document gives a date and a time without seconds, from the as-of's own ISO time.
+    assert re.search(r'Prepared <time datetime="[^"]+">\d{1,2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2}</time>', html)
 
 
 def test_export_prints_through_the_shared_script_without_an_inline_handler() -> None:

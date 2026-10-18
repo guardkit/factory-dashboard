@@ -7,7 +7,7 @@
     {{ m.asof_chip(panel.as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
-    <p class="delivered__summary"><span class="delivered__count">{{ panel.delivered_count }} feature{{ '' if panel.delivered_count == 1 else 's' }} merged and checked from {{ panel.window_from }} to {{ panel.window_to }}.</span></p>
+    <p class="delivered__summary"><span class="delivered__count">{{ panel.delivered_count }} feature{{ '' if panel.delivered_count == 1 else 's' }} merged and checked from <span class="report-export__date">{{ panel.window_from }}</span> to <span class="report-export__date">{{ panel.window_to }}</span>.</span></p>
     {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
     {% if panel.rows %}
       <table class="dense-table delivered__table">

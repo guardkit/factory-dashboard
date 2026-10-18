@@ -38,7 +38,11 @@
     <p class="page-eyebrow">{{ report.tenant_display }} · Weekly summary</p>
     <h1 class="page-title" id="export-title">Week <span class="report-export__date">{{ report.window_from }}</span> to <span class="report-export__date">{{ report.window_to }}</span></h1>
     {# The time in plain words: a client document names no record or machinery. #}
-    <p class="page-head__meta"><span>{% if report.as_of.title_iso %}Prepared <time datetime="{{ report.as_of.title_iso }}">{{ report.as_of.label }}</time>{% else %}No data has been read yet.{% endif %}</span></p>
+    {# "Prepared 18 Oct 2026, 16:55": the date and time from the as-of's own ISO time (London), shown
+       only when it carries one. #}
+    {% set iso = report.as_of.title_iso %}
+    {% set months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] %}
+    <p class="page-head__meta"><span>{% if iso and iso | length >= 16 and iso[4] == '-' and iso[10] == 'T' %}Prepared <time datetime="{{ iso }}">{{ iso[8:10] | int }} {{ months[(iso[5:7] | int) - 1] }} {{ iso[0:4] }}, {{ iso[11:16] }}</time>{% else %}No data has been read yet.{% endif %}</span></p>
   </div>
 
   <section class="report-export__section">

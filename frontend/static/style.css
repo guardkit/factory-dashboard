@@ -1371,6 +1371,8 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 /* Delivered: the summary sentence is the answer, so it reads first in the card. */
 .delivered__summary { font-size: 15px; line-height: 22px; font-weight: 600; color: var(--heading); }
 .delivered__table td:first-child { white-space: nowrap; }
+/* "Not measured" stays on one line (the cost column is hidden on phones). */
+.delivered__table td .spend-slot { white-space: nowrap; }
 /* Titles keep a readable width; on a phone the table scrolls inside its card instead. */
 .delivered__table td:nth-child(2), .issues__table td:nth-child(2) { min-width: 14em; }
 .delivered > .panel-card__foot { border-top: 1px solid var(--line); }
@@ -1401,8 +1403,10 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
   .projects__table th:nth-child(2), .projects__table td:nth-child(2), .projects__table th:nth-child(4), .projects__table td:nth-child(4) { display: none; }
   /* Titles and project names keep 8em; only a run longer than that (a path in a title, a project
      name like owner/a_long_name) breaks, at the edge of the column. */
-  .feature-list td:first-child, .delivered__table td:nth-child(2), .issues__table td:nth-child(2),
-  .projects__table td:first-child { min-width: 8em; overflow-wrap: anywhere; }
+  .feature-list td:first-child, .delivered__table td:nth-child(2), .issues__table td:nth-child(2) { min-width: 8em; overflow-wrap: anywhere; }
+  /* A project name breaks after its "/" (projects.html adds a zero-width space there), and only a
+     part too long for the column breaks inside it. */
+  .projects__table td:first-child { min-width: 8em; overflow-wrap: break-word; }
   .issue-row__kind-word { min-width: 0; }
 }
 
