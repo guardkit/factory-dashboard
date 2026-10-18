@@ -163,6 +163,7 @@ def create_app(
     tenants_path: Path = TENANTS_PATH,
     plans_path: Path = PLANS_PATH,
     config_dir: Path | None = None,
+    freshness_poll_secs: int = 30,
 ) -> FastAPI:
     """Build the board. Refuses to start (accounts.ConfigError) without a session secret of at
     least 32 characters and a usable accounts.yaml in the configuration folder."""
@@ -181,6 +182,8 @@ def create_app(
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     # Fence 6: autoescape ON for every event-derived string.
     templates.env.autoescape = select_autoescape(default=True, default_for_string=True)
+    # How often an open page asks whether the factory's record is still being read (tests shorten it).
+    templates.env.globals["freshness_poll_secs"] = freshness_poll_secs
 
     app = FastAPI(title="factory-dashboard", docs_url=None, redoc_url=None)
     app.add_middleware(SessionsByHost, secret_key=key, max_age=SESSION_MAX_AGE)
@@ -520,7 +523,7 @@ def _register_routes(app: FastAPI) -> None:
         # Polled by every page every 30 s: the read time and, when the record is not being read,
         # the stale banner. Independent of the change notifications, which stop when reads stop.
         chrome = dbread.chrome_view(request.app.state.db_path)
-        return _render(request, "fragments/freshness.html", {"chrome": chrome})
+        return _render(request, "fragments/freshness.html", {"chrome": chrome, "standalone": True})
 
     @app.get("/fragments/{panel}", response_class=HTMLResponse)
     def fragment(

@@ -1,10 +1,14 @@
 {# When the factory's record was last read, and the stale-data banner when that is too long ago.
-   One element, polled every 30 s (hx-trigger), so an open page shows the banner when the record
-   stops being read and drops it on recovery, whether or not anything else on the page changes.
-   base.html includes it once; /fragments/freshness renders the same element for the poll. #}
+   One element, polled by htmx, so an open page shows the banner when the record stops being read
+   and drops it on recovery. data-version is the version of the data behind the page: when a poll
+   brings a different one, freshness.js fetches the page's content again, and that response's copy
+   of this element (out of band) replaces this one, so content and read time always match.
+   base.html includes it once; /fragments/freshness renders it alone (standalone) for the poll. #}
 {% if chrome is defined and chrome %}
 {% import 'macros.html' as m %}
-<div class="freshness" id="freshness" hx-get="/fragments/freshness" hx-trigger="every 30s" hx-swap="outerHTML">
+<div class="freshness" id="freshness" data-version="{{ chrome.version }}"
+     hx-get="/fragments/freshness" hx-trigger="every {{ freshness_poll_secs | default(30) }}s" hx-swap="outerHTML"
+     {%- if not standalone %} hx-swap-oob="true"{% endif %}>
   <span class="read-asof">{{ m.asof_chip(chrome.read_as_of) }}</span>
   {% if chrome.banner %}<div class="banner banner--{{ chrome.banner.kind }}" role="status">{{ chrome.banner.text }}</div>{% endif %}
 </div>

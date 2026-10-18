@@ -430,6 +430,7 @@ class PageChrome:
     read_as_of: AsOf
     banner: Banner | None = None
     notes: tuple[str, ...] = field(default_factory=tuple)
+    version: str = ""        # the version of the data behind the page (see dbread.data_version)
 
 
 # --- display formatting: the one place time and age are formatted ------------------------------------

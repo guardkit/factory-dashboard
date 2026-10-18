@@ -443,3 +443,102 @@ def test_the_projects_page_lists_each_project(world: tuple[TestClient, Path, For
     assert (features, in_progress, delivered) == (6, 2, 1)
     project = html.unescape(client.get("/projects/acme/notes").text)
     assert f'<span class="num">{open_issues}</span> open issues' in project
+
+
+# --- Codex round 2, R2: content and its read time refresh together -------------------------------
+
+FRESHNESS_JS = SSE_JS.parent / "freshness.js"
+
+
+def _version(client: TestClient, path: str = "/fragments/freshness") -> str:
+    found = re.search(r'id="freshness" data-version="([^"]+)"', client.get(path).text)
+    assert found is not None, path
+    return found.group(1)
+
+
+def test_the_data_version_follows_changes_staleness_and_recovery(
+    world: tuple[TestClient, Path, ForgeFake], tmp_path: Path,
+) -> None:
+    client, store, fake = world
+    conn = open_rw(store)
+    first = _version(client)
+    assert _version(client, "/features") == first          # a page carries the version it was built from
+
+    assert mirror_once(conn, fake.path) is False            # healthy and idle: same version
+    assert _version(client) == first
+
+    fake.planning("c9", "Archive a note.", state="RUNNING", end=None)
+    assert mirror_once(conn, fake.path) is True             # a record changed: a new version
+    changed = _version(client)
+    assert changed != first
+
+    write_heartbeat(conn, datetime.now(UTC))
+    mirror_once(conn, tmp_path / "gone.db")                 # the record cannot be read
+    conn.execute("UPDATE mirror_status SET last_success_at=? WHERE source='forge'",
+                 (iso(datetime.now(UTC) - timedelta(minutes=10)),))
+    stale = _version(client)
+    assert stale != changed and ".stale." in stale
+
+    mirror_once(conn, fake.path)                             # recovery
+    recovered = _version(client)
+    assert recovered != stale and ".fresh." in recovered
+
+
+def test_the_page_copy_of_the_freshness_element_is_swapped_with_the_content(
+    world: tuple[TestClient, Path, ForgeFake],
+) -> None:
+    """In a full page it is marked out of band, so a content refresh replaces it in the same swap;
+    the polled copy is not, so a poll replaces only itself."""
+    client, _, _ = world
+    page = client.get("/features").text
+    element = page[page.index('id="freshness"'):]
+    assert 'hx-swap-oob="true"' in element[:element.index(">")]
+    assert "hx-swap-oob" not in client.get("/fragments/freshness").text
+    # The chat drawer is outside the refreshed content, so an open chat survives a refresh.
+    main = page[page.index('<main id="main"'):page.index("</main>")]
+    assert "chat-drawer" not in main and "chat-drawer" in page
+
+
+def test_the_report_shows_its_figures_again_after_recovery(world: tuple[TestClient, Path, ForgeFake]) -> None:
+    client, store, fake = world
+    conn = open_rw(store)
+    conn.execute("UPDATE mirror_status SET last_success_at=? WHERE source='forge'",
+                 (iso(datetime.now(UTC) - timedelta(minutes=10)),))
+    body = client.get("/reports").text
+    assert "Figures withheld" in body and _version(client).count(".stale.") == 1
+    write_heartbeat(conn, datetime.now(UTC))
+    mirror_once(conn, fake.path)
+    body = client.get("/reports").text
+    assert "Figures withheld" not in body and 'class="report-headline__line"' in body
+
+
+def test_a_poll_with_newer_data_refreshes_the_content_instead() -> None:
+    """Runs freshness.js under node with a stub page (not a real browser; test_browser.py is)."""
+    script = (
+        "const calls = [];"
+        "let shown = 'v1';"
+        "global.window = {location: {href: 'http://x/features?days=30'},"
+        "  htmx: {ajax: (method, url, ctx) => { calls.push([method, url, ctx]);"
+        "    return new Promise(r => setTimeout(r, 10)); }}};"
+        "global.document = {addEventListener() {}, getElementById: id => id === 'freshness'"
+        "  ? {getAttribute: () => shown} : id === 'main' ? {} : null};"
+        f"const m = require({json.dumps(str(FRESHNESS_JS))});"
+        "const poll = v => ({detail: {target: {id: 'freshness'}, shouldSwap: true,"
+        "  serverResponse: '<div class=\"freshness\" id=\"freshness\" data-version=\"' + v + '\">'}});"
+        "const same = poll('v1'); m.onBeforeSwap(same);"
+        "const other = {detail: {target: {id: 'main'}, shouldSwap: true, serverResponse: 'data-version=\"v9\"'}};"
+        "m.onBeforeSwap(other);"
+        "const newer = poll('v2'); m.onBeforeSwap(newer);"
+        "const again = poll('v3'); m.onBeforeSwap(again);"   # while the refresh is still running
+        "setTimeout(() => { const later = poll('v4'); m.onBeforeSwap(later);"
+        "  console.log(JSON.stringify({same: same.detail.shouldSwap, other: other.detail.shouldSwap,"
+        "    newer: newer.detail.shouldSwap, again: again.detail.shouldSwap, later: later.detail.shouldSwap,"
+        "    calls})); }, 50);"
+    )
+    out = subprocess.run([_node(), "-e", script], capture_output=True, text=True, check=True, timeout=30)
+    result = json.loads(out.stdout)
+    assert result["same"] is True                  # same data: the poll's new read time goes in
+    assert result["other"] is True                 # a content refresh is not interfered with
+    assert result["newer"] is False and result["again"] is False and result["later"] is False
+    target = {"target": "#main", "select": "#main", "swap": "outerHTML"}
+    assert result["calls"] == [["GET", "http://x/features?days=30", target]] * 2  # one at a time

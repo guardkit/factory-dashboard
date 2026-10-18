@@ -116,12 +116,31 @@ def _read_chip(fr: Freshness, now: datetime, state: PanelState | None = None) ->
                 threshold_secs=vm.MIRROR_FRESH_SECS)
 
 
+#: Ages on a page ("waiting 2 h so far", a stall crossing its threshold) grow without any change
+#: to the record, so the data version also moves on every five minutes.
+VERSION_TICK_SECS = 300
+
+
+def data_version(conn: sqlite3.Connection, fr: Freshness, now: datetime) -> str:
+    """The version of the data behind a page: the feed's change count (it only rises), whether the
+    record is fresh or stale, and a five-minute clock tick. An open page whose version differs from
+    the latest one fetches its content again (static/freshness.js)."""
+    try:
+        row = conn.execute("SELECT seq FROM sqlite_sequence WHERE name='change_log'").fetchone()
+    except sqlite3.Error:
+        row = None
+    seq = int(row[0]) if row and row[0] is not None else 0
+    state = "fresh" if fr.fresh(now) else "stale"
+    return f"{seq}.{state}.{int(now.timestamp() // VERSION_TICK_SECS)}"
+
+
 def page_chrome(conn: sqlite3.Connection, now: datetime | None = None) -> PageChrome:
     now = now or _now()
     fr = freshness(conn)
     chip = _read_chip(fr, now)
+    version = data_version(conn, fr, now)
     if fr.fresh(now):
-        return PageChrome(feed_state="live", read_as_of=chip)
+        return PageChrome(feed_state="live", read_as_of=chip, version=version)
     when = vm.fmt_wall(fr.read_at, now=now) if fr.read_at else None
     if not fr.feed_alive(now):
         text = ("The dashboard's data feed is not running. "
@@ -130,7 +149,7 @@ def page_chrome(conn: sqlite3.Connection, now: datetime | None = None) -> PageCh
         text = "The dashboard has not read the factory's record yet."
     else:
         text = f"Factory data last read at {when} — the dashboard cannot reach the factory's record."
-    return PageChrome(feed_state="stale", read_as_of=chip, banner=Banner(kind="stale", text=text))
+    return PageChrome(feed_state="stale", read_as_of=chip, banner=Banner(kind="stale", text=text), version=version)
 
 
 def _state(fr: Freshness, now: datetime, rows: int) -> PanelState:
