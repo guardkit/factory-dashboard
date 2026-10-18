@@ -417,8 +417,9 @@ a.feature-title:hover { text-decoration: underline; }
 .banner--stale .icon { color: var(--status-fail); }
 /* Live updates paused (created by sse.js, text only): the amber stale look. */
 .banner--sse_paused { background: var(--status-risk-tint); color: var(--status-risk-text); cursor: pointer; }
-/* Never two banners: the stale banner wins over "updates paused", whichever arrived first. */
-.banner-slot:has(.banner--stale) .banner--sse_paused { display: none; }
+/* Never two banners: the stale banner wins over "updates paused", whichever arrived first. A
+   stale cost feed's banner (data-feed="cost") does not: "live updates paused" still shows. */
+.banner-slot:has(.banner--stale:not([data-feed="cost"])) .banner--sse_paused { display: none; }
 /* The freshness element (fragments/freshness.html) holds the read time, then the banner. The
    banner shows first, directly under the top bar; the read time follows it. */
 .freshness { display: flex; flex-direction: column-reverse; }

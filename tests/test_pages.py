@@ -354,7 +354,9 @@ def test_the_paused_banner_gives_way_to_the_stale_banner() -> None:
     assert result["staleLater"] == ["banner banner--stale"]
     # And if the stale banner arrives through the poll while the paused one shows, the page hides it.
     css = (SSE_JS.parent / "style.css").read_text(encoding="utf-8")
-    assert ".banner-slot:has(.banner--stale) .banner--sse_paused { display: none; }" in css
+    rule = next(line for line in css.splitlines() if ".banner--sse_paused { display: none; }" in line)
+    assert rule.startswith(".banner-slot:has(.banner--stale")
+    assert ':not([data-feed="cost"])' in rule  # a stale cost feed never hides "live updates paused"
 
 
 # --- Codex round 1, R3: a project page never hides its older unresolved failures ------------------
