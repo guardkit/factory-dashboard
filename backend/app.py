@@ -49,7 +49,7 @@ STATIC_DIR = BASE_DIR / "frontend" / "static"
 NAV: tuple[tuple[str, str, str], ...] = (
     ("Now", "/", "now"),
     ("Features", "/features", "features"),
-    ("Delivered", "/delivered", "delivered"),
+    ("Projects", "/projects", "projects"),
     ("Reports", "/reports", "reports"),
     ("Issues", "/issues", "issues"),
     ("Fleet", "/fleet", "fleet"),
@@ -429,13 +429,22 @@ def _register_routes(app: FastAPI) -> None:
             {"page": page, "chrome": chrome, "nav_active": "features", "tenant": _tenant(request, user)},
         )
 
+    @app.get("/projects", response_class=HTMLResponse)
+    def projects(request: Request, user: OperatorPage) -> HTMLResponse:
+        return _render(
+            request,
+            "projects.html",
+            {"view": dbread.projects_view(request.app.state.db_path), "nav_active": "projects",
+             "tenant": _tenant(request, user)},
+        )
+
     @app.get("/projects/{owner}/{name}", response_class=HTMLResponse)
     def project(request: Request, owner: str, name: str, user: OperatorPage) -> HTMLResponse:
         # Projects are named owner/name (the build's repository), so the route takes both parts.
         return _render(
             request,
             "project.html",
-            {"view": dbread.project_view(request.app.state.db_path, f"{owner}/{name}"), "nav_active": "",
+            {"view": dbread.project_view(request.app.state.db_path, f"{owner}/{name}"), "nav_active": "projects",
              "tenant": _tenant(request, user)},
         )
 
@@ -444,7 +453,7 @@ def _register_routes(app: FastAPI) -> None:
         return _render(
             request,
             "project.html",
-            {"view": dbread.project_view(request.app.state.db_path, name), "nav_active": "",
+            {"view": dbread.project_view(request.app.state.db_path, name), "nav_active": "projects",
              "tenant": _tenant(request, user)},
         )
 
@@ -505,6 +514,13 @@ def _register_routes(app: FastAPI) -> None:
         return JSONResponse(dbread.health(request.app.state.db_path))
 
     # --- live-update fragments (refetched when the feed records a change) ---
+
+    @app.get("/fragments/freshness", response_class=HTMLResponse)
+    def freshness_fragment(request: Request, user: OperatorApi) -> HTMLResponse:
+        # Polled by every page every 30 s: the read time and, when the record is not being read,
+        # the stale banner. Independent of the change notifications, which stop when reads stop.
+        chrome = dbread.chrome_view(request.app.state.db_path)
+        return _render(request, "fragments/freshness.html", {"chrome": chrome})
 
     @app.get("/fragments/{panel}", response_class=HTMLResponse)
     def fragment(

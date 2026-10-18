@@ -1,7 +1,7 @@
 {# Shared pieces. Class names are stable so a later stylesheet can restyle them. #}
 
 {% macro station_glyph(state) -%}
-{{ {'passed':'●','current':'◉','future':'○','stopped':'✕'}.get(state, '○') }}
+{{ {'passed':'●','current':'◉','waiting':'◔','future':'○','stopped':'✕'}.get(state, '○') }}
 {%- endmacro %}
 
 {# When the data on a card was read. data-asof / data-threshold let freshness.js age the dot. #}

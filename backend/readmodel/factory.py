@@ -31,7 +31,7 @@ import sqlite3
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from enum import StrEnum
 from zoneinfo import ZoneInfo
 
@@ -69,7 +69,6 @@ class Outcome(StrEnum):
     NOTHING_TO_BUILD = "nothing_to_build"
     HANDED_OFF = "handed_off"
     STOPPED_IN_QUEUE = "stopped_in_queue"
-    RECORD_STOPPED = "record_stopped"
     RETIRED = "retired"
 
 
@@ -577,16 +576,16 @@ def load_factory(conn: sqlite3.Connection, now: datetime | None = None) -> Facto
         run = next((planning[c] for c in corrs if c in planning), None)
         item = next((queue[c] for c in corrs if c in queue), None)
         mission = next((missions[b.mission_id] for b in reversed(attempts) if b.mission_id in missions), None)
-        features.append(_assemble(code, code, run, item, tuple(attempts), mission, now))
+        features.append(_assemble(code, code, run, item, tuple(attempts), mission))
     for corr, run in planning.items():
         if corr in used:
             continue
         used.add(corr)
-        features.append(_assemble(corr, "", run, queue.get(corr), (), None, now))
+        features.append(_assemble(corr, "", run, queue.get(corr), (), None))
     for corr, item in queue.items():
         if corr in used or item.kind not in ("feature", "fix"):
             continue
-        features.append(_assemble(corr, "", None, item, (), None, now))
+        features.append(_assemble(corr, "", None, item, (), None))
 
     features.sort(key=lambda f: (f.sent_at or datetime.min.replace(tzinfo=UTC)), reverse=True)
     return Factory(
@@ -601,7 +600,7 @@ def load_factory(conn: sqlite3.Connection, now: datetime | None = None) -> Facto
 
 def _assemble(
     key: str, code: str, run: PlanningRun | None, item: QueueItem | None,
-    builds: tuple[Build, ...], mission: Mission | None, now: datetime,
+    builds: tuple[Build, ...], mission: Mission | None,
 ) -> Feature:
     request_text = (run.request_text if run else "") or (item.sentence if item else "")
     project = ""
@@ -635,13 +634,9 @@ def _assemble(
         delivered = mission.delivered_at()
     if delivered is not None:
         station, outcome, text, ended = MERGED, Outcome.DELIVERED, "Merged and checked", delivered
-    elif outcome is Outcome.IN_PROGRESS and not any(w.open for w in waits):
-        # Nothing has happened for a week and nobody is being waited on: the record simply stops
-        # here (an old run the factory never finished). Not in progress, and not a guess either.
-        last = _last_activity(run, item, builds)
-        if last is not None and (now - last) > RECORD_STOPPED_AFTER:
-            outcome, ended = Outcome.RECORD_STOPPED, last
-            text = f"{text}, then nothing more was recorded"
+    # However long nothing has been recorded, a feature Forge still records as queued, planning or
+    # building stays in progress: only an ending or a retirement in the record finishes it. A long
+    # silence is shown as a stall (`norms.quiet_spell`), never as an ending.
 
     return Feature(
         key=key, code=code, title=title_from(request_text, code or "untitled request"),
@@ -649,9 +644,6 @@ def _assemble(
         builds=builds, mission=mission, station=station, outcome=outcome, status_text=text,
         ended_at=ended, delivered_at=delivered, waits=tuple(waits),
     )
-
-
-RECORD_STOPPED_AFTER = timedelta(days=7)
 
 
 def _day(dt: datetime) -> str:

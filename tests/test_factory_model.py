@@ -243,11 +243,13 @@ def test_a_person_skip_closes_the_wait(fake: ForgeFake, tmp_path: Path) -> None:
     assert f is not None and [w.ended_at for w in f.waits] == [T0 + timedelta(minutes=33)]
 
 
-def test_a_record_that_stopped_a_week_ago_is_not_in_progress(fake: ForgeFake, tmp_path: Path) -> None:
+def test_a_record_quiet_for_a_week_is_still_in_progress(fake: ForgeFake, tmp_path: Path) -> None:
+    """Codex review, 18 October 2026: age alone never ends a feature. Forge still records this one
+    as waiting for its build, so it stays in progress (and is shown as stalled, in the issues)."""
     fake.planning("c1", "An old one.", state="BUILD_QUEUED")
     f = _load(fake, tmp_path, now=T0 + timedelta(days=9)).feature("c1")
-    assert f is not None and f.outcome is Outcome.RECORD_STOPPED and not f.in_progress
-    assert "nothing more was recorded" in f.status_text
+    assert f is not None and f.outcome is Outcome.IN_PROGRESS and f.in_progress
+    assert f.status_text == "Plan approved; waiting for the build to start" and f.ended_at is None
 
 
 def test_a_queue_item_that_never_reached_planning(fake: ForgeFake, tmp_path: Path) -> None:

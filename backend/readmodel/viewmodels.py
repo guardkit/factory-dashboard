@@ -77,7 +77,7 @@ class Panel:
 @dataclass(frozen=True)
 class JourneyStation:
     name: str
-    glyph_state: str         # 'passed' | 'current' | 'future' | 'stopped'
+    glyph_state: str         # 'passed' | 'current' | 'waiting' (on a person) | 'future' | 'stopped'
 
 
 @dataclass(frozen=True)
@@ -262,6 +262,7 @@ class WaitRow:
     started_title: str
     ended_label: str         # "waiting now" while open
     duration: str
+    open: bool = False       # True while the wait is still going on
 
 
 @dataclass(frozen=True)
@@ -304,6 +305,8 @@ class ProjectView:
     in_progress: int
     issues: tuple[IssueRow, ...]
     spend: SpendSlot
+    open_issues_total: int = 0   # every unresolved issue, the listed ones and the older hidden ones
+    hidden_line: str = ""        # how many old open failures the 14-day cut-off leaves out
 
 
 # --- weekly report ------------------------------------------------------------------------------

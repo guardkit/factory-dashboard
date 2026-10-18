@@ -153,7 +153,8 @@ def journey(f: Feature) -> JourneyBar:
         if f.outcome is Outcome.DELIVERED or i < f.station:
             state = "passed"
         elif i == f.station:
-            state = "current" if f.in_progress else "stopped"
+            # A station where the feature is waiting on a person is shown as waiting.
+            state = ("waiting" if f.open_wait() is not None else "current") if f.in_progress else "stopped"
         else:
             state = "future"
         stations.append(JourneyStation(name=name, glyph_state=state))
@@ -393,8 +394,8 @@ def feed_panel(conn: sqlite3.Connection, now: datetime | None = None, *_: object
     hb = fr.heartbeat_at
     hb_label = (f"running (last heartbeat {vm.fmt_age((now - hb).total_seconds())} ago)" if alive and hb
                 else f"stopped since {vm.fmt_wall(hb, now=now)}" if hb else "not started")
-    read = (f"Forge's record last read at {vm.fmt_wall(fr.read_at, now=now)}" if fr.read_at
-            else "Forge's record not read yet")
+    read = (f"The factory's record was last read at {vm.fmt_wall(fr.read_at, now=now)}" if fr.read_at
+            else "The factory's record has not been read yet")
     return FeedPanel(panel_id="proj", title="Dashboard data feed",
                      state=PanelState.LIVE if fr.fresh(now) else PanelState.LAGGING, as_of=_read_chip(fr, now),
                      heartbeat_ok=alive, heartbeat_label=hb_label, read_label=read, error=fr.error)
@@ -525,6 +526,23 @@ class IssuesView:
 
 
 @dataclass(frozen=True)
+class ProjectRow:
+    project: str
+    link: str
+    features: int          # features on record
+    in_progress: int
+    delivered: int         # merged and checked, ever
+    open_issues: int       # listed open issues plus older unresolved failures
+
+
+@dataclass(frozen=True)
+class ProjectsView:
+    chrome: PageChrome
+    rows: tuple[ProjectRow, ...]
+    as_of: AsOf
+
+
+@dataclass(frozen=True)
 class DeliveredView:
     chrome: PageChrome
     panel: DeliveredPanel
@@ -605,7 +623,7 @@ def feature_page(db_path: Path, key: str, now: datetime | None = None) -> tuple[
         waits = tuple(WaitRow(
             kind=w.kind, started_label=vm.fmt_wall(w.started_at, now=now), started_title=vm.fmt_iso(w.started_at),
             ended_label="waiting now" if w.open else vm.fmt_wall(w.ended_at, now=now) if w.ended_at else "",
-            duration=vm.fmt_age(w.seconds(now)),
+            duration=vm.fmt_age(w.seconds(now)), open=w.open,
         ) for w in f.waits)
         own = [i for i in find_issues(factory, norms, now) if i.feature is f]
         mission_line = ""
@@ -669,14 +687,47 @@ def project_view(db_path: Path, project: str, now: datetime | None = None) -> Pr
                                    f"{len(mine)} on record).")
         delivered = [f for f in mine if f.outcome is Outcome.DELIVERED]
         week = now - timedelta(days=7)
-        open_issues, _closed, _hidden = recent(
+        open_issues, _closed, hidden = recent(
             [i for i in find_issues(factory, norms, now) if i.project == project], now)
         return ProjectView(
             chrome=page_chrome(conn, now), project=project, features=panel,
             delivered_7d=sum(1 for f in delivered if f.delivered_at and f.delivered_at >= week),
             delivered_total=len(delivered), in_progress=sum(1 for f in mine if f.in_progress),
             issues=tuple(issue_row(i, now) for i in open_issues), spend=SpendSlot(),
+            open_issues_total=len(open_issues) + hidden, hidden_line=hidden_line(hidden),
         )
+    finally:
+        conn.close()
+
+
+def hidden_line(hidden: int) -> str:
+    """One sentence for the open failures the 14-day cut-off leaves out of a list ("" for none)."""
+    if not hidden:
+        return ""
+    noun, verb = ("failure", "is") if hidden == 1 else ("failures", "are")
+    return f"{hidden} older {noun} with no later attempt {verb} not listed (opened more than 14 days ago)."
+
+
+def projects_view(db_path: Path, now: datetime | None = None) -> ProjectsView:
+    """One row per project on record, with the same counts its project page shows."""
+    now = now or _now()
+    conn = _open(db_path)
+    try:
+        factory, norms = load_factory(conn, now), load_norms()
+        issues = find_issues(factory, norms, now)
+        names = sorted({f.project for f in factory.features if f.project}
+                       | {m.target_repo for m in factory.missions if m.target_repo})
+        rows = []
+        for name in names:
+            mine = [f for f in factory.features if f.project == name]
+            open_, _closed, hidden = recent([i for i in issues if i.project == name], now)
+            rows.append(ProjectRow(
+                project=name, link=project_link(name), features=len(mine),
+                in_progress=sum(1 for f in mine if f.in_progress),
+                delivered=sum(1 for f in mine if f.outcome is Outcome.DELIVERED),
+                open_issues=len(open_) + hidden,
+            ))
+        return ProjectsView(chrome=page_chrome(conn, now), rows=tuple(rows), as_of=_read_chip(freshness(conn), now))
     finally:
         conn.close()
 
@@ -689,15 +740,9 @@ def issues_view(db_path: Path, now: datetime | None = None) -> IssuesView:
         open_, closed, hidden = recent(find_issues(factory, norms, now), now)
         note = ("Open: anything waiting for a person or stalled now, and failures from the last 14 days with no "
                 "later attempt. Closed: issues that closed in the last 7 days.")
-        hidden_line = ""
-        if hidden:
-            noun = "failure" if hidden == 1 else "failures"
-            verb = "is" if hidden == 1 else "are"
-            hidden_line = (f"{hidden} older {noun} with no later attempt {verb} not listed "
-                           f"(opened more than 14 days ago).")
         return IssuesView(chrome=page_chrome(conn, now), open_rows=tuple(issue_row(i, now) for i in open_),
                           closed_rows=tuple(issue_row(i, now) for i in closed), note=note,
-                          hidden_line=hidden_line)
+                          hidden_line=hidden_line(hidden))
     finally:
         conn.close()
 
