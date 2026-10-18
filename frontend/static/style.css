@@ -268,8 +268,10 @@ body {
 h1, h2, h3, h4 { line-height: 1.25; }
 
 a { color: var(--accent-text); text-underline-offset: 2px; }
-a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visible,
-select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+/* Fields show their focus whenever they have it (:focus, not only :focus-visible): Chrome does not
+   always mark a date field focus-visible when it is reached by Tab. */
+a:focus-visible, button:focus-visible, summary:focus-visible, input:focus, input:focus-within,
+select:focus, textarea:focus, [tabindex]:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
@@ -813,7 +815,7 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
 }
 .window-form input { width: auto; height: 38px; font-size: 14px; }
 .login-form input { width: 100%; }
-.window-form input:focus-visible, .login-form input:focus-visible { outline-offset: 1px; border-radius: var(--radius-md); }
+.window-form input:focus, .login-form input:focus { outline-offset: 1px; border-radius: var(--radius-md); }
 .window-form input[aria-invalid="true"], .login-form input[aria-invalid="true"] { border-color: var(--status-fail); }
 .hint { margin: 0; font-size: 13px; line-height: 18px; color: var(--text-dim); }
 
@@ -1543,7 +1545,7 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
   font: 400 16px/24px var(--font-body); resize: vertical;
 }
 textarea.chat__input { min-height: 68px; }
-.chat__input:focus-visible { outline-offset: 1px; border-radius: var(--radius-md); }
+.chat__input:focus { outline-offset: 1px; border-radius: var(--radius-md); }
 .chat__ask {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   min-height: 44px; padding: 0 16px; border-radius: var(--radius-md); border: 1px solid transparent;
