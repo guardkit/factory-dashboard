@@ -1,9 +1,9 @@
-"""Read-model DB bootstrap + the mode=ro connection helper the web layer uses.
+"""The dashboard store: schema at start-up, and the read-only connection the web side uses.
 
-**Fence 4 / design §7 / M-D4:** ALL web-request DB opens are URI `mode=ro`. The projector is the
-sole writer of the read model at runtime (S2+). At S1 there is no projector, so `init_db` performs
-the one-time, startup-only (never a web-request) bootstrap: apply schema.sql, mirror the tenant
-registry into the `tenants` table (config-is-data). Request paths use `connect_ro` exclusively.
+Every web request opens the store read-only (URI `mode=ro`). The feed is the only writer of the
+Forge copy. Both containers apply the schema at start (`apply_schema`, idempotent), so the feed no
+longer fails when it starts before the web container (the 17 October first-start crash). The web
+container's `init_db` also mirrors the tenant registry.
 
 Sign-in no longer uses the `users` table: accounts come from accounts.yaml (backend/accounts.py,
 17 October 2026). The July seed users (`username == tenant slug`) are gone, and any rows they left
@@ -34,12 +34,27 @@ def _apply_schema(conn: sqlite3.Connection, schema_path: Path) -> None:
     conn.executescript(schema_path.read_text(encoding="utf-8"))
 
 
+# Both containers may apply the schema at the same moment; wait for the other's lock, don't fail.
+_BUSY_TIMEOUT_SECS = 30.0
+
+
+def apply_schema(db_path: Path) -> None:
+    """Create the store if it is missing and apply schema.sql (idempotent). Start-up only."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=_BUSY_TIMEOUT_SECS)
+    try:
+        _apply_schema(conn, SCHEMA_PATH)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def init_db(db_path: Path, tenants: Iterable[Tenant]) -> None:
     """Startup-only bootstrap (NOT a request path): create the operational DB if absent, apply the
     schema (idempotent), mirror the tenant registry, and delete the retired July seed users.
     rw connection here only."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=_BUSY_TIMEOUT_SECS)
     try:
         _apply_schema(conn, SCHEMA_PATH)
         _mirror_tenants(conn, tenants)

@@ -15,7 +15,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 
-DEFAULT_PANELS: tuple[str, ...] = ("p1", "p2", "p3", "p4", "p5", "p6", "p7", "proj")
+DEFAULT_PANELS: tuple[str, ...] = ("p2", "p3", "p4", "p5", "p6", "p7", "proj")
 
 
 @dataclass(frozen=True)

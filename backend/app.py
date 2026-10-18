@@ -1,8 +1,8 @@
-"""FastAPI entrypoint — server-rendered panels, sessions, tenant resolution, route guard.
+"""FastAPI entrypoint: server-rendered pages, sessions, tenant resolution, the route guard.
 
-ADR-DASH-003: HTMX-first, server-rendered FastAPI + Jinja. ADR-DASH-007 / fence 1-2: this app
-imports NO NATS anything at S1 (verified by grep at stage close) and holds no write path. Fence 6:
-Jinja autoescape is ON; every event-derived string renders inert.
+Server-rendered FastAPI + Jinja with HTMX for live updates. The app has no bus connection and no
+write path: every request opens the store read-only. Jinja autoescape is on, so every string from
+Forge's record (request sentences, error text) renders inert.
 
 Sign-in (design 2026-10-17, requirement 2): accounts come from accounts.yaml in the configuration
 folder (backend/accounts.py); the signed cookie holds only the username. The account and its
@@ -24,7 +24,7 @@ from typing import Annotated
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import select_autoescape
 from starlette.middleware.sessions import SessionMiddleware
@@ -39,7 +39,7 @@ from backend.config_loader import (
     load_plans,
     load_tenants,
 )
-from backend.readmodel import dbread, queries
+from backend.readmodel import dbread
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = BASE_DIR / "frontend" / "templates"
@@ -49,7 +49,7 @@ STATIC_DIR = BASE_DIR / "frontend" / "static"
 NAV: tuple[tuple[str, str, str], ...] = (
     ("Now", "/", "now"),
     ("Features", "/features", "features"),
-    ("Delivered", "/delivered", "delivered"),
+    ("Projects", "/projects", "projects"),
     ("Reports", "/reports", "reports"),
     ("Issues", "/issues", "issues"),
     ("Fleet", "/fleet", "fleet"),
@@ -163,6 +163,7 @@ def create_app(
     tenants_path: Path = TENANTS_PATH,
     plans_path: Path = PLANS_PATH,
     config_dir: Path | None = None,
+    freshness_poll_secs: int = 30,
 ) -> FastAPI:
     """Build the board. Refuses to start (accounts.ConfigError) without a session secret of at
     least 32 characters and a usable accounts.yaml in the configuration folder."""
@@ -181,6 +182,8 @@ def create_app(
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     # Fence 6: autoescape ON for every event-derived string.
     templates.env.autoescape = select_autoescape(default=True, default_for_string=True)
+    # How often an open page asks whether the factory's record is still being read (tests shorten it).
+    templates.env.globals["freshness_poll_secs"] = freshness_poll_secs
 
     app = FastAPI(title="factory-dashboard", docs_url=None, redoc_url=None)
     app.add_middleware(SessionsByHost, secret_key=key, max_age=SESSION_MAX_AGE)
@@ -292,8 +295,8 @@ def _render(
 ) -> HTMLResponse:
     templates: Jinja2Templates = request.app.state.templates
     ctx: dict[str, object] = {"nav": NAV, "signed_in": getattr(request.state, "user", None), **context}
-    # base.html needs the page chrome (top-bar projector chip + banner slot, ux §3). Most views
-    # carry it; surface it uniformly so every operator page renders the chrome without repetition.
+    # base.html needs the page chrome (the read-time chip and the stale-data banner). Most views
+    # carry it; surface it uniformly so every page renders it without repetition.
     if "chrome" not in ctx:
         view = ctx.get("view")
         if view is not None and hasattr(view, "chrome"):
@@ -398,39 +401,63 @@ def _register_routes(app: FastAPI) -> None:
     # --- operator pages -----------------------------------------------------
 
     @app.get("/features", response_class=HTMLResponse)
-    def features(request: Request, user: OperatorPage) -> HTMLResponse:
+    def features(request: Request, user: OperatorPage, days: str | None = None) -> HTMLResponse:
+        # ?days=7 (default), ?days=30, or ?days=all.
+        window: int | None = 7
+        if days == "all":
+            window = None
+        elif days and days.isdigit() and int(days) in (7, 30):
+            window = int(days)
         return _render(
             request,
             "features.html",
-            {"view": queries.features_view(), "nav_active": "features", "tenant": _tenant(request, user)},
+            {"view": dbread.features_view(request.app.state.db_path, window), "nav_active": "features",
+             "tenant": _tenant(request, user)},
         )
 
-    @app.get("/features/{feature_id}", response_class=HTMLResponse)
-    def feature(request: Request, feature_id: str, user: OperatorPage) -> HTMLResponse:
-        page = queries.feature_page(feature_id)
-        if page is None:
+    @app.get("/features/{feature_key}", response_class=HTMLResponse)
+    def feature(request: Request, feature_key: str, user: OperatorPage) -> HTMLResponse:
+        found = dbread.feature_page(request.app.state.db_path, feature_key)
+        if found is None:
             return _render(
                 request,
                 "feature_missing.html",
-                {"feature_id": feature_id, "nav_active": "features", "tenant": _tenant(request, user)},
+                {"feature_id": feature_key, "nav_active": "features", "tenant": _tenant(request, user),
+                 "chrome": dbread.chrome_view(request.app.state.db_path)},
             )
+        chrome, page = found
         return _render(
             request,
             "feature.html",
-            {
-                "page": page,
-                "chrome": queries.chrome(),
-                "nav_active": "features",
-                "tenant": _tenant(request, user),
-            },
+            {"page": page, "chrome": chrome, "nav_active": "features", "tenant": _tenant(request, user)},
         )
 
-    @app.get("/projects/{project}", response_class=HTMLResponse)
-    def project(request: Request, project: str, user: OperatorPage) -> HTMLResponse:
+    @app.get("/projects", response_class=HTMLResponse)
+    def projects(request: Request, user: OperatorPage) -> HTMLResponse:
+        return _render(
+            request,
+            "projects.html",
+            {"view": dbread.projects_view(request.app.state.db_path), "nav_active": "projects",
+             "tenant": _tenant(request, user)},
+        )
+
+    @app.get("/projects/{owner}/{name}", response_class=HTMLResponse)
+    def project(request: Request, owner: str, name: str, user: OperatorPage) -> HTMLResponse:
+        # Projects are named owner/name (the build's repository), so the route takes both parts.
         return _render(
             request,
             "project.html",
-            {"view": queries.project_view(project), "nav_active": "", "tenant": _tenant(request, user)},
+            {"view": dbread.project_view(request.app.state.db_path, f"{owner}/{name}"), "nav_active": "projects",
+             "tenant": _tenant(request, user)},
+        )
+
+    @app.get("/projects/{name}", response_class=HTMLResponse)
+    def project_single(request: Request, name: str, user: OperatorPage) -> HTMLResponse:
+        return _render(
+            request,
+            "project.html",
+            {"view": dbread.project_view(request.app.state.db_path, name), "nav_active": "projects",
+             "tenant": _tenant(request, user)},
         )
 
     @app.get("/delivered", response_class=HTMLResponse)
@@ -440,8 +467,7 @@ def _register_routes(app: FastAPI) -> None:
         from_: Annotated[str | None, Query(alias="from")] = None,
         to: str | None = None,
     ) -> HTMLResponse:
-        # ux §4.4: plain form GET window (two date inputs). A partial/absent window falls back to
-        # the default this-week window (dbread.default_window) — never an unbounded scan.
+        # Two date inputs; a missing or malformed window falls back to this week.
         window = (from_, to) if from_ and to else None
         view = dbread.delivered_view(request.app.state.db_path, window)
         return _render(
@@ -471,7 +497,8 @@ def _register_routes(app: FastAPI) -> None:
         return _render(
             request,
             "issues.html",
-            {"view": queries.issues_view(), "nav_active": "issues", "tenant": _tenant(request, user)},
+            {"view": dbread.issues_view(request.app.state.db_path), "nav_active": "issues",
+             "tenant": _tenant(request, user)},
         )
 
     @app.get("/fleet", response_class=HTMLResponse)
@@ -483,23 +510,34 @@ def _register_routes(app: FastAPI) -> None:
              "tenant": _tenant(request, user)},
         )
 
-    # --- fragment API (HTMX refetch target for the SSE panel_update, ux §6) --
+    @app.get("/healthz")
+    def healthz(request: Request) -> JSONResponse:
+        # For the start script and the release runbook's last check. No login: it says only whether
+        # the dashboard is reading the factory's record, and when it last did.
+        return JSONResponse(dbread.health(request.app.state.db_path))
+
+    # --- live-update fragments (refetched when the feed records a change) ---
+
+    @app.get("/fragments/freshness", response_class=HTMLResponse)
+    def freshness_fragment(request: Request, user: OperatorApi) -> HTMLResponse:
+        # Polled by every page every 30 s: the read time and, when the record is not being read,
+        # the stale banner. Independent of the change notifications, which stop when reads stop.
+        chrome = dbread.chrome_view(request.app.state.db_path)
+        return _render(request, "fragments/freshness.html", {"chrome": chrome, "standalone": True})
 
     @app.get("/fragments/{panel}", response_class=HTMLResponse)
-    def fragment(request: Request, panel: str, user: OperatorApi, state: str | None = None) -> HTMLResponse:
+    def fragment(
+        request: Request,
+        panel: str,
+        user: OperatorApi,
+        from_: Annotated[str | None, Query(alias="from")] = None,
+        to: str | None = None,
+    ) -> HTMLResponse:
         if panel not in _FRAGMENT_TEMPLATES:
             raise HTTPException(status_code=404, detail="unknown panel")
-        if state is not None:
-            # The §4.8 states-pack demo (+ the hostile fixture): force a specific §5.2 state.
-            try:
-                view: object = queries.panel_view(panel, state)
-            except queries.UnknownPanel as exc:
-                raise HTTPException(status_code=404, detail="unknown panel") from exc
-        elif panel in dbread._PANEL_BUILDERS:
-            # LIVE from the read model (p7 delivered uses the default this-week window on refetch).
-            view = dbread.panel_view(request.app.state.db_path, panel)
-        else:  # defensive: a fragment template with no live builder falls back to fixtures
-            view = queries.panel_view(panel, None)
+        # The Delivered panel keeps the window of the page it sits on.
+        window = (from_, to) if from_ and to else None
+        view = dbread.panel_view(request.app.state.db_path, panel, window=window)
         template = f"fragments/{_FRAGMENT_TEMPLATES[panel]}"
         return _render(request, template, {"panel": view, "standalone": True})
 
@@ -518,14 +556,13 @@ def _register_routes(app: FastAPI) -> None:
 
 
 _FRAGMENT_TEMPLATES: dict[str, str] = {
-    "p1": "p1_agents.html",
-    "p2": "p2_build_board.html",
-    "p3": "p3_gate_events.html",
-    "p4": "p4_needs_you.html",
-    "p5": "p5_planning.html",
-    "p6": "p6_serving.html",
-    "p7": "p7_delivered.html",
-    "proj": "projector.html",
+    "p2": "in_progress.html",
+    "p3": "activity.html",
+    "p4": "needs_you.html",
+    "p5": "planning.html",
+    "p6": "services.html",
+    "p7": "delivered.html",
+    "proj": "feed.html",
 }
 
 

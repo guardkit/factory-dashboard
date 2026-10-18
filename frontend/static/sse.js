@@ -27,22 +27,33 @@
     dot.setAttribute("title", title);
   }
 
-  function setPaused(paused, at) {
+  var PAUSED_TEXT = "Live updates paused. Showing the last data received. Select this message to reload.";
+
+  function setPaused(paused) {
     var slot = document.querySelector(".banner-slot");
     if (!slot) return;
     var existing = slot.querySelector(".banner--sse_paused");
-    // The server-rendered projector-stalled banner (worse condition) always wins (§3).
-    if (slot.querySelector(".banner--projector_stalled")) { if (existing) existing.remove(); return; }
+    // The stale-data banner (the worse condition) always wins: never show both. style.css also
+    // hides this one if the stale banner arrives later, through the freshness poll.
+    if (slot.querySelector(".banner--stale")) { if (existing) existing.remove(); return; }
     if (paused && !existing) {
       var b = document.createElement("div");
       b.className = "banner banner--sse_paused";
       b.setAttribute("role", "status");
-      b.textContent = "updates paused — showing data as of " + (at || "last sync") + " · [refresh]";
+      b.textContent = PAUSED_TEXT;
       b.addEventListener("click", function () { window.location.reload(); });
       slot.appendChild(b);
     } else if (!paused && existing) {
       existing.remove();
     }
+  }
+
+  // The address a page section is refetched from. It keeps the page's own query (for example the
+  // Delivered page's date window): without it the refetch fell back to the default week and
+  // replaced what the page was asked to show (the 17 October "window is ignored" fault).
+  function fragmentUrl(panel, search) {
+    if (search === undefined) search = window.location.search;
+    return "/fragments/" + encodeURIComponent(panel) + (search || "");
   }
 
   var lastFetch = {}; // panel -> epoch ms of last refetch (coalescing)
@@ -60,12 +71,13 @@
       return;
     }
     lastFetch[panel] = now;
+    var url = fragmentUrl(panel);
     if (window.htmx) {
-      window.htmx.ajax("GET", "/fragments/" + panel, { target: target, swap: "outerHTML" }).then(function () {
+      window.htmx.ajax("GET", url, { target: target, swap: "outerHTML" }).then(function () {
         highlight(document.querySelector('[data-panel="' + panel + '"]'));
       });
     } else {
-      fetch("/fragments/" + panel).then(function (r) { return r.text(); }).then(function (html) {
+      fetch(url).then(function (r) { return r.text(); }).then(function (html) {
         target.outerHTML = html;
         highlight(document.querySelector('[data-panel="' + panel + '"]'));
       });
@@ -99,12 +111,17 @@
       setDot("reconnecting", "reconnecting…"); // EventSource auto-retries (Last-Event-ID sent)
       if (!downTimer) {
         downTimer = setTimeout(function () {
-          setDot("down", "updates paused (>30s)");
-          setPaused(true, "last sync");
+          setDot("down", "live updates paused for over 30 seconds");
+          setPaused(true);
         }, 30000);
       }
     });
   }
 
-  document.addEventListener("DOMContentLoaded", start);
+  if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded", start);
+  // For tests (tests/test_pages.py runs this file under node with a stub page): expose the URL
+  // builder, the refetch itself and the paused banner, so the tests check what really happens.
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { fragmentUrl: fragmentUrl, refetch: refetch, setPaused: setPaused, PAUSED_TEXT: PAUSED_TEXT };
+  }
 })();

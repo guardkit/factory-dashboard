@@ -1,0 +1,45 @@
+# On-track thresholds for the factory dashboard. Re-derive with:
+#   python -m backend.readmodel.norms --db data/readmodel.db --days 14
+# Derived from a read-only copy of Forge's record taken at 10:33 UTC on 18 October 2026.
+derived_on: '2026-10-18'
+window_days: 14
+attempts:
+  green_max: 1
+  amber_max: 2
+  unit: ''
+  how: 'Kept from the design: one build per request is normal. Of the 141 features built in the 14 days
+    to 2026-10-18, 30 needed two or more attempts.'
+planning_minutes:
+  green_max: 21
+  amber_max: 30
+  unit: min
+  how: 75th and 95th percentile of planning time (start to finish, minus approval waits) of the 142 planning
+    runs that finished in the 14 days to 2026-10-18.
+build_minutes:
+  green_max: 140
+  amber_max: 208
+  unit: min
+  how: 75th and 95th percentile of build time (start to finish of the latest attempt, minus approval waits)
+    of the 86 builds that finished in the 14 days to 2026-10-18.
+stall_minutes:
+  green_max: 30
+  amber_max: 60
+  unit: min
+  how: 'Kept from the design. In the 14 days to 2026-10-18 the longest quiet spell inside a working planning
+    run was 60 min and 99% were under 12 min (4192 gaps), so over 30 min is unusual and over an hour is
+    a stall. Only planning can be checked: Forge records nothing inside a build.'
+waiting_hours:
+  green_max: 1
+  amber_max: 4
+  unit: h
+  how: Kept from the July design (under 1 h normal, over 4 h needs chasing); waiting is a person's time,
+    not the factory's, so recent builds do not change it.
+quiet_hours:
+  green_max: 4
+  amber_max: 24
+  unit: h
+  how: For a feature still in progress that is not planning and not waiting for a person, how long nothing
+    at all has been recorded for it. Forge records nothing inside a build, and the 95th percentile build
+    in the 14 days to 2026-10-18 took 208 min, so up to 4 h of silence is normal and over a day the record
+    has stopped moving. The feature stays in progress, shown as stalled, until Forge records how it ended.
+    Added on 2026-10-18 in place of the rule that ended a feature after a week without activity.

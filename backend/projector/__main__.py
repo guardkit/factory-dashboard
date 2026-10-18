@@ -1,54 +1,53 @@
-"""`python -m backend.projector` — run the projector process (connection A + mirror + health).
+"""`python -m backend.projector` — the dashboard's feed.
 
-NATS credentials + the forge-mirror path live in THIS process's environment only; no web request
-path ever imports the projector package (design §7 / fence 3).
+It applies the store's schema, then runs four loops: the heartbeat (10 s), the copy of Forge's
+record (15 s), the service checks (30 s) and the plan file (on change). It has no bus connection:
+the design of 17 October 2026 takes every build, planning, approval and delivery fact from Forge's
+record, which is complete and survives the dashboard being stopped; bus events do not.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from backend import ledger
-from backend.projector.consumers import Projector, open_rw, write_heartbeat
-from backend.projector.dwell import dwell_loop
-from backend.projector.forge_mirror import forge_db_path, mirror_loop
+from backend import db
+from backend.projector.forge_mirror import forge_db_path, mirror_loop, mirror_once
 from backend.projector.health_polls import health_loop
 from backend.projector.plan_mirror import mirror_plans_once, plan_mirror_loop
-from backend.projector.projections.base import record_change
+from backend.projector.store import open_rw, write_heartbeat
+
+HEARTBEAT_SECS = 10
+
+
+async def heartbeat_loop(conn: sqlite3.Connection, *, interval: int = HEARTBEAT_SECS) -> None:  # pragma: no cover
+    while True:
+        with contextlib.suppress(sqlite3.Error):
+            write_heartbeat(conn)
+        await asyncio.sleep(interval)
 
 
 async def _run() -> None:
     db_path = Path(os.environ.get("FACTORY_DASH_DB", "readmodel.db"))
-    nats_url = os.environ.get("FACTORY_DASH_NATS_URL", "")
-    if not nats_url:
-        raise SystemExit("FACTORY_DASH_NATS_URL is unset — the projector needs a dev credential (IN-3 pending).")
+    # The schema first, so the feed never depends on the web container having started.
+    db.apply_schema(db_path)
 
-    boot_conn = open_rw(db_path)
-    write_heartbeat(boot_conn)
-    # S3 cold-start: bootstrap the delivery ledger from forge `builds` (mode=ro, WAL-courtesy —
-    # ledger.py owns the fence-4 open/close). A receipt-bearing COMPLETE lands a `merged_pr` row;
-    # a receipt-less COMPLETE is mirrored into `builds` and surfaces as the delivered "merge
-    # unverified" gap. Honestly near-empty at launch (pr_url never populated to date — drift 2).
+    boot = open_rw(db_path)
     now = datetime.now(UTC)
-    boot_panels = ledger.bootstrap_from_forge(boot_conn, forge_db_path(), now)
-    if boot_panels:
-        record_change(boot_conn, boot_panels, [], now)
-    # S4: mirror the plan registry (plans.yaml → plan_milestones) at startup — projector-owned,
-    # never a web-request write (design §7 / M-D4). The file-change re-mirror runs in the loop below.
-    mirror_plans_once(boot_conn, now=now)
+    write_heartbeat(boot, now)
+    mirror_once(boot, forge_db_path(), now)
+    mirror_plans_once(boot, now=now)
+    boot.close()
 
-    projector = Projector(db_path, nats_url)
     await asyncio.gather(
-        projector.run(),
+        heartbeat_loop(open_rw(db_path)),
         mirror_loop(open_rw(db_path)),
         health_loop(open_rw(db_path)),
         plan_mirror_loop(open_rw(db_path)),
-        # F-5 stalled-dwell monitor (same cadence class as the heartbeat) — the projector is the
-        # sole writer, so the dwell verdict is manufactured here, never on a web path (M-D4).
-        dwell_loop(open_rw(db_path)),
     )
 
 

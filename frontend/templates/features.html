@@ -1,8 +1,23 @@
 {% extends "base.html" %}
-{% block title %}Features · factory-dashboard{% endblock %}
+{% import 'macros.html' as m %}
+{% block title %}Features · Factory dashboard{% endblock %}
 {% block content %}
 <h1 class="page-title">Features</h1>
-<p class="page-lead">The build board expanded to all known features (same fragment as P2,
-  unfiltered, plus terminal builds).</p>
-{% with panel = view.build_board %}{% include "fragments/p2_build_board.html" %}{% endwith %}
+<nav class="window-links" aria-label="Period">
+  <a href="/features?days=7" {% if view.days == 7 %}aria-current="page"{% endif %}>Last 7 days</a>
+  <a href="/features?days=30" {% if view.days == 30 %}aria-current="page"{% endif %}>Last 30 days</a>
+  <a href="/features?days=all" {% if view.days is none %}aria-current="page"{% endif %}>All</a>
+</nav>
+{% set panel = view.features %}
+<section class="panel-card features state-{{ panel.state.value }}">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">Newest first</h2>
+    {{ m.asof_chip(panel.as_of, source='factory') }}
+  </header>
+  <div class="panel-card__body">
+    {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+    <p class="page-lead">{{ panel.note }}</p>
+    {% if panel.rows %}{{ m.feature_table(panel.rows) }}{% else %}<p class="true-empty">{{ panel.empty_copy }}</p>{% endif %}
+  </div>
+</section>
 {% endblock %}

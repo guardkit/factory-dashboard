@@ -8,8 +8,9 @@ from backend.app import NAV
 from fastapi.routing import APIRoute
 from starlette.testclient import TestClient
 
-OPERATOR_PAGES = ["/", "/features", "/features/FEAT-3ED2", "/projects/study-tutor",
-                  "/delivered", "/reports", "/issues", "/fleet"]
+# On an empty store (the factory's record not read yet) every page still renders, honestly.
+OPERATOR_PAGES = ["/", "/features", "/features/FEAT-3ED2", "/projects", "/projects/acme/notes", "/projects/single",
+                  "/delivered", "/reports", "/reports?view=export", "/issues", "/fleet"]
 
 
 def test_every_operator_page_200(operator_client: TestClient) -> None:
@@ -26,13 +27,16 @@ def test_every_nav_item_resolves_to_a_live_route(operator_client: TestClient) ->
 
 
 def test_reports_renders_the_weekly_report(operator_client: TestClient) -> None:
-    """ux §4.7 (S4): /reports renders the weekly delivery report (headline + plan-vs-actual +
-    the client-safe export toggle), no longer the D0 'arrives at S4' placeholder."""
     body = operator_client.get("/reports").text
-    assert "Weekly delivery report" in body
-    assert "PLAN vs ACTUAL" in body
-    assert "client-safe export" in body
-    assert "arrives at S4" not in body
+    assert "Weekly report" in body
+    assert "Plan against actual" in body
+    assert "Client-safe version" in body
+
+
+def test_an_unread_store_says_so(operator_client: TestClient) -> None:
+    body = operator_client.get("/").text
+    assert "banner--stale" in body
+    assert "not read the factory&#39;s record yet" in body
 
 
 def test_unauthenticated_redirects_to_login(client: TestClient) -> None:
@@ -43,15 +47,25 @@ def test_unauthenticated_redirects_to_login(client: TestClient) -> None:
 
 
 def test_fragment_api_requires_login(client: TestClient) -> None:
-    r = client.get("/fragments/p1", follow_redirects=False)
-    assert r.status_code == 401
+    for path in ("/fragments/p2", "/fragments/freshness"):
+        r = client.get(path, follow_redirects=False)
+        assert r.status_code == 401, path
 
 
-CLIENT_REDIRECTED = ["/features", "/features/FEAT-3ED2", "/features/anything",
-                     "/projects/study-tutor", "/projects/anything", "/delivered", "/reports",
+def test_the_nav_reads_now_features_projects_reports_issues_fleet(operator_client: TestClient) -> None:
+    """Requested by the redesign session (18 October 2026): Projects joins the nav and Delivered
+    leaves it; the Delivered page itself stays."""
+    assert [label for label, _href, _key in NAV] == ["Now", "Features", "Projects", "Reports", "Issues", "Fleet"]
+    assert operator_client.get("/delivered").status_code == 200
+
+
+CLIENT_REDIRECTED = ["/features", "/features/FEAT-3ED2", "/features/anything", "/projects",
+                     "/projects/study-tutor", "/projects/anything", "/projects/acme/notes", "/delivered", "/reports",
                      "/reports?view=export", "/issues", "/fleet"]
-CLIENT_FORBIDDEN = ["/fragments/p1", "/events?once=1"]
-OPEN_ROUTES = {"/", "/login", "/logout"}  # "/" is tenant-aware: the client layout for a client
+CLIENT_FORBIDDEN = ["/fragments/p2", "/fragments/freshness", "/events?once=1"]
+# "/" is tenant-aware (the client layout for a client); /healthz is for the start script and
+# says only whether the factory's record is fresh (tested in tests/test_pages.py).
+OPEN_ROUTES = {"/", "/login", "/logout", "/healthz"}
 
 
 def test_client_session_redirected_from_operator_pages(clientco_client: TestClient) -> None:
@@ -82,7 +96,7 @@ def test_every_route_is_guarded_for_a_client(app, clientco_client: TestClient) -
 
 
 def test_client_session_gets_403_on_fragment_api(clientco_client: TestClient) -> None:
-    r = clientco_client.get("/fragments/p1", follow_redirects=False)
+    r = clientco_client.get("/fragments/p2", follow_redirects=False)
     assert r.status_code == 403
 
 
@@ -100,7 +114,7 @@ def test_operator_home_is_the_operator_layout(operator_client: TestClient) -> No
     assert r.status_code == 200
     assert "being provisioned" not in r.text
     assert 'href="/fleet"' in r.text and 'href="/issues"' in r.text  # the operator nav
-    assert operator_client.get("/fragments/p1").status_code == 200
+    assert operator_client.get("/fragments/p2").status_code == 200
 
 
 def test_client_layout_signs_out_with_a_post_form(clientco_client: TestClient) -> None:

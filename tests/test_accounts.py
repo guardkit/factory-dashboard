@@ -253,7 +253,7 @@ def test_logout_ends_the_session(client: TestClient) -> None:
     r = client.post("/logout", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/login"
     assert client.get("/", follow_redirects=False).headers["location"] == "/login"
-    assert client.get("/fragments/p1").status_code == 401
+    assert client.get("/fragments/p2").status_code == 401
 
 
 # --- cookie ------------------------------------------------------------------------

@@ -1,0 +1,26 @@
+{% import 'macros.html' as m %}
+{# What is waiting for a person, longest first. Decisions are made in the usual approval channel. #}
+<section class="panel-card needs-you state-{{ panel.state.value }}" id="panel-p4" data-panel="p4">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">{{ panel.title }} ({{ panel.items | length }})</h2>
+    {{ m.asof_chip(panel.as_of, source='factory') }}
+  </header>
+  <div class="panel-card__body">
+    {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+    {% if panel.items %}
+      <ul class="needs-you__list">
+      {% for it in panel.items %}
+        <li class="needs-you__item">
+          {{ m.band_chip(it.band) }}
+          <span class="needs-you__headline">{{ it.what }}:</span>
+          {% if it.link and it.link != '/issues' %}<a href="{{ it.link }}">{{ it.subject }}</a>{% else %}<span>{{ it.subject }}</span>{% endif %}
+          <span class="needs-you__age" title="{{ it.age_title }}">for {{ it.age_label }}</span>
+        </li>
+      {% endfor %}
+      </ul>
+      <p class="observes-only">Decide in the usual approval channel; this dashboard only shows it.</p>
+    {% else %}
+      <p class="true-empty">{{ panel.empty_copy }}</p>
+    {% endif %}
+  </div>
+</section>

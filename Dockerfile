@@ -1,7 +1,6 @@
-# factory-dashboard — one image, two services (the compose front door, G-02/L4).
-#   - "board"     : uvicorn backend.app:app on 127.0.0.1:8090 (host network — loopback-only,
-#                   byte-identical exposure to the bare processes this replaces).
-#   - "projector" : python -m backend.projector (NATS consumers + mirrors + the F-5 stall monitor).
+# factory-dashboard — one image, two services.
+#   - "board"     : uvicorn backend.app:app on 127.0.0.1:8090 (host network, loopback only).
+#   - "projector" : python -m backend.projector (the feed: copies Forge's record, checks services).
 # No ENTRYPOINT is fixed — the compose services choose their command from the same image
 # (the office-manager idiom). Dependencies come from uv.lock (frozen); the project itself runs
 # from the copied source, so no packaging step is needed.

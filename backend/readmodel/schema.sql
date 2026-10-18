@@ -1,19 +1,18 @@
--- factory-dashboard — operational read-model schema (readmodel.db)
--- Source of record: factory-dashboard-system-design-2026-07-08.md §4 (every table rebuildable),
--- as amended by the 2026-07-11 dated addenda (BINDING) and the capability-verification note.
+-- factory-dashboard — the dashboard's own store (readmodel.db).
 --
--- This is the OPERATOR store. Each configured client tenant gets its OWN reduced store
--- (ledger_client_{tenant}.db) built from schema_client.sql — separate files, separate feeders
--- (design §4 / arch §4: isolation is structural, not a WHERE clause). The reduced client DDL is
--- therefore NOT created here; it lives in schema_client.sql (ux §9.1 lists both as S1 deliverables).
+-- Since 17 October 2026 (design docs/architecture/live-data-cost-time-voice-design-2026-10-17.md)
+-- Forge's build record is the single source of truth for features, builds, planning, approvals,
+-- delivery and time. The feed (`python -m backend.projector`) copies the parts of it the pages need
+-- into the forge_* tables below every 15 seconds, read-only, and nothing else writes them. The
+-- store is disposable: delete it and the feed rebuilds it from Forge's record on its next pass.
 --
--- S1 (D0) ships the DDL + the founding seeds (norms, plan_milestones is EMPTY — its mirror is S4's).
--- The projector (S2+) is the SOLE writer of this DB; all web-layer opens are URI mode=ro (design §7/M-D4).
+-- Both containers apply this file at start (it is idempotent), so neither depends on the other
+-- having started first. The web side opens the store read-only (URI mode=ro) on every request.
 
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
--- §4.0 — tenant registry (config-sourced from tenants.yaml, mirrored here for joins).
+-- Tenant registry (from backend/config/tenants.yaml, mirrored here for joins).
 -- 'operator' is reserved and has no client store.
 CREATE TABLE IF NOT EXISTS tenants (
     tenant_slug   TEXT PRIMARY KEY,
@@ -24,208 +23,154 @@ CREATE TABLE IF NOT EXISTS tenants (
     store_path    TEXT
 );
 
--- §7 — users -> tenant binding. Tenant is RE-READ from users.tenant_slug per request by
--- authenticated username, never trusted from the cookie payload (F-2f). credential_hash is a
--- PBKDF2-HMAC-SHA256 digest (see backend/auth.py); v1 skeleton auth, hardening deferred.
+-- Users -> tenant binding. The tenant is re-read per request by username, never trusted from the
+-- cookie. credential_hash is a PBKDF2-HMAC-SHA256 digest (backend/auth.py).
 CREATE TABLE IF NOT EXISTS users (
     username        TEXT PRIMARY KEY,
     tenant_slug     TEXT NOT NULL REFERENCES tenants(tenant_slug),
     credential_hash TEXT NOT NULL
 );
 
--- §4.1 — consumer watermarks (resume + SSE Last-Event-ID). Populated by the projector (S2).
-CREATE TABLE IF NOT EXISTS consumer_watermarks (
-    stream          TEXT NOT NULL,
-    consumer        TEXT NOT NULL,
-    last_stream_seq INTEGER NOT NULL DEFAULT 0,
-    last_event_at   TEXT,
-    updated_at      TEXT NOT NULL,
-    PRIMARY KEY (stream, consumer)
-);
-
--- SSE change log (design §6): the `id:` on the /events push channel is a read-DB change counter.
--- The projector appends ONE row per panel whose projected state changed (notification-only — no
--- row data ever rides the push channel, DDR-DASH-002); the SSE endpoint tails this by `seq` and a
--- reconnecting client sends Last-Event-ID to replay missed notifications (or refetch-all if its id
--- predates the retained window). This is the concrete realisation of design §6's change counter;
--- tests/fixtures additions to §4 are permitted (ux §9.1 coach note).
+-- Live-update change log: the feed appends one row per page section whose data changed; the
+-- /events channel tails it by `seq` (notification only, no row data). The feed prunes rows older
+-- than an hour; a client whose last id predates the kept rows refetches everything.
 CREATE TABLE IF NOT EXISTS change_log (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
     panel      TEXT NOT NULL,
-    scope_keys TEXT,               -- JSON list of scope keys (e.g. feature ids), nullable
+    scope_keys TEXT,
     at         TEXT NOT NULL
 );
 
--- §4.2 — agents roster (P1). Dual-source: fleet.* subjects AND $KV.agent-registry.> re-puts
--- (capability note drift 3). source_kind keeps register-only / kv-only / heartbeating honest.
-CREATE TABLE IF NOT EXISTS agents (
-    agent_id          TEXT PRIMARY KEY,
-    name              TEXT,
-    status            TEXT,
-    queue_depth       INTEGER,
-    active_tasks      INTEGER,
-    uptime_seconds    INTEGER,
-    last_heartbeat_at TEXT,
-    deregistered_at   TEXT,
-    source_kind       TEXT CHECK (source_kind IN ('fleet','kv','register_only')),
-    manifest_json     TEXT
-);
-
--- §4.3 — builds (P2). source keeps bootstrap-vs-live honest. Task counters are bus-only fields
--- (BuildComplete); forge_sqlite rows carry them as NULL -> rendered unmeasured (drift 6).
-CREATE TABLE IF NOT EXISTS builds (
-    build_id        TEXT PRIMARY KEY,
-    feature_id      TEXT NOT NULL,
-    project         TEXT,
-    repo            TEXT,
-    branch          TEXT,
-    mode            TEXT,
-    status          TEXT,
-    queued_at       TEXT,
-    started_at      TEXT,
-    completed_at    TEXT,
-    pr_url          TEXT,
-    merge_sha       TEXT,               -- amended DDR-DASH-001 (2026-07-11): merge receipt, primary
-    tasks_total     INTEGER,
-    tasks_completed INTEGER,
-    tasks_failed    INTEGER,
-    wave_total      INTEGER,
-    current_wave    INTEGER,
-    progress_pct    REAL,
-    duration_seconds INTEGER,
-    failure_reason  TEXT,
-    correlation_id  TEXT,               -- nullable at the envelope level — guard it (drift/§3)
-    title           TEXT,               -- no title feed exists v1 (drift 9 / A-9); nullable
-    source          TEXT NOT NULL CHECK (source IN ('bus','forge_sqlite','both'))
-);
-
--- §4.4 — stage & gate events (P3). coach_score is operator-view only (DF-008): never leaves here.
--- GATED derives from StageComplete.gate_mode + stage_log (no stage-gated producer — drift 5).
-CREATE TABLE IF NOT EXISTS stage_events (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    build_id      TEXT,
-    feature_id    TEXT,
-    stage_label   TEXT,
-    target_kind   TEXT,
-    status        TEXT,
-    gate_mode     TEXT,
-    coach_score   REAL,
-    duration_secs INTEGER,
-    completed_at  TEXT,
-    origin        TEXT
-);
-
--- §4.5 — approvals (P4). Keyed on request_id (slot_id is vestigial/unfed — drift 7).
--- decision enum: approve|reject|defer|override.
-CREATE TABLE IF NOT EXISTS approvals (
-    request_id       TEXT PRIMARY KEY,
-    agent_id         TEXT,
-    slot_id          TEXT,              -- vestigial; nullable, unfed (drift 7)
-    action_description TEXT,
-    risk_level       TEXT,
-    requested_at     TEXT,
-    timeout_seconds  INTEGER,
-    decision         TEXT CHECK (decision IN ('approve','reject','defer','override')),
-    decided_by       TEXT,
-    decided_at       TEXT,
-    latency_seconds  INTEGER,
-    state            TEXT CHECK (state IN ('open','decided','timed_out'))
-);
-
--- §4.6 — issue register (Q3). Derived by projection rules (§1 Q3), never by a model.
-CREATE TABLE IF NOT EXISTS issues (
-    issue_id   TEXT PRIMARY KEY,
-    scope_type TEXT,
-    scope_id   TEXT,
-    kind       TEXT CHECK (kind IN ('escalation','gate_rejected','approval_waiting',
-                                    'stalled','build_failed','seam_finding')),
-    opened_at  TEXT,
-    closed_at  TEXT,
+-- Service checks (Fleet page) and the feed's own heartbeat (service='projector').
+CREATE TABLE IF NOT EXISTS service_health (
+    service    TEXT PRIMARY KEY,
+    status     TEXT,
     detail     TEXT,
-    source_ref TEXT
+    checked_at TEXT
 );
 
--- §4.7 — planning runs mirror (P5). Read-only periodic mirror of forge SQLite.
-CREATE TABLE IF NOT EXISTS planning_mirror (
+-- When each source was last read. source='forge' is Forge's build record. last_success_at drives
+-- the stale-data banner; a failed attempt keeps the last success and records the error.
+CREATE TABLE IF NOT EXISTS mirror_status (
+    source          TEXT PRIMARY KEY,
+    last_attempt_at TEXT,
+    last_success_at TEXT,
+    last_error      TEXT,
+    content_hash    TEXT
+);
+
+-- ---------------------------------------------------------------------------------------------
+-- The copy of Forge's record. Column names are Forge's own. builds, planning runs, queue items
+-- and missions change in place, so each pass replaces them; stage rows and planning events are
+-- only ever added by Forge, so each pass adds the rows after the last id already copied.
+-- ---------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS forge_builds (
+    build_id          TEXT PRIMARY KEY,
+    feature_id        TEXT NOT NULL,
+    repo              TEXT,
+    branch            TEXT,
+    project           TEXT,
+    status            TEXT,
+    triggered_by      TEXT,
+    originating_user  TEXT,
+    correlation_id    TEXT,
+    queued_at         TEXT,
+    started_at        TEXT,
+    completed_at      TEXT,
+    error             TEXT,
+    terminal_class    TEXT,
+    mission_id        TEXT,
+    mission_role      TEXT   -- 'feature', 'mission-merge' (a mission's own merge, not a feature), or NULL
+);
+CREATE INDEX IF NOT EXISTS forge_builds_feature ON forge_builds(feature_id);
+CREATE INDEX IF NOT EXISTS forge_builds_correlation ON forge_builds(correlation_id);
+
+CREATE TABLE IF NOT EXISTS forge_stage_log (
+    id                INTEGER PRIMARY KEY,
+    build_id          TEXT NOT NULL,
+    stage_label       TEXT,
+    target_identifier TEXT,
+    status            TEXT,
+    gate_mode         TEXT,
+    started_at        TEXT,
+    completed_at      TEXT,
+    details_json      TEXT
+);
+CREATE INDEX IF NOT EXISTS forge_stage_log_build ON forge_stage_log(build_id);
+
+CREATE TABLE IF NOT EXISTS forge_planning_runs (
     correlation_id    TEXT PRIMARY KEY,
     state             TEXT,
     originating_user  TEXT,
     expected_approver TEXT,
     request_text      TEXT,
     target_repo       TEXT,
+    triggered_by      TEXT,
+    defer_count       INTEGER,
+    paused_at         TEXT,
+    escalated_at      TEXT,
     queued_at         TEXT,
     started_at        TEXT,
     completed_at      TEXT,
-    handoff_branch    TEXT,
-    handoff_path      TEXT,
-    defer_count       INTEGER,
-    escalated_at      TEXT,
-    error             TEXT,
-    mirrored_at       TEXT
+    error             TEXT
 );
 
--- §4.8 — delivery ledger (P7). One row PER BAR CLEARED (§5): graduation appends, never mutates.
--- merge_sha added by amended DDR-DASH-001 (2026-07-11): bar clears on merge_sha OR pr_url.
-CREATE TABLE IF NOT EXISTS ledger (
-    feature_id   TEXT NOT NULL,
-    project      TEXT,
-    tenant       TEXT,
-    title        TEXT,
-    bar          TEXT CHECK (bar IN ('merged_pr','deployed_live_verified')),
-    delivered_at TEXT,
-    pr_url       TEXT,
-    merge_sha    TEXT,
-    repo         TEXT,
-    branch       TEXT,
-    evidence_ref TEXT,
-    PRIMARY KEY (feature_id, bar)
+CREATE TABLE IF NOT EXISTS forge_planning_events (
+    id             INTEGER PRIMARY KEY,
+    correlation_id TEXT NOT NULL,
+    stage_label    TEXT,
+    status         TEXT,
+    gate_mode      TEXT,
+    actor_identity TEXT,
+    details_json   TEXT,
+    recorded_at    TEXT
 );
+CREATE INDEX IF NOT EXISTS forge_planning_events_run ON forge_planning_events(correlation_id);
 
--- §4.9 — norms (Q2). Founding values (design §1 Q2 table); update by dated note only.
-CREATE TABLE IF NOT EXISTS norms (
-    metric    TEXT PRIMARY KEY,
-    green     TEXT NOT NULL,
-    amber     TEXT NOT NULL,
-    red       TEXT NOT NULL,
-    source    TEXT NOT NULL,
-    pinned_at TEXT NOT NULL
-);
-
--- §4.10 — back-half projections, shaped now / populated 📋 (deploys, live_verdicts, episodes).
-CREATE TABLE IF NOT EXISTS deploys (
-    deploy_id        TEXT PRIMARY KEY,
-    feature_id       TEXT,
-    env_id           TEXT,
-    artifact_digest  TEXT,
-    image_digests    TEXT,
-    deploy_record_ref TEXT,
-    failed_step      TEXT,
+CREATE TABLE IF NOT EXISTS forge_queue (
+    id               INTEGER PRIMARY KEY,
+    sentence         TEXT,
+    target_repo      TEXT,
+    kind             TEXT,
     status           TEXT,
-    duration_seconds INTEGER,
+    originating_user TEXT,
     correlation_id   TEXT,
-    event_at         TEXT
+    queued_at        TEXT,
+    admitted_at      TEXT,
+    closed_at        TEXT,
+    closed_reason    TEXT
 );
-CREATE TABLE IF NOT EXISTS live_verdicts (
-    verdict_id        TEXT PRIMARY KEY,
-    feature_id        TEXT,
-    verdict           TEXT,   -- pass|fail|instrument_fail|environment_fail
-    gate_ids          TEXT,
-    assertions_json   TEXT,
-    evidence_index_ref TEXT,
-    app_url           TEXT,
-    attempt           INTEGER,
-    run_id            TEXT,
-    event_at          TEXT
-);
-CREATE TABLE IF NOT EXISTS episodes (
-    episode_id  TEXT PRIMARY KEY,
-    episode_type TEXT,        -- the six backward-edge types
-    feature_id  TEXT,
-    payload_json TEXT,
-    recorded_at TEXT
+CREATE INDEX IF NOT EXISTS forge_queue_correlation ON forge_queue(correlation_id);
+
+CREATE TABLE IF NOT EXISTS forge_missions (
+    id             TEXT PRIMARY KEY,
+    title          TEXT,
+    target_repo    TEXT,
+    status         TEXT,
+    correlation_id TEXT,
+    created_at     TEXT,
+    closed_at      TEXT,
+    closed_reason  TEXT
 );
 
--- §4.11 — gateway-side usage (cost). Interim: dashboard-own-calls slice only until IN-5.
+-- ---------------------------------------------------------------------------------------------
+-- Plan baseline (from plans.yaml, mirrored by the feed). Deviation is computed, never stored.
+-- ---------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS plan_milestones (
+    milestone_id  TEXT PRIMARY KEY,
+    tenant        TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    feature_ids_json TEXT NOT NULL DEFAULT '[]',
+    project       TEXT,
+    target_window TEXT,
+    mirrored_at   TEXT
+);
+
+-- ---------------------------------------------------------------------------------------------
+-- Cost tables from the July design, still unfed. Part B of the October design replaces them with
+-- LiteLLM's own spend log; they stay until then so nothing that reads them breaks.
+-- ---------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS usage_gateway (
     period            TEXT,
     key_alias         TEXT,
@@ -238,8 +183,6 @@ CREATE TABLE IF NOT EXISTS usage_gateway (
     is_nominal        INTEGER,
     PRIMARY KEY (period, key_alias)
 );
-
--- §4.12 — frontier-side usage (cost). 📋 ask A-4.
 CREATE TABLE IF NOT EXISTS usage_frontier (
     feature_id    TEXT,
     task_id       TEXT,
@@ -252,8 +195,6 @@ CREATE TABLE IF NOT EXISTS usage_frontier (
     source        TEXT CHECK (source IN ('b7_payload','build_event','operator_reported')),
     PRIMARY KEY (feature_id, task_id, stage)
 );
-
--- §4.13 — cost rollups. frontier and local are SEPARATE columns, never summed (arch §8).
 CREATE TABLE IF NOT EXISTS cost_rollups (
     scope_type       TEXT CHECK (scope_type IN ('project','feature','seat')),
     scope_id         TEXT,
@@ -264,36 +205,3 @@ CREATE TABLE IF NOT EXISTS cost_rollups (
     coverage_note    TEXT,
     PRIMARY KEY (scope_type, scope_id, window)
 );
-
--- §4.14 — service health (P6). checked_at drives the as-of chip + the dot-demotion rule (§5.2).
-CREATE TABLE IF NOT EXISTS service_health (
-    service    TEXT PRIMARY KEY,
-    status     TEXT,
-    detail     TEXT,
-    checked_at TEXT
-);
-
--- ux §4.7 — plan registry mirror target. Mirrored from plans.yaml BY THE PROJECTOR (S4), the
--- same way tenants.yaml -> tenants (startup + on file change, never a web-request write).
--- SHIPS EMPTY at S1 — the DDL only. Deviation state is computed by the query layer, never stored.
-CREATE TABLE IF NOT EXISTS plan_milestones (
-    milestone_id  TEXT PRIMARY KEY,
-    tenant        TEXT NOT NULL,
-    title         TEXT NOT NULL,
-    feature_ids_json TEXT NOT NULL DEFAULT '[]',
-    project       TEXT,
-    target_window TEXT,
-    mirrored_at   TEXT
-);
-
--- ============================================================================
--- SEED — norms founding values (design §1 Q2 table; source: gap analysis §2, 2026-07-07).
--- Acceptance item 4's [G] verdict is uncomputable without these. Update by dated note only.
--- ============================================================================
-INSERT OR IGNORE INTO norms (metric, green, amber, red, source, pinned_at) VALUES
-    ('runs',              '1',    '2-3',    '>3',                'gap-analysis-2026-07-07 §2', '2026-07-07'),
-    ('turns_per_task',    '<=2',  '2-4',    '>4',                'gap-analysis-2026-07-07 §2', '2026-07-07'),
-    ('sdk_ceiling_hits',  '0',    '-',      '>=1',               'gap-analysis-2026-07-07 §2', '2026-07-07'),
-    ('gate_failed_gated', '0-1',  '2-3',    '>3',                'gap-analysis-2026-07-07 §2', '2026-07-07'),
-    ('stage_dwell',       '<30m', '30-120m','>120m',             'gap-analysis-2026-07-07 §2', '2026-07-07'),
-    ('approval_waiting',  '<1h',  '1-4h',   '>4h / TIMED_OUT',   'gap-analysis-2026-07-07 §2', '2026-07-07');

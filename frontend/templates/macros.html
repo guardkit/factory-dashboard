@@ -1,14 +1,12 @@
-{# Shared honesty-surface macros (ux §5). Every panel renders through these so the honesty
-   treatments are structural, not per-page. Stable class names are a public contract (§7.4). #}
+{# Shared pieces. Class names are stable so a later stylesheet can restyle them. #}
 
 {% macro station_glyph(state) -%}
-{{ {'passed':'●','current':'◉','future':'○','pending':'░'}.get(state, '○') }}
+{{ {'passed':'●','current':'◉','waiting':'◔','future':'○','stopped':'✕'}.get(state, '○') }}
 {%- endmacro %}
 
-{# §5.1 The as-of chip — never omitted. FEED-PENDING renders the inert marker with no timestamp.
-   data-asof / data-threshold are read by static/freshness.js to drift the dot on the wall clock. #}
-{% macro asof_chip(a) -%}
-<span class="asof-chip asof-chip--{{ a.dot_state }}"
+{# When the data on a card was read. data-asof / data-threshold let freshness.js age the dot. #}
+{% macro asof_chip(a, source='') -%}
+<span class="asof-chip asof-chip--{{ a.dot_state }}"{% if source %} data-source="{{ source }}"{% endif %}
       {% if a.title_iso %}title="{{ a.title_iso }}"{% endif %}
       {% if a.asof_epoch is not none %}data-asof="{{ a.asof_epoch }}" data-threshold="{{ a.threshold_secs }}"{% endif %}>
   <span class="asof-chip__label">{{ a.prefix }} {{ a.label }}</span>
@@ -17,13 +15,13 @@
 </span>
 {%- endmacro %}
 
-{# §5.5 Norm band chip — colour + letter ALWAYS together (colour is never the only signal). #}
+{# On-track colour: always a word with the colour. #}
 {% macro band_chip(chip) -%}
 {% set cls = ('g' if chip.band == 'G' else 'a' if chip.band == 'A' else 'r' if chip.band == 'R' else 'none') %}
-<span class="band-chip band-chip--{{ cls }}">[{{ chip.band }}]{% if chip.label %} {{ chip.label }}{% endif %}</span>
+<span class="band-chip band-chip--{{ cls }}">{{ {'G':'●','A':'▲','R':'■'}.get(chip.band, '–') }}{% if chip.label %} {{ chip.label }}{% endif %}</span>
 {%- endmacro %}
 
-{# §5.3 Journey bar — all 8 stations, never a truncated subset. Mini variant used in P2 rows. #}
+{# How far through: all nine steps, never a subset. #}
 {% macro journey_bar(j, mini=False) -%}
 <div class="journey-bar {% if mini %}journey-bar--mini{% endif %}">
   <ol class="journey-bar__stations">
@@ -31,44 +29,44 @@
     <li class="journey-station journey-station--{{ st.glyph_state }}" title="{{ st.name }}">
       <span class="journey-station__glyph" aria-hidden="true">{{ station_glyph(st.glyph_state) }}</span>
       {% if not mini %}<span class="journey-station__name">{{ st.name }}</span>{% endif %}
+      <span class="visually-hidden">{{ st.name }}: {{ st.glyph_state }}</span>
     </li>
   {% endfor %}
   </ol>
-  <div class="journey-bar__meta">
-    <span class="journey-bar__current">{{ j.current_label }}</span>
-    {% if j.progress_line %}<span class="journey-bar__progress">{{ j.progress_line }}</span>{% endif %}
-  </div>
+  {% if not mini %}<div class="journey-bar__meta"><span class="journey-bar__current">{{ j.current_label }}</span></div>{% endif %}
 </div>
 {%- endmacro %}
 
-{# §5.4 Provenance badge — keeps bootstrap-vs-live honest at the row level. #}
-{% macro provenance(b) -%}
-<span class="provenance-badge" title="src: {{ b.source }}">{{ b.short }}</span>
-{%- endmacro %}
-
-{# §7.3 FEED-PENDING spend slot — present from D0, never a numeric 0. Names its gate (operator)
-   or plain language (client). #}
+{# Cost is not measured yet: shown as a gap, never as a zero. #}
 {% macro spend_slot(s) -%}
-<div class="spend-slot state-pending" data-state="pending">
-  <span class="spend-slot__label">SPEND — FEED PENDING</span>
-  <span class="spend-slot__gate">{% if s.plain_language %}Cost reporting is being provisioned.{% else %}{{ s.gate_label }}{% endif %}</span>
-  <span class="spend-slot__share">captured share: {{ s.captured_share }}</span>
-</div>
+<span class="spend-slot" data-state="not-measured">{{ s.text }}</span>
 {%- endmacro %}
 
-{# In-panel LAGGING note (panel-level §5.2 / §5.6): a stale feeding stream's watermark. #}
 {% macro lagging_note(a) -%}
-<p class="lagging-note">projection lagging (since {{ a.label }})</p>
+<p class="lagging-note">Showing the last known data ({{ a.prefix }} {{ a.label }}).</p>
 {%- endmacro %}
 
-{# Named coverage gaps (§4.2 Q2/Q3) — blind spots stated, never zeroed away. #}
-{% macro coverage_gaps(gaps) -%}
-{% if gaps %}
-<div class="coverage-gaps">
-  <span class="coverage-gaps__label">COVERAGE GAPS</span>
-  <ul class="coverage-gaps__list">
-    {% for g in gaps %}<li>{{ g }}</li>{% endfor %}
-  </ul>
-</div>
-{% endif %}
+{# A feature list: title first, code after. Used by Features, the project page and Now. #}
+{% macro feature_table(rows, show_project=True) -%}
+<table class="dense-table feature-list">
+  <thead>
+    <tr><th scope="col">Feature</th>{% if show_project %}<th scope="col">Project</th>{% endif %}
+      <th scope="col">How far</th><th scope="col">Where it stands</th><th scope="col">On track</th>
+      <th scope="col">Elapsed</th><th scope="col">Sent</th><th scope="col">Cost</th></tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr class="feature-list__row {% if not r.in_progress %}feature-list__row--finished{% endif %}">
+      <td><a class="feature-title" href="{{ r.link }}">{{ r.title }}</a>{% if r.code %} <span class="feature-id">({{ r.code }})</span>{% endif %}</td>
+      {% if show_project %}<td>{% if r.project_link %}<a href="{{ r.project_link }}">{{ r.project }}</a>{% else %}—{% endif %}</td>{% endif %}
+      <td>{{ journey_bar(r.journey, mini=True) }}</td>
+      <td>{{ r.status_text }}</td>
+      <td>{{ band_chip(r.band) }}</td>
+      <td class="num">{{ r.elapsed }}</td>
+      <td class="num" title="{{ r.sent_title }}">{{ r.sent_label }}</td>
+      <td><span class="spend-slot" data-state="not-measured">not measured yet</span></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
 {%- endmacro %}
