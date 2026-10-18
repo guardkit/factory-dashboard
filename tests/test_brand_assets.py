@@ -6,6 +6,7 @@ These tests extend it to the new sub-folders and check that what is shipped is w
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -13,7 +14,10 @@ FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 STATIC = FRONTEND / "static"
 FONTS = STATIC / "fonts"
 LOGOS = STATIC / "logos"
-VENDORED = {"htmx.min.js", "htmx-ext-sse.js"}
+VENDORED = {STATIC / "htmx.min.js", STATIC / "htmx-ext-sse.js"}  # top level only
+# SHA-256 of the 27 <symbol> elements as copied from the design (components/bundle.js, the P object).
+# A deliberate icon change updates this value; a silent edit to the drawing data fails.
+SPRITE_SYMBOLS_SHA256 = "61ed1634cee5eb815677951899a7573bb9caa1af59bf7f12c2cdd029fbd32a3a"
 
 EXPECTED_FONTS = {
     "urbanist-latin-600-normal.woff2",
@@ -46,7 +50,7 @@ def test_logos_are_png() -> None:
 def test_no_external_references_in_any_static_css_or_js() -> None:
     """Recursive, so a stylesheet or script in a sub-folder cannot fetch from outside."""
     for f in STATIC.rglob("*"):
-        if f.suffix in {".css", ".js"} and f.name not in VENDORED:
+        if f.suffix in {".css", ".js"} and f not in VENDORED:
             text = f.read_text(encoding="utf-8")
             assert "http://" not in text and "https://" not in text, f
 
@@ -58,3 +62,5 @@ def test_icon_sprite_is_inline_and_complete() -> None:
     assert {"check", "alert", "x", "clock", "mic", "chat", "home", "report"} <= set(ids)
     assert "http" not in sprite and "<script" not in sprite
     assert 'aria-hidden="true"' in sprite
+    symbols = "".join(re.findall(r"<symbol .*?</symbol>", sprite))
+    assert hashlib.sha256(symbols.encode()).hexdigest() == SPRITE_SYMBOLS_SHA256
