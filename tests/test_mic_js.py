@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -36,5 +37,36 @@ def test_the_microphone_states_and_where_it_hides() -> None:
     assert results["insecure"] == results["no_recorder"] == results["no_microphone"] == "hidden"
     assert results["hold"] == "listening, thinking, speaking, idle"
     assert results["question.ogg"] == "audio/ogg;codecs=opus" and results["question.mp4"] == "audio/mp4"
-    assert len(results) == 16
+    assert results["signed_out"] == results["forbidden"] == results["bad_gateway"] == "error"
+    assert results["overlapping_prompts"] == "one recording, both microphones closed"
+    assert len(results) == 20
 
+
+
+CHAT_JS = ROOT / "frontend" / "static" / "chat.js"
+
+
+def test_the_chat_clears_its_box_and_answered_reply_forms_from_a_listener() -> None:
+    """chat.js replaces the inline after-request attributes: on a successful answer the question box is
+    reset and an answered reply form removed; a failed request leaves both as they are."""
+    script = (
+        f"const m = require({json.dumps(str(CHAT_JS))});"
+        "const form = (cls) => ({classList: {contains: (c) => c === cls}, resets: 0, removed: 0,"
+        "  reset() { this.resets++; }, remove() { this.removed++; }});"
+        "const box = form('chat__form'), reply = form('chat-exchange__reply'), other = form('elsewhere');"
+        "m.afterAnswer({target: box, detail: {successful: false}});"
+        "m.afterAnswer({target: reply, detail: {successful: false}});"
+        "const before = [box.resets, reply.removed];"
+        "for (const f of [box, reply, other]) m.afterAnswer({target: f, detail: {successful: true}});"
+        "console.log(JSON.stringify({before, box: box.resets, reply: reply.removed,"
+        "  other: [other.resets, other.removed]}));"
+    )
+    out = subprocess.run([_node(), "-e", script], capture_output=True, text=True, timeout=30, check=True)
+    assert json.loads(out.stdout) == {"before": [0, 0], "box": 1, "reply": 1, "other": [0, 0]}
+
+
+def test_no_template_has_an_inline_event_handler() -> None:
+    """The redesign's rule: behaviour lives in static scripts, never in on…= or hx-on attributes."""
+    for template in (ROOT / "frontend" / "templates").rglob("*.html"):
+        text = template.read_text(encoding="utf-8")
+        assert not re.search(r"\s(on[a-z]+|hx-on[:\w-]*)\s*=", text), template

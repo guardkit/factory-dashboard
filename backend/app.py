@@ -32,6 +32,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.requests import ClientDisconnect
 from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -613,7 +614,7 @@ def _register_voice_routes(app: FastAPI) -> None:
     """Voice (design requirement 10): the chat's guards, plus limits on the recording."""
 
     @app.post("/api/voice/ask")
-    async def voice_ask(request: Request, user: OperatorApi) -> JSONResponse:
+    async def voice_ask(request: Request, user: OperatorApi) -> Response:  # noqa: PLR0911 (one per refusal)
         # The same guards as POST /chat: operators only (401/403 above), same-origin only. The body
         # is read only after the guards and the length check, and never beyond the limit.
         if not same_origin(request):
@@ -627,6 +628,8 @@ def _register_voice_routes(app: FastAPI) -> None:
             form = await request.form(max_files=1, max_fields=3, max_part_size=4096)
         except StarletteHTTPException:  # a malformed form
             return JSONResponse({"message": voice.NO_RECORDING}, status_code=400)
+        except ClientDisconnect:  # the caller went away mid-upload: nothing to answer, nothing to log
+            return Response(status_code=400)
         try:
             upload = form.get("audio")
             if not isinstance(upload, UploadFile):

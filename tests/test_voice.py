@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
+import re
+import socket
 import threading
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -18,6 +22,7 @@ from backend import voice
 from backend.app import create_app
 from backend.chat import service
 from backend.chat.service import LIMITED, NOT_SET_UP, HourlyLimit
+from starlette.requests import ClientDisconnect, Request
 from starlette.testclient import TestClient
 
 from tests.conftest import LOOPBACK_URL, login
@@ -38,9 +43,27 @@ def wav(seconds: float, rate: int = 8000) -> bytes:
     return b"RIFF" + (len(body) + data_size).to_bytes(4, "little") + body + b"\x00" * data_size
 
 
+def ogg_page(granule: int, payload: bytes, header_type: int = 0) -> bytes:
+    """One Ogg page: the 27-byte header, a segment table, and the payload (under 255 bytes here)."""
+    return (b"OggS\x00" + bytes([header_type]) + granule.to_bytes(8, "little") + b"\x01\x00\x00\x00"
+            + b"\x00" * 8 + bytes([1, len(payload)]) + payload)
+
+
 def ogg(seconds: float) -> bytes:
-    granule = int(seconds * 48000).to_bytes(8, "little")
-    return b"OggS\x00\x02" + b"\x00" * 8 + b"x" * 100 + b"OggS\x00\x04" + granule + b"\x00" * 20
+    return (ogg_page(0, b"OpusHead" + b"\x00" * 11, 2) + ogg_page(0xFFFFFFFFFFFFFFFF, b"x" * 100)
+            + ogg_page(int(seconds * 48000), b"y" * 60, 4))
+
+
+class Chunks(httpx.SyncByteStream):
+    """A streamed reply, counting how many chunks were taken."""
+
+    def __init__(self, chunks: Iterator[bytes]) -> None:
+        self.chunks, self.taken = chunks, 0
+
+    def __iter__(self) -> Iterator[bytes]:
+        for chunk in self.chunks:
+            self.taken += 1
+            yield chunk
 
 
 class FakeSpeech:
@@ -57,6 +80,8 @@ class FakeSpeech:
         if isinstance(reply, Exception):
             raise reply
         status, body = reply
+        if isinstance(body, Chunks):
+            return httpx.Response(status, stream=body)
         if isinstance(body, bytes):
             return httpx.Response(status, content=body)
         return httpx.Response(status, json=body)
@@ -108,7 +133,7 @@ def test_a_spoken_question_gets_the_chats_answer_and_audio(world: tuple[TestClie
     assert d["voice_note"] == ""
     # the browser's fragment: the chat's own exchange, marked as spoken, links included
     assert 'class="chat-exchange chat-exchange--answer"' in d["html"]
-    assert '<p class="chat-exchange__how">Spoken</p>' in d["html"]
+    assert 'What was delivered this week? <span class="chat-exchange__how">Spoken</span></p>' in d["html"]
     assert 'href="/features/FEAT-0001"' in d["html"]
     # the chat model saw the transcript as the question
     assert model.calls[0][0][-1] == {"role": "user", "content": "What was delivered this week?"}
@@ -332,14 +357,33 @@ def _limited_world(store: Path, limit: int) -> tuple[TestClient, FakeModel, Fake
 
 @pytest.mark.parametrize("first", ["text", "voice"])
 def test_voice_and_text_share_the_hourly_limit(store: Path, first: str) -> None:
-    client, model, _ = _limited_world(store, 1)
+    client, model, speech = _limited_world(store, 1)
     ask_text: Callable[[], str] = lambda: client.post(  # noqa: E731
         "/chat", data={"question": "Any issues?"}, headers={"HX-Request": "true", **ORIGIN}).text
-    ask_voice: Callable[[], str] = lambda: _ask(client).json()["answer"]["text"]  # noqa: E731
-    first_answer, second_answer = (ask_text(), ask_voice()) if first == "text" else (ask_voice(), ask_text())
+    def ask_voice() -> str:
+        d = _ask(client).json()
+        return str(d["answer"]["text"] if "answer" in d else d["message"])
+
+    if first == "text":
+        first_answer = ask_text()
+        speech.requests.clear()
+        second_answer = ask_voice()
+        assert speech.requests == []  # refused before any speech model is called
+    else:
+        first_answer, second_answer = ask_voice(), ask_text()
     assert LIMITED not in first_answer.replace("&#39;", "'")
     assert LIMITED in second_answer.replace("&#39;", "'")
     assert len(model.calls) == 1
+
+
+def test_the_limit_check_takes_nothing() -> None:
+    now = [0.0]
+    limit = HourlyLimit(2, clock=lambda: now[0])
+    assert not limit.full() and not limit.full()
+    assert limit.try_take() and not limit.full() and limit.try_take()
+    assert limit.full() and not limit.try_take()
+    now[0] = 3600.0
+    assert not limit.full()
 
 
 def test_a_voice_question_waits_for_no_one(store: Path) -> None:
@@ -357,7 +401,7 @@ def test_a_voice_question_waits_for_no_one(store: Path) -> None:
     gate.set()
     worker.join(5)
     app = client.app
-    app.state.voice.one_at_a_time.acquire()  # type: ignore[attr-defined]
+    assert app.state.voice.one_at_a_time.acquire(timeout=5)  # type: ignore[attr-defined]
     try:
         r = _ask(client)
     finally:
@@ -377,4 +421,205 @@ def test_the_chat_carries_a_hidden_microphone(world: tuple[TestClient, FakeModel
         assert '<div class="chat-voice" role="status" hidden>' in body
         assert body.count('class="chat-voice__bar"') == 7
         assert '<script src="/static/mic.js" defer></script>' in body
+        assert '<script src="/static/chat.js" defer></script>' in body
+    assert "<title>Ask about the factory · Appmilla Factory</title>" in client.get("/chat").text
     assert client.get("/static/mic.js").status_code == 200
+
+
+# --- coach round 1 ------------------------------------------------------------------------------------
+
+
+def _voice_with(store: Path, speech: FakeSpeech, *, real_clock: bool = False, **settings: object) -> TestClient:
+    app = create_app(db_path=store, tenants_path=TENANTS_TEST)
+    app.state.chat = _chat(store, FakeModel())
+    ticks = iter(range(10**6))
+    clock = time.monotonic if real_clock else lambda: float(next(ticks))  # or one second at every look
+    app.state.voice = voice.Voice(voice.VoiceSettings(**settings), transport=httpx.MockTransport(speech.handler),  # type: ignore[arg-type]
+                                  clock=clock)
+    client = TestClient(app, base_url=LOOPBACK_URL)
+    login(client)
+    return client
+
+
+def test_an_oversize_speech_reply_is_not_read_to_the_end(store: Path) -> None:
+    speech = FakeSpeech()
+    tts = Chunks(iter([b"RIFF" + b"\x00" * (1024 * 1024 - 4)] + [b"\x00" * 1024 * 1024] * 59))  # 60 MB
+    speech.tts = (200, tts)  # type: ignore[assignment]
+    d = _ask(_voice_with(store, speech)).json()
+    assert d["audio"] is None and d["voice_note"] == voice.CANT_SPEAK
+    assert tts.taken <= voice.MAX_TTS_REPLY_BYTES // (1024 * 1024) + 1
+    speech = FakeSpeech()
+    stt = Chunks(iter([b'{"text": "' + b"a" * 1024] * 200))  # 200 KB
+    speech.stt = (200, stt)
+    r = _ask(_voice_with(store, speech))
+    assert r.status_code == 503 and r.json() == {"message": voice.CANT_HEAR}
+    assert stt.taken <= voice.MAX_STT_REPLY_BYTES // 1024 + 1
+
+
+def test_a_trickling_speech_reply_is_cut_off_at_the_deadline(store: Path) -> None:
+    speech = FakeSpeech()
+    tts = Chunks(iter([b"RIFF"] + [b"\x00"] * 1000))
+    speech.tts = (200, tts)  # type: ignore[assignment]
+    d = _ask(_voice_with(store, speech, timeout_seconds=2.0)).json()
+    assert d["audio"] is None and d["voice_note"] == voice.CANT_SPEAK
+    assert tts.taken <= 3
+    speech = FakeSpeech()
+    stt = Chunks(iter([b'{"text": "hello"'] + [b" "] * 1000 + [b"}"]))
+    speech.stt = (200, stt)
+    r = _ask(_voice_with(store, speech, timeout_seconds=2.0))
+    assert r.status_code == 503 and stt.taken <= 3
+
+
+def test_a_wav_must_say_its_length_truthfully(world: tuple[TestClient, FakeModel, FakeSpeech]) -> None:
+    client, _, speech = world
+    good = wav(20)
+    lying_rate = good[:28] + (1_000_000).to_bytes(4, "little") + good[32:]     # stated byte rate 1 MB/s
+    no_fmt = good[:12] + good[36:]                                                # sound data, no format
+    data_first = good[:12] + good[36:44] + good[12:36] + good[44:]               # format after the sound
+    no_data = good[:36]
+    # a second format chunk, honest in itself, saying a faster rate so the length looks shorter
+    fast_fmt = b"fmt " + (16).to_bytes(4, "little") + (1).to_bytes(2, "little") + (2).to_bytes(2, "little") \
+        + (48000).to_bytes(4, "little") + (192000).to_bytes(4, "little") + (4).to_bytes(2, "little") \
+        + (16).to_bytes(2, "little")
+    two_fmt = good[:36] + fast_fmt + good[36:]
+    for refused in (lying_rate, no_fmt, data_first, no_data, two_fmt, b"RIFF....WAVEjunk", b"not a wav at all"):
+        r = _ask(client, refused, "audio/wav")
+        assert r.status_code == 415 and r.json() == {"message": voice.NOT_AUDIO}
+    # sound hidden after the data chunk still counts: 20 s stated plus 15 s of "junk"
+    padded = good + b"junk" + (15 * 16000).to_bytes(4, "little") + b"\x00" * (15 * 16000)
+    r = _ask(client, padded, "audio/wav")
+    assert r.status_code == 413 and r.json() == {"message": voice.TOO_LONG}
+    assert speech.requests == []
+    assert voice.wav_seconds(good) == 20.0
+
+
+def test_an_ogg_must_say_its_length(world: tuple[TestClient, FakeModel, FakeSpeech]) -> None:
+    client, _, speech = world
+    for refused in (b"OggS" + b"x" * 200, ogg(10) + b"trailing", ogg(10)[:-10], WEBM,
+                    ogg_page(0xFFFFFFFFFFFFFFFF, b"x" * 50)):
+        for label in ("audio/ogg;codecs=opus", "audio/opus"):
+            r = _ask(client, refused, label)
+            assert r.status_code == 415 and r.json() == {"message": voice.NOT_AUDIO}, (refused[:8], label)
+    assert speech.requests == []
+    assert voice.ogg_seconds(ogg(10)) == 10.0
+    assert voice.MAX_COMPRESSED_BYTES <= 1024 * 1024
+
+
+@pytest.fixture
+def form_reads(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Counts reads of the request's form, so a refusal can be shown to come before the body is read."""
+    calls: list[int] = []
+    real = Request.form
+
+    def counting(self: Request, **kw: object):  # type: ignore[no-untyped-def]
+        calls.append(1)
+        return real(self, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Request, "form", counting)
+    return calls
+
+
+def test_a_body_without_a_length_is_refused(world: tuple[TestClient, FakeModel, FakeSpeech],
+                                            form_reads: list[int]) -> None:
+    client, _, speech = world
+    r = client.post("/api/voice/ask", content=iter([b"--x\r\n", b"chunked"]), headers={
+        **ORIGIN, "Content-Type": "multipart/form-data; boundary=x"})
+    assert r.status_code == 411 and r.json() == {"message": voice.NO_LENGTH}
+    assert form_reads == [] and speech.requests == []
+
+
+def test_an_oversize_declared_length_is_refused_before_reading(world: tuple[TestClient, FakeModel, FakeSpeech],
+                                                               form_reads: list[int]) -> None:
+    client, _, speech = world
+    r = client.post("/api/voice/ask", content=b"x", headers={
+        **ORIGIN, "Content-Type": "multipart/form-data; boundary=x", "Content-Length": str(voice.MAX_BODY_BYTES + 1)})
+    assert r.status_code == 413 and r.json() == {"message": voice.TOO_BIG}
+    assert form_reads == [] and speech.requests == []
+
+
+def test_a_caller_leaving_mid_upload_is_not_an_error(world: tuple[TestClient, FakeModel, FakeSpeech],
+                                                     monkeypatch: pytest.MonkeyPatch,
+                                                     caplog: pytest.LogCaptureFixture) -> None:
+    client, _, speech = world
+
+    async def gone(self: Request, **kw: object) -> None:
+        raise ClientDisconnect()
+
+    monkeypatch.setattr(Request, "form", gone)
+    with caplog.at_level(logging.WARNING):
+        r = _ask(client)
+    assert r.status_code == 400 and r.content == b""
+    assert not [rec for rec in caplog.records if rec.levelno >= logging.WARNING]
+    assert speech.requests == []
+
+
+def test_a_speech_model_silent_after_one_byte_cannot_hold_the_lock(store: Path) -> None:
+    """The watchdog: the reply sends one byte and then nothing (a stand-in that blocks, so no read
+    timeout can help); the spoken question still ends at the deadline and the voice lock is free."""
+    release = threading.Event()
+
+    def stalled() -> Iterator[bytes]:
+        yield b"R"
+        release.wait(10)
+        yield b"IFF"
+
+    speech = FakeSpeech()
+    speech.tts = (200, Chunks(stalled()))  # type: ignore[assignment]
+    client = _voice_with(store, speech, real_clock=True, timeout_seconds=0.5)
+    start = time.monotonic()
+    try:
+        d = _ask(client).json()
+        took = time.monotonic() - start
+    finally:
+        release.set()
+    assert d["audio"] is None and d["voice_note"] == voice.CANT_SPEAK
+    assert took < 3
+    assert client.app.state.voice.one_at_a_time.acquire(blocking=False)  # type: ignore[attr-defined]
+    client.app.state.voice.one_at_a_time.release()  # type: ignore[attr-defined]
+
+
+def test_a_real_connection_silent_after_one_byte_is_cut_off() -> None:
+    """Over a real socket on loopback: headers and one byte, then silence. The call ends at the
+    deadline, and the worker's connection is shut so it does not linger."""
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    stop = threading.Event()
+
+    def serve() -> None:
+        conn, _ = server.accept()
+        conn.recv(65536)
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nR")
+        stop.wait(10)
+        conn.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    port = server.getsockname()[1]
+    v = voice.Voice(voice.VoiceSettings(tts_url=f"http://127.0.0.1:{port}/v1/audio/speech", timeout_seconds=0.5))
+    start = time.monotonic()
+    try:
+        with pytest.raises(voice.VoiceUnavailable):
+            v.speak("Hello.")
+        took = time.monotonic() - start
+        deadline = time.monotonic() + 2
+        while any(t.name == "voice-model-call" for t in threading.enumerate()) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        lingering = any(t.name == "voice-model-call" for t in threading.enumerate())
+    finally:
+        stop.set()
+        server.close()
+    assert took < 1.5
+    assert not lingering
+
+
+def test_every_voice_failure_is_one_sentence() -> None:
+    sentences = [voice.NO_LENGTH, voice.TOO_BIG, voice.TOO_LONG, voice.NOT_AUDIO, voice.NO_RECORDING,
+                 voice.CROSS_SITE, voice.VOICE_BUSY, voice.CANT_HEAR, voice.HEARD_NOTHING, voice.CANT_SPEAK]
+    for sentence in sentences:
+        assert len(re.findall(r"[.!?](\s|$)", sentence)) == 1, sentence
+    mic = (Path(__file__).resolve().parent.parent / "frontend" / "static" / "mic.js").read_text(encoding="utf-8")
+    words = re.findall(r'(?:error|offline|signin|failed): "([^"]+)"', mic)
+    words += re.findall(r'set\("idle", "([^"]+)"\)', mic)
+    assert len(words) == 5
+    for sentence in words:
+        assert len(re.findall(r"[.!?](\s|$)", sentence)) == 1, sentence

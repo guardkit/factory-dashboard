@@ -45,12 +45,16 @@ function browser(opts = {}) {
   if (opts.recorder !== false) {
     w.MediaRecorder = class {
       static isTypeSupported(t) { return supportedTypes.includes(t); }
-      constructor(s, o) { this.mimeType = (o && o.mimeType) || ""; this.state = "inactive"; w.recorder = this; }
+      constructor(s, o) { this.mimeType = (o && o.mimeType) || ""; this.state = "inactive"; w.recorder = this;
+        w.recorders = (w.recorders || 0) + 1; }
       start() { this.state = "recording"; }
       stop() { this.state = "inactive"; this.ondataavailable({ data: new Blob(["sound"]) }); this.onstop(); }
     };
   }
-  const media = opts.denied ? () => Promise.reject(new Error("NotAllowedError")) : () => Promise.resolve(stream);
+  w.pending = [];  // with opts.deferred: the open permission prompts, answered by the test
+  const media = opts.denied ? () => Promise.reject(new Error("NotAllowedError"))
+    : opts.deferred ? () => new Promise((resolve) => { w.pending.push(resolve); })
+    : () => Promise.resolve(stream);
   w.navigator = opts.media === false ? {} : { mediaDevices: { getUserMedia: media } };
   w.Blob = Blob; w.FormData = FormData;
   w.setTimeout = (f, ms) => { w.timers.push([f, ms]); return w.timers.length; };
@@ -61,7 +65,9 @@ function browser(opts = {}) {
   w.fetch = (url, init) => {
     w.calls.push({ url, init });
     if (w.reply === "network") return Promise.reject(new TypeError("offline"));
-    return Promise.resolve({ ok: w.reply.ok, json: () => Promise.resolve(w.reply.body) });
+    const r = w.reply;
+    return Promise.resolve({ ok: r.ok, status: r.status || (r.ok ? 200 : 500),
+      json: () => (r.body === "not json" ? Promise.reject(new SyntaxError("not json")) : Promise.resolve(r.body)) });
   };
   w.Audio = class {
     constructor(src) { this.src = src; this.paused = true; w.audios.push(this); }
@@ -190,7 +196,7 @@ const results = {};
     const p = page(), w = browser({ denied: true });
     mic.attach(w, p.panel);
     p.btn.fire("pointerdown"); await tick();
-    assert.equal(state(p), "error"); assert.match(p.words.textContent, /Allow it for this site/);
+    assert.equal(state(p), "error"); assert.match(p.words.textContent, /allow it for this site/);
     results.denied = "error";
   }
   {
@@ -205,16 +211,47 @@ const results = {};
     const p = page(), w = browser({ reply: "network" });
     mic.attach(w, p.panel);
     p.btn.fire("pointerdown"); await tick(); clock += 1000; p.btn.fire("pointerup"); await tick();
-    assert.equal(state(p), "idle"); assert.match(p.words.textContent, /Please type your question/);
+    assert.equal(state(p), "idle"); assert.match(p.words.textContent, /please type your question/);
     results.network = "idle, type instead";
   }
   {
     const p = page(), w = browser({ blockPlay: true });
     mic.attach(w, p.panel);
     p.btn.fire("pointerdown"); await tick(); clock += 1000; p.btn.fire("pointerup"); await tick();
-    assert.equal(state(p), "idle"); assert.match(p.words.textContent, /didn't let it play aloud/);
+    assert.equal(state(p), "idle"); assert.match(p.words.textContent, /didn't let the answer play aloud/);
     assert.equal(p.log.children.length, 1);
     results.play_blocked = "idle, answer shown";
+  }
+  // Not signed in any more (the reply has no message), or a reply that isn't JSON: the error state.
+  for (const [reply, words, name] of [
+    [{ ok: false, status: 401, body: { detail: "login required" } }, /Please sign in again/, "signed_out"],
+    [{ ok: false, status: 403, body: { detail: "operator only" } }, /Please sign in again/, "forbidden"],
+    [{ ok: false, status: 502, body: "not json" }, /Something went wrong sending your question/, "bad_gateway"],
+  ]) {
+    const p = page(), w = browser({ reply });
+    mic.attach(w, p.panel);
+    p.btn.fire("pointerdown"); await tick(); clock += 1000; p.btn.fire("pointerup"); await tick();
+    assert.equal(state(p), "error", name); assert.match(p.words.textContent, words, name);
+    results[name] = "error";
+  }
+  // Two permission prompts answered together (tap start, tap stop, tap start, then Allow): only the
+  // latest request records, the other microphone is closed at once, and nothing is left on.
+  {
+    const p = page(), w = browser({ deferred: true });
+    mic.attach(w, p.panel);
+    const tap = async () => { p.btn.fire("pointerdown"); clock += 100; p.btn.fire("pointerup"); clock += 1000;
+      await tick(); };
+    await tap(); assert.equal(state(p), "listening");
+    await tap(); assert.equal(state(p), "idle");
+    await tap(); assert.equal(state(p), "listening");
+    const streams = [0, 1].map(() => { const s = { stopped: 0, getTracks: () => [{ stop() { s.stopped++; } }] };
+      return s; });
+    w.pending[0](streams[0]); w.pending[1](streams[1]); await tick();
+    assert.equal(w.recorders, 1); assert.equal(streams[0].stopped, 1); assert.equal(streams[1].stopped, 0);
+    assert.equal(state(p), "listening");
+    p.btn.fire("pointerdown"); await tick();
+    assert.equal(state(p), "speaking"); assert.equal(streams[1].stopped, 1); assert.equal(w.calls.length, 1);
+    results.overlapping_prompts = "one recording, both microphones closed";
   }
   // Let go before the microphone opened: nothing is recorded and the microphone is released.
   {

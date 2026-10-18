@@ -16,16 +16,22 @@ text with one sentence saying voice isn't available right now.
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
 import os
 import re
+import socket
 import threading
-from dataclasses import dataclass
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 
 from backend.auth import ResolvedUser
-from backend.chat.service import NOT_SET_UP, Answer, Chat, FollowUp
+from backend.chat.service import LIMITED, NOT_SET_UP, Answer, Chat, FollowUp
 
 log = logging.getLogger("factory_dashboard.voice")
 
@@ -56,23 +62,27 @@ ACCEPTED_TYPES = {
     "audio/x-wav": "question.wav",
     "audio/wave": "question.wav",
 }
-#: 30 seconds of compressed audio is well under 2 MB even at a high bit rate; 30 seconds of
-#: uncompressed 48 kHz stereo WAV is about 5.8 MB.
-MAX_COMPRESSED_BYTES = 2 * 1024 * 1024
+#: 30 seconds of compressed audio at 128 kbps is about 480 KB; 30 seconds of uncompressed 48 kHz
+#: stereo WAV is about 5.8 MB.
+MAX_COMPRESSED_BYTES = 1024 * 1024
 MAX_WAV_BYTES = 6 * 1024 * 1024
 #: The whole upload, with room for the form's own few lines.
 MAX_BODY_BYTES = MAX_WAV_BYTES + 64 * 1024
+#: The most a speech model's reply may be: a transcript is a few hundred bytes; 45 spoken words are
+#: about 1 MB of WAV (the 60-second stop is about 2.9 MB).
+MAX_STT_REPLY_BYTES = 64 * 1024
+MAX_TTS_REPLY_BYTES = 8 * 1024 * 1024
 
+# Each refusal or failure is one plain sentence.
 NO_LENGTH = "Please send the recording with its length."
-TOO_BIG = "That recording is too large. Please keep a question under 30 seconds."
-TOO_LONG = "That recording is longer than 30 seconds. Please ask a shorter question."
-NOT_AUDIO = "That recording is in a format the dashboard can't read. Please type your question instead."
-NO_RECORDING = "No recording came with the request. Please try again, or type your question."
+TOO_BIG = "That recording is too large, so please keep a question under 30 seconds."
+TOO_LONG = "That recording is longer than 30 seconds, so please ask a shorter question."
+NOT_AUDIO = "That recording is in a format the dashboard can't read, so please type your question instead."
+NO_RECORDING = "No recording came with the request, so please try again or type your question."
 CROSS_SITE = "This question came from another website, so it was refused."
-VOICE_BUSY = "Another spoken question is being answered just now. Please try again in a moment."
-CANT_HEAR = ("Voice isn't available right now, so I couldn't hear the question. "
-             "Please type it in the box instead.")
-HEARD_NOTHING = "I didn't catch a question in that recording. Please try again, or type it in the box."
+VOICE_BUSY = "Another spoken question is being answered just now, so please try again in a moment."
+CANT_HEAR = "Voice isn't available right now, so I couldn't hear the question and you can type it in the box instead."
+HEARD_NOTHING = "I didn't catch a question in that recording, so please try again or type it in the box."
 CANT_SPEAK = "Voice isn't available right now, so the answer is in text only."
 
 
@@ -108,45 +118,125 @@ class VoiceSettings:
                    env("FACTORY_DASH_TTS_VOICE", DEFAULT_TTS_VOICE), timeout, spoken_words)
 
 
+@dataclass
+class _Call:
+    """One speech-model call shared between the asking thread and its worker. The lock decides who goes
+    last: once the asker has given up (`abandoned`), the worker's result is dropped."""
+
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    done: bool = False
+    abandoned: bool = False
+    body: bytes = b""
+    error: VoiceUnavailable | None = None
+    sockets: list[socket.socket] = field(default_factory=list)
+
+    def finish(self, body: bytes = b"", error: VoiceUnavailable | None = None) -> None:
+        with self.lock:
+            if not self.abandoned:
+                self.done, self.body, self.error = True, body, error
+
+    def trace(self, event: str, info: dict[str, object]) -> None:
+        """httpcore's trace hook: keep each new connection's socket, so the asker can shut it."""
+        get = getattr(info.get("return_value"), "get_extra_info", None)
+        sock = get("socket") if callable(get) and event.endswith("connect_tcp.complete") else None
+        if isinstance(sock, socket.socket):
+            with self.lock:
+                self.sockets.append(sock)
+                late = self.abandoned
+            if late:
+                _shut(sock)
+
+    def give_up(self) -> bool:
+        """Called by the asker when its time is up; False when the worker had already finished."""
+        with self.lock:
+            if self.done:
+                return False
+            self.abandoned = True
+            sockets = list(self.sockets)
+        for sock in sockets:
+            _shut(sock)
+        return True
+
+
+def _shut(sock: socket.socket) -> None:
+    """Shut a socket another thread may be blocked reading: its read then returns at once."""
+    with contextlib.suppress(OSError):
+        sock.shutdown(socket.SHUT_RDWR)
+
+
 class Voice:
     """The two model calls (bytes in, bytes out), and one spoken question at a time.
     `transport` lets the tests stand in for the models."""
 
     def __init__(self, settings: VoiceSettings | None = None, *,
-                 transport: httpx.BaseTransport | None = None) -> None:
+                 transport: httpx.BaseTransport | None = None, clock: Callable[[], float] = time.monotonic) -> None:
         self.settings = settings or VoiceSettings.from_env()
         self._transport = transport
+        self._clock = clock
         self.one_at_a_time = threading.Lock()
 
-    def _client(self) -> httpx.Client:
+    def _post(self, what: str, url: str, cap: int, **request: Any) -> bytes:
+        """The reply's body within one overall deadline (the timeout setting) of wall-clock time, and at
+        most `cap` bytes. The request runs in a worker thread; this thread waits for it at most that
+        long and, when the time is up, shuts the connection's socket so the worker's read fails at once
+        (the approach of Part D's chat-model call). So a model that is slow, silent after one byte, or
+        trickling cannot hold the voice lock past the limit. Raises VoiceUnavailable on any failure."""
         t = self.settings.timeout_seconds
-        return httpx.Client(transport=self._transport, timeout=httpx.Timeout(t, connect=min(5.0, t)))
+        call = _Call()
+        worker = threading.Thread(target=self._run, args=(call, what, url, cap, request), daemon=True,
+                                  name="voice-model-call")
+        worker.start()
+        worker.join(t)
+        if call.give_up():
+            raise VoiceUnavailable(f"{what}: no reply within {t:g} s")
+        if call.error is not None:
+            raise call.error
+        return call.body
+
+    def _run(self, call: _Call, what: str, url: str, cap: int, request: dict[str, Any]) -> None:
+        try:
+            call.finish(body=self._request(call, what, url, cap, request))
+        except VoiceUnavailable as exc:
+            call.finish(error=exc)
+        except Exception as exc:  # anything else is the model being unavailable, never a crash
+            call.finish(error=VoiceUnavailable(f"{what}: {type(exc).__name__}"))
+
+    def _request(self, call: _Call, what: str, url: str, cap: int, request: dict[str, Any]) -> bytes:
+        t = self.settings.timeout_seconds
+        deadline = self._clock() + t
+        body = bytearray()
+        try:
+            with (httpx.Client(transport=self._transport, timeout=httpx.Timeout(t, connect=min(5.0, t))) as client,
+                  client.stream("POST", url, extensions={"trace": call.trace}, **request) as r):
+                r.raise_for_status()
+                for chunk in r.iter_bytes():  # as they arrive, so both limits are checked often
+                    body += chunk
+                    if len(body) > cap:
+                        raise VoiceUnavailable(f"{what}: reply larger than {cap} bytes")
+                    if self._clock() > deadline or call.abandoned:
+                        raise VoiceUnavailable(f"{what}: reply took longer than {t:g} s")
+        except httpx.HTTPError as exc:
+            raise VoiceUnavailable(f"{what}: {type(exc).__name__}") from None
+        return bytes(body)
 
     def transcribe(self, audio: bytes, filename: str, content_type: str) -> str:
+        body = self._post("speech-to-text", self.settings.stt_url, MAX_STT_REPLY_BYTES,
+                          data={"model": self.settings.stt_model}, files={"file": (filename, audio, content_type)})
         try:
-            with self._client() as client:
-                r = client.post(self.settings.stt_url, data={"model": self.settings.stt_model},
-                                files={"file": (filename, audio, content_type)})
-            r.raise_for_status()
-            text = r.json()["text"]
-        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-            raise VoiceUnavailable(f"speech-to-text: {type(exc).__name__}") from None
+            text = json.loads(body)["text"]
+        except (ValueError, KeyError, TypeError):
+            raise VoiceUnavailable("speech-to-text: no text in the reply") from None
         if not isinstance(text, str):
             raise VoiceUnavailable("speech-to-text: no text")
         return text
 
     def speak(self, text: str) -> bytes:
-        body = {"model": self.settings.tts_model, "voice": self.settings.tts_voice, "input": text,
-                "response_format": "wav"}
-        try:
-            with self._client() as client:
-                r = client.post(self.settings.tts_url, json=body)
-            r.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise VoiceUnavailable(f"text-to-speech: {type(exc).__name__}") from None
-        if r.content[:4] != b"RIFF":
+        wav = self._post("text-to-speech", self.settings.tts_url, MAX_TTS_REPLY_BYTES,
+                         json={"model": self.settings.tts_model, "voice": self.settings.tts_voice, "input": text,
+                               "response_format": "wav"})
+        if wav[:4] != b"RIFF":
             raise VoiceUnavailable("text-to-speech: not a WAV")
-        return r.content
+        return wav
 
 
 # --- the recording ---------------------------------------------------------------------------------------
@@ -156,10 +246,10 @@ def base_type(content_type: str) -> str:
     return (content_type or "").split(";")[0].strip().lower()
 
 
-def check_recording(audio: bytes, content_type: str) -> tuple[int, str] | None:
-    """(status, sentence) when the recording is refused, else None. The length is checked where the
-    file says it (WAV, Ogg); Chrome's webm and Safari's mp4 do not say, so for those the browser's
-    30-second stop and the size limit bound it."""
+def check_recording(audio: bytes, content_type: str) -> tuple[int, str] | None:  # noqa: PLR0911 (one per refusal)
+    """(status, sentence) when the recording is refused, else None. A WAV or Ogg recording must say its
+    length, and one that cannot be read is refused (415). Chrome's webm and Safari's mp4 do not say, so for
+    those the browser's 30-second stop and the 1 MB limit (about a minute even at 128 kbps) bound it."""
     kind = base_type(content_type)
     if kind not in ACCEPTED_TYPES:
         return 415, NOT_AUDIO
@@ -168,32 +258,59 @@ def check_recording(audio: bytes, content_type: str) -> tuple[int, str] | None:
     is_wav = ACCEPTED_TYPES[kind].endswith(".wav")
     if len(audio) > (MAX_WAV_BYTES if is_wav else MAX_COMPRESSED_BYTES):
         return 413, TOO_BIG
-    seconds = wav_seconds(audio) if is_wav else ogg_seconds(audio) if kind in ("audio/ogg", "audio/opus") else None
-    if seconds is not None and seconds > MAX_SECONDS + 0.5:
+    if is_wav:
+        seconds = wav_seconds(audio)
+    elif kind in ("audio/ogg", "audio/opus"):
+        seconds = ogg_seconds(audio)
+    else:
+        return None
+    if seconds is None:
+        return 415, NOT_AUDIO
+    if seconds > MAX_SECONDS + 0.5:
         return 413, TOO_LONG
     return None
 
 
 def wav_seconds(b: bytes) -> float | None:
+    """The length of a WAV, from everything after the start of its sound data (so trailing chunks count)
+    at the byte rate its sample rate, channels and sample size give. None when it cannot be read: no
+    format chunk before the sound, a stated byte rate that disagrees, or no sound data."""
     if b[:4] != b"RIFF" or b[8:12] != b"WAVE":
         return None
     pos, byte_rate = 12, 0
     while pos + 8 <= len(b):
         chunk, size, body = b[pos:pos + 4], int.from_bytes(b[pos + 4:pos + 8], "little"), pos + 8
-        if chunk == b"fmt " and size >= 16:
-            byte_rate = int.from_bytes(b[body + 8:body + 12], "little")
-        elif chunk == b"data" and byte_rate:
-            return min(size, len(b) - body) / byte_rate
+        if chunk == b"fmt ":
+            if byte_rate or size < 16 or len(b) < body + 16:
+                return None
+            channels = int.from_bytes(b[body + 2:body + 4], "little")
+            rate = int.from_bytes(b[body + 4:body + 8], "little")
+            stated = int.from_bytes(b[body + 8:body + 12], "little")
+            bits = int.from_bytes(b[body + 14:body + 16], "little")
+            byte_rate = rate * channels * bits // 8
+            if not byte_rate or stated != byte_rate:
+                return None
+        elif chunk == b"data":
+            return (len(b) - body) / byte_rate if byte_rate else None
         pos = body + size + (size & 1)
     return None
 
 
 def ogg_seconds(b: bytes) -> float | None:
-    """Opus in Ogg: the last page's granule position counts 48 kHz samples."""
-    at = b.rfind(b"OggS")
-    if at < 0 or len(b) < at + 14 or b[at + 4] != 0:
-        return None
-    return int.from_bytes(b[at + 6:at + 14], "little") / 48000
+    """Opus in Ogg: the highest granule position (48 kHz samples), walking every page from the start.
+    None unless the pages run exactly to the end and at least one gives a position."""
+    pos, highest = 0, -1
+    while pos < len(b):
+        if b[pos:pos + 4] != b"OggS" or len(b) < pos + 27 or b[pos + 4] != 0:
+            return None
+        segments = b[pos + 27:pos + 27 + b[pos + 26]]
+        if len(segments) < b[pos + 26]:
+            return None
+        granule = int.from_bytes(b[pos + 6:pos + 14], "little")
+        if granule != 0xFFFFFFFFFFFFFFFF:
+            highest = max(highest, granule)
+        pos += 27 + len(segments) + sum(segments)
+    return highest / 48000 if pos == len(b) and highest >= 0 else None
 
 
 # --- the spoken version ----------------------------------------------------------------------------------
@@ -238,14 +355,18 @@ class VoiceReply:
     voice_note: str = ""
 
 
-def ask_by_voice(chat: Chat, voice: Voice, audio: bytes, content_type: str, user: ResolvedUser,
-                 follow_up: FollowUp | None = None) -> VoiceReply:
+def ask_by_voice(  # noqa: PLR0911 (one return per refusal)
+    chat: Chat, voice: Voice, audio: bytes, content_type: str, user: ResolvedUser,
+    follow_up: FollowUp | None = None,
+) -> VoiceReply:
     """Speech to text, the chat, then text to speech. Never raises for a model failure."""
     refused = check_recording(audio, content_type)
     if refused:
         return VoiceReply(refused[0], refused[1])
     if not chat.model.configured:  # say so before spending a speech-to-text call on it
         return VoiceReply(503, NOT_SET_UP)
+    if chat.limit.full():  # likewise; Chat.ask still takes the limit itself
+        return VoiceReply(429, LIMITED)
     if not voice.one_at_a_time.acquire(blocking=False):
         return VoiceReply(429, VOICE_BUSY)
     try:

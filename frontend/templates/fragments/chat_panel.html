@@ -8,8 +8,7 @@
     {% for exchange in exchanges %}{% with question = exchange.question, answer = exchange.answer %}{% include "fragments/chat_exchange.html" %}{% endwith %}{% endfor %}
   </div>
   <form class="chat__form" method="post" action="/chat"
-        hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-disabled-elt="find button"
-        hx-on::after-request="if (event.detail.successful) this.reset()">
+        hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-disabled-elt="find button">
     <label for="chat-question" class="chat__label">Your question</label>
     {# Voice (Part E): mic.js shows these only where the browser can record (a secure page with a
        microphone); otherwise they stay hidden and the text box works as before. #}
@@ -25,5 +24,7 @@
     </button>
     <span class="chat__working">Looking it up…</span>
   </form>
+  {# After an answer: chat.js clears the box and removes an answered reply form; mic.js is voice. #}
+  <script src="/static/chat.js" defer></script>
   <script src="/static/mic.js" defer></script>
 </section>

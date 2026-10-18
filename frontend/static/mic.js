@@ -12,8 +12,10 @@
     listening: "Listening. Let go, or press again, to send. Up to 30 seconds.",
     thinking: "Working out the answer…",
     speaking: "Reading the answer aloud. Press the microphone to stop.",
-    error: "The microphone isn't working here. Allow it for this site and try again, or type your question.",
-    offline: "Voice isn't available right now. Please type your question."
+    error: "The microphone isn't working here, so allow it for this site and try again, or type your question.",
+    offline: "Voice isn't available right now, so please type your question.",
+    signin: "Please sign in again, then try the microphone.",
+    failed: "Something went wrong sending your question, so please try again or type it."
   };
 
   function supported(w) {
@@ -25,7 +27,7 @@
     var btn = panel.querySelector(".chat-mic"), status = panel.querySelector(".chat-voice");
     if (!btn || !status || !supported(w)) return null;
     var log = panel.querySelector(".chat__log"), words = status.querySelector(".chat-voice__text");
-    var rec = null, stream = null, chunks = [], timer = null, pressedAt = 0, audio = null, state = "";
+    var rec = null, stream = null, chunks = [], timer = null, pressedAt = 0, audio = null, state = "", asked = 0;
 
     function set(s, text) {
       state = s;
@@ -37,10 +39,13 @@
     }
     function close() { if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
     function start() {
+      var mine = ++asked; // only the latest request for the microphone may record; any other is closed
       set("listening");
       w.navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+        if (mine !== asked || state !== "listening" || rec) {
+          return s.getTracks().forEach(function (t) { t.stop(); }); // let go first, or superseded
+        }
         stream = s;
-        if (state !== "listening") return close(); // let go before the microphone opened
         var type = TYPES.filter(function (t) { return w.MediaRecorder.isTypeSupported(t); })[0];
         rec = new w.MediaRecorder(s, type ? { mimeType: type } : {});
         chunks = [];
@@ -48,7 +53,7 @@
         rec.onstop = send;
         rec.start();
         timer = w.setTimeout(stop, MAX_MS);
-      }, function () { set("error"); });
+      }, function () { if (mine === asked) set("error"); });
     }
     function stop() {
       pressedAt = 0;
@@ -68,8 +73,15 @@
         form.append(n, reply.querySelector("[name=" + n + "]").value);
       });
       w.fetch("/api/voice/ask", { method: "POST", body: form, credentials: "same-origin" })
-        .then(function (r) { return r.json().then(function (d) { return [r.ok, d]; }); })
-        .then(function (res) { var d = res[1]; return res[0] ? show(d, reply) : set("idle", d.message); })
+        .then(function (r) {
+          return r.json().catch(function () { return {}; }).then(function (d) { return [r, d || {}]; });
+        })
+        .then(function (res) {
+          var r = res[0], d = res[1];
+          if (r.ok && d.html) return show(d, reply);
+          if (d.message) return set("idle", d.message);
+          set("error", r.status === 401 || r.status === 403 ? WORDS.signin : WORDS.failed);
+        })
         .catch(function () { set("idle", WORDS.offline); });
     }
     function show(d, reply) {
@@ -84,7 +96,7 @@
       audio.play().then(function () {
         var how = added.querySelector(".chat-exchange__how");
         if (how) how.textContent = "Read aloud";
-      }, function () { set("idle", "The answer is below; this browser didn't let it play aloud."); });
+      }, function () { set("idle", "This browser didn't let the answer play aloud, so it is shown below."); });
     }
     function press(e) {
       if (e.type === "keydown") {

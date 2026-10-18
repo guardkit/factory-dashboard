@@ -1,7 +1,6 @@
 {# One question and its answer. The answer text and the links are the server's, from the records. #}
 <article class="chat-exchange chat-exchange--{{ answer.kind }}">
-  <p class="chat-exchange__question"><span class="visually-hidden">You asked: </span>{{ question }}</p>
-  {% if how %}<p class="chat-exchange__how">{{ how }}</p>{% endif %}
+  <p class="chat-exchange__question"><span class="visually-hidden">You asked: </span>{{ question }}{% if how %} <span class="chat-exchange__how">{{ how }}</span>{% endif %}</p>
   <div class="chat-exchange__answer">
     <p class="chat-exchange__text">{{ answer.text }}</p>
     {% if voice_note %}<p class="chat-exchange__voice-note">{{ voice_note }}</p>{% endif %}
@@ -12,8 +11,7 @@
     {% endif %}
     {% if answer.follow_up %}
     <form class="chat-exchange__reply" method="post" action="/chat"
-          hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-disabled-elt="find button"
-          hx-on::after-request="if (event.detail.successful) this.remove()">
+          hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-disabled-elt="find button">
       <input type="hidden" name="prior_question" value="{{ answer.follow_up.question }}">
       <input type="hidden" name="prior_clarify" value="{{ answer.follow_up.clarify }}">
       <label class="chat__label">Your reply <input class="chat__input" name="question" maxlength="500" required></label>

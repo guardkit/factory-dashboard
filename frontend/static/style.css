@@ -363,4 +363,5 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
 .chat-voice__wave { display: inline-flex; align-items: center; gap: 2px; height: 1em; }
 .chat-voice__bar { display: inline-block; width: 3px; height: calc(var(--h, 0.5) * 1em); background: currentColor; }
 .chat-voice__dots span::before { content: "·"; }
-.chat-exchange__how, .chat-exchange__voice-note { margin: 0 0 4px; color: var(--muted); font-size: 12px; }
+.chat-exchange__how { color: var(--muted); font-size: 12px; font-weight: normal; }
+.chat-exchange__voice-note { margin: 0 0 4px; color: var(--muted); font-size: 12px; }
