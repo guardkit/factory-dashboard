@@ -122,6 +122,9 @@ def test_export_shows_only_deliveries_and_the_four_plan_fields(store: sqlite3.Co
         assert word not in html.lower(), word
     assert {m.milestone_id for m in export.milestones} == {"M1", "M2", "M3"}
     assert "behind" in html and "ahead" in html
+    # Each delivered row's pill says "Delivered" in words, not only with its tick.
+    pills = re.findall(r'<span class="status-pill status-pill--done"><svg.*?</svg>([^<]*)<', html, re.S)
+    assert pills and len(pills) == len(export.delivered_rows) and {p.strip() for p in pills} == {"Delivered"}
 
 
 class _Operator:
