@@ -2,90 +2,118 @@
 {% import 'macros.html' as m %}
 {% block title %}{{ page.title }} · Appmilla Factory{% endblock %}
 {% block content %}
-<header class="feature-header">
-  <div class="feature-header__title">
+{% set open_wait = page.waits | selectattr('open') | first %}
+<header class="page-head page-head--split feature-header">
+  <div class="feature-header__main">
+    <p class="page-eyebrow">{% if page.project_link %}<a href="{{ page.project_link }}">{{ page.project }}</a>{% else %}{{ page.project }}{% endif %} · Feature</p>
     <h1 class="page-title feature-title">{{ page.title }}</h1>
-    {% if page.code %}<span class="feature-id">({{ page.code }})</span>{% endif %}
-    {% if page.project_link %}<a class="feature-header__project" href="{{ page.project_link }}">{{ page.project }}</a>{% endif %}
+    {% if page.status_text %}<p class="page-lead">{{ page.status_text }}</p>{% endif %}
+    <div class="page-head__meta">
+      {% if page.code %}<span class="feature-id">{{ page.code }}</span>{% endif %}
+      {% if open_wait %}{{ m.status_pill('wait', 'Waiting for the ' ~ open_wait.kind, open_wait.duration) }}{% endif %}
+      {{ m.band_chip(page.verdict) }}
+      <span title="{{ page.sent_title }}">Sent {{ page.sent_label }}</span>
+    </div>
+    {% if page.request_text and page.request_text != page.title %}
+    <details class="feature-request"><summary>The request as sent</summary><p>{{ page.request_text }}</p></details>
+    {% endif %}
   </div>
-  <div class="feature-header__meta">
-    <span title="{{ page.sent_title }}">sent {{ page.sent_label }}</span>
-    <span>elapsed {{ page.elapsed }}</span>
-    {{ m.asof_chip(page.as_of, source='factory') }}
-  </div>
-  {% if page.request_text and page.request_text != page.title %}
-  <details class="feature-request"><summary>The request as sent</summary><p>{{ page.request_text }}</p></details>
-  {% endif %}
+  {{ m.asof_chip(page.as_of, source='factory') }}
 </header>
 
-<section class="panel-card feature-q1">
-  <header class="panel-card__header"><h2 class="panel-card__title">How far through</h2></header>
-  <div class="panel-card__body">
-    {{ m.journey_bar(page.journey) }}
-    {% if page.mission_line %}<p class="feature-mission">{{ page.mission_line }}</p>{% endif %}
+{# Only figures the record carries: no machine time, no cost until it is measured. #}
+<section class="stat-grid feature-stats {% if not open_wait %}stat-grid--3{% endif %}" aria-label="Time and attempts">
+  {% if open_wait %}
+  <div class="stat-tile stat-tile--key">
+    <span class="stat-tile__value num">{{ open_wait.duration }}</span>
+    <span class="stat-tile__label">Waiting now</span>
+    <span class="stat-tile__sub">For the {{ open_wait.kind }}, since <span title="{{ open_wait.started_title }}">{{ open_wait.started_label }}</span></span>
+  </div>
+  {% endif %}
+  <div class="stat-tile">
+    <span class="stat-tile__value num">{{ page.elapsed }}</span>
+    <span class="stat-tile__label">Elapsed</span>
+    <span class="stat-tile__sub" title="{{ page.sent_title }}">Sent {{ page.sent_label }}</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-tile__value num">{{ page.attempts | length }}</span>
+    <span class="stat-tile__label">Build attempts</span>
+  </div>
+  <div class="stat-tile stat-tile--empty">
+    <span class="stat-tile__value">{{ m.icon('slash') }}Not measured</span>
+    <span class="stat-tile__label">Cost so far</span>
+    <span class="stat-tile__sub">{{ page.spend.text }}</span>
   </div>
 </section>
 
-<section class="panel-card feature-q2">
-  <header class="panel-card__header">
-    <h2 class="panel-card__title">{{ page.verdict_heading }}: {{ m.band_chip(page.verdict) }}</h2>
-  </header>
+<section class="panel-card feature-q1" aria-labelledby="q1-title">
+  <header class="panel-card__header"><h2 class="panel-card__title" id="q1-title">How far through</h2></header>
   <div class="panel-card__body">
-    {% if page.verdict_reason %}<p class="feature-verdict-reason">{{ page.verdict_reason }}</p>{% endif %}
-    <table class="dense-table signals-table">
-      <thead><tr><th scope="col">Signal</th><th scope="col">Value</th><th scope="col">Colour</th>
-        <th scope="col">Threshold</th><th scope="col">Note</th></tr></thead>
-      <tbody>
-      {% for s in page.signals %}
-        <tr class="signal-row {% if s.band.band == '—' %}signal-row--unmeasured{% endif %}">
-          <td>{{ s.name }}</td>
-          <td class="num">{{ s.value }}</td>
-          <td>{{ m.band_chip(s.band) }}</td>
-          <td>{{ s.norm }}</td>
-          <td>{{ s.note }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    <p class="norms-line">{{ page.norms_line }}</p>
+    {{ m.journey_bar(page.journey) }}
   </div>
+  {% if page.mission_line %}<p class="panel-card__foot feature-mission">{{ page.mission_line }}</p>{% endif %}
 </section>
 
 <div class="feature-lower">
-  <section class="panel-card feature-q3">
-    <header class="panel-card__header"><h2 class="panel-card__title">Issues ({{ page.issues | length }})</h2></header>
+  <section class="panel-card feature-q2" aria-labelledby="q2-title">
+    <header class="panel-card__header">
+      <h2 class="panel-card__title" id="q2-title">{{ page.verdict_heading }}</h2>
+      {{ m.band_chip(page.verdict) }}
+    </header>
     <div class="panel-card__body">
-      {% if page.issues %}
-        <ul class="issue-list">
-        {% for i in page.issues %}
-          <li class="issue-list__item">{{ m.band_chip(i.band) }} <strong>{{ i.kind }}</strong>
-            <span title="{{ i.opened_title }}">{{ i.opened_label }}</span>{% if i.closed_label %}, closed {{ i.closed_label }}{% else %}, open{% endif %}.
-            {{ i.detail }}</li>
-        {% endfor %}
-        </ul>
-      {% else %}
-        <p class="true-empty">No issues on record for this feature.</p>
-      {% endif %}
+      {% if page.verdict_reason %}<p class="feature-verdict-reason">{{ page.verdict_reason }}</p>{% endif %}
+      <ul class="signal-list">
+      {% for s in page.signals %}
+        <li class="signal-row {% if s.band.band == '—' %}signal-row--unmeasured{% endif %}">
+          <b class="signal-row__name">{{ s.name }}</b>
+          <p class="signal-row__text">{% if s.value and s.value != '—' %}<span class="num">{{ s.value }}</span>. {% endif %}Normal: {{ s.norm }}.{% if s.note %} <span class="signal-row__detail">{{ s.note }}</span>{% endif %}</p>
+          {{ m.band_chip(s.band) }}
+        </li>
+      {% endfor %}
+      </ul>
     </div>
+    <p class="panel-card__foot norms-line">{{ page.norms_line }}</p>
   </section>
 
-  <section class="panel-card feature-spend">
-    <header class="panel-card__header"><h2 class="panel-card__title">Cost</h2></header>
-    <div class="panel-card__body">{{ m.spend_slot(page.spend) }}</div>
-  </section>
+  <div class="feature-side">
+    <section class="panel-card feature-q3" aria-labelledby="q3-title">
+      <header class="panel-card__header"><h2 class="panel-card__title" id="q3-title">Issues ({{ page.issues | length }})</h2></header>
+      <div class="panel-card__body">
+        {% if page.issues %}
+          <ul class="signal-list issue-list">
+          {% for i in page.issues %}
+            <li class="signal-row {% if i.closed_label %}issue-row--closed{% endif %}">
+              <b class="signal-row__name">{{ i.kind }}</b>
+              <p class="signal-row__text"><span title="{{ i.opened_title }}">Opened {{ i.opened_label }}</span>{% if i.closed_label %}, closed {{ i.closed_label }}{% else %}, still open{% endif %}.{% if i.detail %} <span class="signal-row__detail">{{ i.detail }}</span>{% endif %}</p>
+              {% if not i.closed_label and i.kind.startswith('Waiting') %}{{ m.status_pill('wait', 'Waiting', i.age) }}{% else %}{{ m.band_chip(i.band) }}{% endif %}
+            </li>
+          {% endfor %}
+          </ul>
+          {% if open_wait %}<p class="observes-only">{{ m.icon('chat') }}Decide in Slack. This dashboard only shows what is waiting.</p>{% endif %}
+        {% else %}
+          <p class="true-empty">No issues on record for this feature.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="panel-card feature-spend" aria-labelledby="cost-title">
+      <header class="panel-card__header"><h2 class="panel-card__title" id="cost-title">Cost</h2></header>
+      <div class="panel-card__body">{{ m.spend_slot(page.spend) }}</div>
+    </section>
+  </div>
 </div>
 
 <div class="feature-lower">
-  <section class="panel-card feature-attempts">
-    <header class="panel-card__header"><h2 class="panel-card__title">Build attempts ({{ page.attempts | length }})</h2></header>
+  <section class="panel-card panel-card--flush feature-attempts" aria-labelledby="attempts-title">
+    <header class="panel-card__header"><h2 class="panel-card__title" id="attempts-title">Build attempts ({{ page.attempts | length }})</h2></header>
     <div class="panel-card__body">
       {% if page.attempts %}
       <table class="dense-table">
-        <thead><tr><th scope="col">Queued</th><th scope="col">Started by</th><th scope="col">Result</th><th scope="col">Build record</th></tr></thead>
+        <thead><tr><th scope="col" class="num">Queued</th><th scope="col">Started by</th><th scope="col">Result</th><th scope="col">Build record</th></tr></thead>
         <tbody>
         {% for a in page.attempts %}
           <tr><td class="num" title="{{ a.queued_title }}">{{ a.queued_label }}</td><td>{{ a.started_by }}</td>
-            <td>{{ a.status_text }}</td><td class="feature-id">{{ a.build_id }}</td></tr>
+            <td>{{ a.status_text }}</td><td><span class="feature-id">{{ a.build_id }}</span></td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -93,16 +121,16 @@
     </div>
   </section>
 
-  <section class="panel-card feature-waits">
-    <header class="panel-card__header"><h2 class="panel-card__title">Waiting for a person</h2></header>
+  <section class="panel-card panel-card--flush feature-waits" aria-labelledby="waits-title">
+    <header class="panel-card__header"><h2 class="panel-card__title" id="waits-title">Waiting for a person</h2></header>
     <div class="panel-card__body">
       {% if page.waits %}
       <table class="dense-table">
-        <thead><tr><th scope="col">For</th><th scope="col">From</th><th scope="col">Until</th><th scope="col">How long</th></tr></thead>
+        <thead><tr><th scope="col">For</th><th scope="col" class="num">From</th><th scope="col" class="num">Until</th><th scope="col" class="num">How long</th></tr></thead>
         <tbody>
         {% for w in page.waits %}
-          <tr><td>{{ w.kind }}</td><td class="num" title="{{ w.started_title }}">{{ w.started_label }}</td>
-            <td class="num">{{ w.ended_label }}</td><td class="num">{{ w.duration }}</td></tr>
+          <tr class="wait-row {% if w.open %}wait-row--open{% endif %}"><td>{{ w.kind }}</td><td class="num" title="{{ w.started_title }}">{{ w.started_label }}</td>
+            <td class="num">{% if w.open %}{{ m.status_pill('wait', w.ended_label) }}{% else %}{{ w.ended_label }}{% endif %}</td><td class="num">{{ w.duration }}</td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -111,11 +139,12 @@
   </section>
 </div>
 
-<section class="panel-card feature-history">
-  <header class="panel-card__header"><h2 class="panel-card__title">What happened</h2></header>
+<section class="panel-card panel-card--flush feature-history" aria-labelledby="history-title">
+  <header class="panel-card__header"><h2 class="panel-card__title" id="history-title">What happened</h2></header>
   <div class="panel-card__body">
     {% if page.activity %}
     <table class="dense-table">
+      <thead><tr><th scope="col" class="num">When</th><th scope="col">Step</th><th scope="col">Result</th></tr></thead>
       <tbody>
       {% for e in page.activity %}
         <tr><td class="num" title="{{ e.time_title }}">{{ e.time_label }}</td><td>{{ e.step }}</td><td>{{ e.result }}</td></tr>

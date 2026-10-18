@@ -908,23 +908,225 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
 }
 
 /* ==== stage 2a: Now, Feature, Project ==== */
-/* Part A's own rules for these pages, carried over on the new tokens until stage 2a replaces them. */
+/* Names used here (added by stage 2a): now-section, section-head__sub, rail-title--spaced,
+   rail-link, needs-you(__head, __title, __list, __item, __headline, __subject, __age,
+   __age-word), panel-card--hero, build-list(__head), build-row(__head, __detail, __project,
+   __stage, __status, __band, __elapsed, __cost, __phone-line), feature-header__main,
+   feature-stats, feature-side, feature-mission, norms-line, feature-verdict-reason, issue-list,
+   issue-row--closed, wait-row(--open), stat-tile--attention, project-summary, issues-hidden. */
 
-.needs-you__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.needs-you__item { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.needs-you__headline { font-weight: 600; color: var(--heading); }
-.needs-you__age { font-variant-numeric: tabular-nums; color: var(--text-dim); }
-.build-row { padding: 8px 0; border-top: 1px solid var(--line); }
-.build-row:first-child { border-top: 0; }
-.build-row__head, .build-row__foot { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-.build-row__detail { color: var(--text-dim); }
-.feature-header { display: flex; flex-direction: column; }
-.feature-header__title { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
-.feature-mission, .norms-line { margin: var(--space-12) 0 0; font-size: 13px; line-height: 18px; color: var(--text-dim); }
+/* -- Now: the sections of the main column (a title, then a flush card) -- */
+.now-section, .project-features { min-width: 0; }
+.section-head .asof-chip { flex: none; }
+.section-head__sub { font-family: var(--font-body); font-size: 16px; line-height: 24px; font-weight: 600; letter-spacing: 0; color: var(--text-dim); }
+.panel-card--flush > .panel-card__body > .lagging-note:first-child,
+.panel-card--flush > .panel-card__body > .page-lead:first-child,
+.panel-card--flush > .panel-card__body > .true-empty:first-child { margin-top: var(--space-16); }
+.panel-card--flush > .panel-card__body > .true-empty { margin: var(--space-16); }
+.panel-card--flush > .panel-card__body > .build-list { margin: 0; }
+.panel-card--flush > .panel-card__foot { border-top: 1px solid var(--line); margin: 0; }
+/* sse.js marks the refreshed section; only the card inside it takes the short tint, not its title. */
+.now-section.panel-card--updated { background-color: transparent; }
+.now-section.panel-card--updated > .panel-card { background-color: var(--tint-green); }
+@media (prefers-reduced-motion: no-preference) {
+  .now-section > .panel-card { transition: background-color 0.6s ease-out; }
+}
+
+/* -- Now: the Needs-you band. Dark (data-theme="dark" on the section), full width. It sits first
+   in #main; its background reaches the window's edges through a clipped shadow, so it adds no
+   sideways scroll and its content lines up with the page below. -- */
+.panel-card--hero {
+  margin: calc(-1 * var(--space-32)) 0 var(--space-8);
+  padding: var(--space-32) 0 40px;
+  border: 0; border-radius: 0;
+  background: var(--kicker); color: var(--text);
+  box-shadow: 0 0 0 100vmax var(--kicker);
+  clip-path: inset(0 -100vmax);
+  overflow: visible;
+}
+.panel-card--hero.panel-card--updated { background-color: var(--kicker); }
+.needs-you__head { align-items: flex-end; margin-bottom: var(--space-24); }
+.needs-you__head .page-eyebrow { margin-bottom: var(--space-8); }
+.needs-you__title {
+  font-family: var(--font-heading); font-size: 32px; line-height: 38px; font-weight: 700;
+  letter-spacing: -0.015em; color: var(--heading);
+}
+.needs-you .panel-card__header .asof-chip { color: var(--on-dark-dim); }
+.panel-card--hero > .panel-card__body { overflow: visible; color: var(--text-dim); }
+.needs-you__list {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-16);
+}
+.needs-you__item { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.needs-you__headline { font-size: 13px; line-height: 16px; font-weight: 600; color: var(--text-dim); }
+.needs-you__subject { margin: 0; font-family: var(--font-heading); font-size: 18px; line-height: 24px; font-weight: 700; color: var(--heading); overflow-wrap: anywhere; }
+.needs-you__subject a { color: var(--heading); text-decoration: none; }
+.needs-you__subject a:hover { text-decoration: underline; }
+.needs-you__age {
+  font-family: var(--font-heading); font-size: 26px; line-height: 30px; font-weight: 700;
+  letter-spacing: -0.01em; color: var(--status-wait-text);
+}
+.needs-you__age-word { font-family: var(--font-body); font-size: 13px; font-weight: 500; letter-spacing: 0; color: var(--text-dim); margin-left: 6px; }
+.needs-you .observes-only { display: flex; align-items: center; gap: 8px; margin-top: var(--space-16); color: var(--text-dim); }
+.needs-you .observes-only .icon { color: var(--accent-text); }
+.needs-you .true-empty--circles { padding: var(--space-24) var(--space-32); }
+
+/* -- Now: the work list (one link per feature) -- */
+.build-list { list-style: none; margin: 0; padding: 0; }
+.build-list > li + li { border-top: 1px solid var(--line); }
+.build-row, .build-list__head {
+  display: grid; grid-template-columns: minmax(0, 2.3fr) minmax(0, 1.5fr) minmax(0, 1.2fr) 124px 92px;
+  align-items: center; gap: var(--space-16); padding: 14px var(--space-24);
+}
+.build-list__head {
+  padding-top: 10px; padding-bottom: 10px; background: var(--surface-sunken);
+  font-size: 12px; line-height: 16px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim);
+}
+.build-row { text-decoration: none; color: inherit; }
+a.build-row:hover { background: var(--surface-sunken); }
+a.build-row:focus-visible { outline-offset: -2px; }
+.build-row__head { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.build-row__head .feature-title {
+  font-family: var(--font-heading); font-size: 16px; line-height: 22px; font-weight: 600; color: var(--heading);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+a.build-row:hover .feature-title { text-decoration: underline; }
+.build-row__detail { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 13px; line-height: 18px; color: var(--text-dim); min-width: 0; }
+.build-row__project { min-width: 0; overflow-wrap: anywhere; }
+.build-row__detail .feature-id { flex: none; }
+.build-row__stage { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; min-width: 0; font-size: 13px; line-height: 16px; font-weight: 600; color: var(--heading); }
+.build-row__band { min-width: 0; }
+.build-row__band .band-chip { white-space: normal; }
+.build-row .num { font-size: 14px; line-height: 20px; color: var(--heading); text-align: right; }
+.build-list__head .num { text-align: right; }
+.build-row__cost .spend-slot { padding: 0; border: 0; background: none; font-size: 13px; white-space: nowrap; }
+.build-row__cost .spend-slot .icon { display: none; }
+.build-row__phone-line { display: none; }
+
+/* -- Now: the rail -- */
+.rail-title--spaced { margin-top: var(--space-16); }
+.home-grid__rail .stat-tile--empty .stat-tile__value { display: flex; align-items: center; gap: 8px; }
+.stat-tile--empty .stat-tile__value .icon { width: 18px; height: 18px; color: var(--text-dim); }
+/* The services and data-feed cards (their markup belongs to the Fleet page), compact in the rail. */
+.home-grid__rail .serving, .home-grid__rail .feed { padding: var(--space-16) 20px; }
+.home-grid__rail .serving .panel-card__title, .home-grid__rail .feed .panel-card__title { font-size: 16px; line-height: 22px; }
+.home-grid__rail .serving .panel-card__header, .home-grid__rail .feed .panel-card__header { margin-bottom: var(--space-8); }
+.home-grid__rail .serving .panel-card__body, .home-grid__rail .feed .panel-card__body { font-size: 13px; line-height: 18px; }
+.home-grid__rail .serving .service-list { gap: 10px; }
+.home-grid__rail .serving .service-row { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
+.home-grid__rail .serving .service-row > :not(.status-dot):not(.status-pill) { grid-column: 2; }
+.home-grid__rail .serving .service-row__name { font-size: 14px; }
+.home-grid__rail .serving .service-row__resident,
+.home-grid__rail .serving details { font-size: 12px; }
+.home-grid__rail .feed p { margin: 0 0 6px; }
+.home-grid__rail .feed p:last-child { margin-bottom: 0; }
+/* Times and short results do not break mid-word. */
+.activity__table td.num, .planning__table td.num, .feature-attempts td.num, .feature-waits td.num,
+.feature-history td.num, .activity__result { white-space: nowrap; }
+/* Words wrap between words, not inside them (a long table scrolls inside its card instead). */
+.activity__table td, .planning__table td, .feature-attempts td, .feature-waits td, .feature-history td { overflow-wrap: break-word; }
+/* With a freshness line between the top bar and the dark band, the line takes the top bar's ground. */
+body:has(.panel-card--hero) .freshness .read-asof { background: var(--topbar); }
+body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-dark-dim); }
+.rail-link { margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; }
+
+/* -- Feature page -- */
+.feature-header { align-items: flex-start; }
+.feature-header > .asof-chip { flex: none; margin-top: 4px; }
+.feature-header__main { min-width: 0; }
+.feature-header .page-eyebrow a { color: inherit; text-decoration: none; }
+.feature-header .page-eyebrow a:hover { text-decoration: underline; }
+.feature-header .page-title { overflow-wrap: anywhere; }
+.feature-request { margin-top: var(--space-12); }
+.feature-request summary { list-style: none; }
+.feature-request summary::-webkit-details-marker { display: none; }
+.feature-request summary::after { content: "Show"; font-weight: 500; color: var(--text-dim); }
+.feature-request[open] summary::after { content: "Hide"; }
+.feature-request p { margin: var(--space-8) 0 0; max-width: 72ch; font-size: 14px; line-height: 20px; color: var(--text); white-space: pre-line; overflow-wrap: anywhere; }
+/* Durations are words ("3 h 36 min so far"), so these figures are a little smaller than counts. */
+.feature-stats .stat-tile__value { font-size: 28px; line-height: 34px; }
+.feature-stats .stat-tile--empty .stat-tile__value, .project-summary .stat-tile--empty .stat-tile__value { display: flex; align-items: center; gap: 8px; font-size: 20px; line-height: 34px; }
+.feature-q1 .journey-bar__meta { margin-top: var(--space-16); }
+.feature-lower { align-items: stretch; }
+.feature-side { display: flex; flex-direction: column; gap: var(--space-16); min-width: 0; }
 .feature-verdict-reason { color: var(--text); }
-.issue-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
-.issue-row--closed td { color: var(--text-dim); }
-.project-summary__list { list-style: none; margin: 0; padding: 0; display: flex; gap: 24px; flex-wrap: wrap; align-items: center; }
+.feature-verdict-reason::first-letter { text-transform: uppercase; }
+.feature-q2 .feature-verdict-reason { margin-bottom: var(--space-16); }
+.issue-row--closed .signal-row__name { color: var(--text-dim); }
+/* A note or an issue's detail: its own line, starting with a capital on screen. */
+.signal-row__detail { display: block; }
+.signal-row__detail::first-letter { text-transform: uppercase; }
+.wait-row--open td { background: var(--status-wait-tint); }
+.wait-row--open td:first-child { box-shadow: inset var(--accent-bar) 0 0 var(--status-wait); }
+.feature-q3 .observes-only, .feature-spend .observes-only { display: flex; align-items: center; gap: 8px; }
+.feature-q3 .observes-only .icon { color: var(--accent-text); }
+
+/* -- Project page -- */
+.page-head--split > .asof-chip { flex: none; }
+.stat-tile--attention { --bar: var(--status-risk); }
+.project-summary .stat-tile__label { min-height: 16px; }
+.issues-hidden { margin-bottom: var(--space-12); }
+.issue-counts { list-style: none; margin: 0; padding: 0; font-size: 12px; line-height: 16px; font-weight: 500; color: var(--text-dim); }
+.project-features .feature-list td.num, .project-features .feature-list td .spend-slot { white-space: nowrap; }
+
+/* -- Phones -- */
+@media (max-width: 1024px) {
+  .needs-you__list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .panel-card--hero { margin-top: calc(-1 * var(--space-16)); padding: var(--space-24) 0 28px; }
+  .needs-you__head { margin-bottom: var(--space-16); }
+  .needs-you__title { font-size: 26px; line-height: 32px; }
+  .needs-you__list { grid-template-columns: minmax(0, 1fr); gap: var(--space-12); }
+  .needs-you .true-empty--circles { padding: var(--space-16); }
+  .section-head { flex-wrap: wrap; }
+  .section-head__sub { font-size: 14px; }
+  .build-list__head { display: none; }
+  .build-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px var(--space-12); padding: 14px var(--space-16); }
+  .build-row__head { grid-column: 1 / -1; }
+  .build-row .num { display: none; }
+  .build-row__band { justify-self: end; }
+  .build-row__phone-line { display: block; grid-column: 1 / -1; font-size: 13px; line-height: 18px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+  .feature-header > .asof-chip { margin-top: var(--space-8); }
+  .feature-stats.stat-grid--3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .feature-stats .stat-tile__value { font-size: 22px; line-height: 28px; }
+  .feature-stats .stat-tile--empty .stat-tile__value, .project-summary .stat-tile--empty .stat-tile__value { font-size: 16px; line-height: 28px; }
+  .project-summary .stat-tile__label { min-height: 32px; }
+
+  /* Tables on phones: the columns that matter stay and fit; the rest are hidden on purpose. */
+  .planning__table th:nth-child(2), .planning__table td:nth-child(2) { display: none; }   /* project */
+  .planning__table td:nth-child(3) { overflow-wrap: anywhere; }   /* long error text with file paths */
+  .feature-attempts th:nth-child(2), .feature-attempts td:nth-child(2) { display: none; } /* started by */
+  .feature-attempts .feature-id { white-space: normal; overflow-wrap: anywhere; }
+  .feature-waits th:nth-child(2), .feature-waits td:nth-child(2) { display: none; }       /* from */
+  .feature-waits td.num, .feature-waits .status-pill { white-space: normal; }
+  /* The project's feature table keeps Feature, Where it stands and On track. */
+  .project-features .feature-list th:nth-child(2), .project-features .feature-list td:nth-child(2),
+  .project-features .feature-list th:nth-child(n+5), .project-features .feature-list td:nth-child(n+5) { display: none; }
+  .project-features .feature-list td:first-child { min-width: 0; }
+  .project-features .feature-list .band-chip { white-space: normal; }
+}
+@media (min-width: 721px) {
+  .planning__table td:nth-child(2) { min-width: 9em; }
+}
+
+/* Print: the band becomes a plain light section (no full-width shadow, no dark ground). */
+@media print {
+  .panel-card--hero {
+    margin: 0; padding: 0; box-shadow: none; clip-path: none; background: none;
+    color-scheme: light;
+    --kicker: #FFFFFF; --surface: #FFFFFF; --surface-sunken: #EEF3EF; --heading: #1C2D24; --text: #22312A;
+    --text-dim: #5E6E64; --line: #E4E7E4; --line-strong: #7A8C81; --luminous: #2F7A34; --accent-text: #2F7A34;
+    --tint-green: #EAF4EC; --tint-neutral: #EEF3EF; --bright-green: #3F8C43;
+    --status-done: #16A34A; --status-done-text: #166534;
+    --status-risk: #B45309; --status-risk-text: #92400E; --status-risk-tint: #FBEFD5;
+    --status-fail: #DC2626; --status-fail-text: #B91C1C; --status-fail-tint: #FDE8E8;
+    --status-wait: #6D28D9; --status-wait-text: #6D28D9; --status-wait-tint: #EDE7FB;
+  }
+  .needs-you__item { box-shadow: none; }
+  body:has(.panel-card--hero) .freshness .read-asof { background: none; }
+  body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: #5E6E64; }
+}
 
 /* ==== stage 2b: Reports, export, Fleet, Login, Client ==== */
 /* Part A's own rules for these pages, carried over on the new tokens until stage 2b replaces them. */
