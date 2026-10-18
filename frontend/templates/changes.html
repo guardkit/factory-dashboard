@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}What changed · Appmilla Factory{% endblock %}
+{% block content %}
+<header class="page-head">
+  <p class="page-eyebrow">What changed</p>
+  <h1 class="page-title">Changes to the dashboard</h1>
+  <p class="page-lead">Newest first, in plain words. To ask for a change, use <a href="/suggest?from=/changes">Suggest a change</a>.</p>
+</header>
+
+<section class="panel-card changes" aria-labelledby="changes-title">
+  <header class="panel-card__header"><h2 class="panel-card__title" id="changes-title">By date</h2></header>
+  <div class="panel-card__body">
+  {% if days %}
+    {% for day in days %}
+      <h3 class="changes__date">{{ day.date }}</h3>
+      <ul class="changes__list">{% for item in day.items %}<li>{{ item }}</li>{% endfor %}</ul>
+    {% endfor %}
+  {% else %}
+    <p class="true-empty">No changes are listed yet.</p>
+  {% endif %}
+  </div>
+</section>
+{% endblock %}

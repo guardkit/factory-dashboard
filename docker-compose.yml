@@ -41,6 +41,9 @@ services:
       FACTORY_DASH_VOICE_TIMEOUT: ${FACTORY_DASH_VOICE_TIMEOUT:-}
       FACTORY_DASH_SPOKEN_WORDS: ${FACTORY_DASH_SPOKEN_WORDS:-}
     volumes:
+      # The read model (the board touches it only at start, for its tables and the tenant list) and
+      # suggestions.db (requirement 11), the one file the board writes while it runs. The board runs as
+      # FACTORY_UID, the owner of ./data, so it can create and write it.
       - ./data:/data
       # Accounts and the session secret (README "Accounts and access"), outside the repository,
       # read-only. The board refuses to start without them; compose refuses if the folder is
@@ -66,6 +69,7 @@ services:
       FACTORY_DASH_DB: /data/readmodel.db
       FACTORY_FORGE_DB_PATH: /forge-state/forge.db
     volumes:
+      # The feed writes readmodel.db here and never opens suggestions.db, which only the board writes.
       - ./data:/data
       # Forge's live build record (the estate's ledger volume), read-only. SQLite can read a WAL
       # database from a read-only mount while Forge holds it open (its -wal and -shm files exist).

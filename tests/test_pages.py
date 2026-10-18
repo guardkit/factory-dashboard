@@ -72,7 +72,7 @@ def test_every_page_renders_and_speaks_plain_english(world: tuple[TestClient, Pa
     client, _, _ = world
     for path in ("/", "/features", "/features?days=all", "/features/FEAT-0001", "/features/FEAT-0003",
                  "/features/c5", "/projects", "/projects/acme/notes", "/delivered", "/reports", "/reports?view=export",
-                 "/issues", "/fleet", "/fragments/freshness"):
+                 "/issues", "/fleet", "/fragments/freshness", "/suggest", "/suggestions", "/changes"):
         r = client.get(path)
         assert r.status_code == 200, path
         visible = _text(r.text)

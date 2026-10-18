@@ -6,6 +6,10 @@ one-at-a-time rule and its hourly limit cover voice too), and reads a short vers
 aloud with the text-to-speech model. The full text answer is always returned. Nothing here is
 browser-specific: a robot can send the same recording and play the same audio later.
 
+`POST /api/voice/transcribe` (Part F) is the voice note for the suggestion box: the same recording
+checks and one-at-a-time rule, then speech to text only (`transcribe_note`). The words go back to the
+page for the person to check; the chat is not asked and nothing is spoken.
+
 The models sit behind the estate's llama-swap on :9000 and are moving machines, so their addresses,
 names and voice are settings (environment variables, with the defaults below). No key is needed.
 
@@ -33,7 +37,7 @@ from typing import Any
 import httpx
 
 from backend.auth import ResolvedUser
-from backend.chat.service import LIMITED, NOT_SET_UP, Answer, Chat, FollowUp
+from backend.chat.service import LIMITED, NOT_SET_UP, Answer, Chat, FollowUp, HourlyLimit
 
 log = logging.getLogger("factory_dashboard.voice")
 
@@ -564,5 +568,76 @@ def ask_by_voice(  # noqa: PLR0911 (one return per refusal)
             reply.spoken, reply.voice_note = "", CANT_SPEAK
         log.info("voice: %s, %d bytes spoken", answer.kind, len(reply.audio))
         return reply
+    finally:
+        voice.one_at_a_time.release()
+
+
+# --- a voice note for a suggestion (requirement 11): speech to text only -----------------------------------
+
+#: At most this many voice notes per account in any hour (in memory; a restart clears it).
+NOTES_PER_HOUR = 10
+# The recording refusals, worded for a suggestion rather than a question.
+NOTE_WORDS = {
+    TOO_BIG: "That recording is too large, so please keep a voice note under 30 seconds.",
+    TOO_LONG: "That recording is longer than 30 seconds, so please record a shorter note.",
+    NOT_AUDIO: "That recording is in a format the dashboard can't read, so please type your suggestion instead.",
+    NO_RECORDING: "No recording came with the request, so please try again or type your suggestion.",
+}
+NOTE_CANT_HEAR = "Voice isn't available right now, so please type your suggestion in the box."
+NOTE_HEARD_NOTHING = "I didn't catch any words in that recording, so please try again or type your suggestion."
+NOTE_BUSY = "The microphone is busy with another recording just now, so please try again in a moment."
+NOTES_LIMITED = (f"You have recorded {NOTES_PER_HOUR} voice notes in the last hour, so please type your "
+                 "suggestion instead.")
+NOTE_CROSS_SITE = "This recording came from another website, so it was refused."
+
+
+class PerUserHourly:
+    """At most `limit` in any rolling hour for each account (the chat's HourlyLimit, one per username)."""
+
+    def __init__(self, limit: int = NOTES_PER_HOUR, clock: Callable[[], float] = time.monotonic) -> None:
+        self._limit, self._clock = limit, clock
+        self._per_user: dict[str, HourlyLimit] = {}
+        self._lock = threading.Lock()
+
+    def try_take(self, username: str) -> bool:
+        with self._lock:
+            limit = self._per_user.setdefault(username, HourlyLimit(self._limit, self._clock))
+        return limit.try_take()
+
+
+@dataclass(frozen=True)
+class NoteReply:
+    status: int = 200
+    #: set when there is no transcript
+    message: str = ""
+    transcript: str = ""
+
+
+def transcribe_note(  # noqa: PLR0911 (one return per refusal)
+    voice: Voice, audio: bytes, content_type: str, user: ResolvedUser,
+    limit: PerUserHourly,
+) -> NoteReply:
+    """A voice note for the suggestion box: the same recording checks and the same one-at-a-time rule as a
+    spoken question, then speech to text only. Nothing is asked of the chat and nothing is spoken back."""
+    refused = check_recording(audio, content_type)
+    if refused:
+        return NoteReply(refused[0], NOTE_WORDS.get(refused[1], refused[1]))
+    if not voice.one_at_a_time.acquire(blocking=False):
+        return NoteReply(429, NOTE_BUSY)
+    try:
+        if not limit.try_take(user.username):
+            return NoteReply(429, NOTES_LIMITED)
+        try:
+            text, seconds = voice.transcribe(audio, ACCEPTED_TYPES[base_type(content_type)], content_type)
+        except VoiceUnavailable as exc:
+            log.warning("voice note: %s", exc)
+            return NoteReply(503, NOTE_CANT_HEAR)
+        if seconds > MAX_SECONDS + 0.5:
+            log.warning("voice note: refused %.1f s of decoded audio", seconds)
+            return NoteReply(413, NOTE_WORDS[TOO_LONG])
+        heard = " ".join(text.split())
+        if not heard:
+            return NoteReply(422, NOTE_HEARD_NOTHING)
+        return NoteReply(transcript=heard)
     finally:
         voice.one_at_a_time.release()

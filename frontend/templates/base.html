@@ -59,6 +59,10 @@
          skip link lands on it and a content refresh (freshness.js swaps #main) refreshes it too. #}
       {% block hero %}{% endblock %}
       {% block content %}{% endblock %}
+      {# Requirement 11: every operator page offers "Suggest a change", noting the page it came from. #}
+      {% if signed_in and signed_in.is_operator and not chat_page and not suggest_page %}
+      <p class="suggest-link no-print"><a href="/suggest?from={{ (request.url.path ~ ('?' ~ request.url.query if request.url.query else '')) | urlencode }}">Suggest a change</a> · <a href="/changes">What changed</a></p>
+      {% endif %}
     </main>
 
     {# The chat (Part D), operator accounts only: a side drawer on wide screens; on narrow screens

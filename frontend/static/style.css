@@ -1651,3 +1651,61 @@ textarea.chat__input { min-height: 68px; }
   .chat__log { padding: var(--space-16); }
   .chat-exchange__question, .chat-exchange__answer { max-width: 92%; }
 }
+
+/* ==== Part F: suggestions and what changed ==== */
+/* Requirement 11. The design pack left "Suggest a change" to be designed, so these pages use the
+   redesign's own pieces: page-head, panel-card, the chat composer (chat__form, chat__input,
+   chat__ask, chat-mic, chat-voice) for the suggestion box, window-form for the status, status-pill
+   and true-empty. Names added here: suggest-link (the line at the foot of every operator page),
+   suggest, suggest__form, suggest__input, suggest__hint, suggest__error, suggest__sent,
+   suggestions, suggestion-list, suggestion(--new, --seen, --done, --declined), suggestion__meta,
+   __who, __when, __from, __text, __status, changes, changes__date, changes__list, changes__when,
+   recent-changes. */
+
+.suggest-link { margin: 0; font-size: 13px; line-height: 18px; color: var(--text-dim); }
+.suggest-link a { font-weight: 600; }
+
+/* The composer sits inside a card here, so it drops its own border and band; the box takes the full
+   width and Send and the microphone sit under it, so the box stays wide on a phone. */
+.suggest > .suggest__form {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 0; border-top: 0; background: transparent;
+}
+.suggest__form > .chat__label, .suggest__form > .chat-voice, .suggest__form > .suggest__input { flex: 1 0 100%; }
+textarea.suggest__input { min-height: 132px; }
+.suggest > .suggest__error { margin-bottom: var(--space-12); }
+.suggest > .suggest__hint { margin-top: var(--space-8); }
+.suggest__sent {
+  display: flex; gap: 12px; align-items: flex-start; margin: 0; padding: 14px 16px;
+  border-radius: var(--radius-md); background: var(--tint-green); color: var(--status-done-text);
+  font-size: 14px; line-height: 20px; font-weight: 600;
+}
+.suggest__sent .icon { width: 18px; height: 18px; color: var(--status-done); }
+
+.suggestion-list { list-style: none; margin: 0; padding: 0; }
+.panel-card--flush > .panel-card__body > .suggestion-list { margin: 0; }
+.suggestion { padding: var(--space-16) var(--space-24); border-top: 1px solid var(--line); }
+.suggestion:first-child { border-top: 0; }
+.suggestion__meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0 0 var(--space-8);
+  font-size: 13px; line-height: 18px; color: var(--text-dim);
+}
+.suggestion__who { font-weight: 700; color: var(--heading); }
+.suggestion__from a { overflow-wrap: anywhere; }
+/* The words as written: line breaks kept, nothing read as markup. */
+.suggestion__text { margin: 0 0 var(--space-12); white-space: pre-line; overflow-wrap: anywhere; color: var(--heading); font-size: 15px; line-height: 22px; }
+.suggestion__status label { flex-direction: row; align-items: center; gap: 8px; }
+.suggestion__status select {
+  height: 38px; padding: 0 10px; border-radius: var(--radius-md); border: 1px solid var(--line-strong);
+  background: var(--surface); color: var(--text); font: 400 14px/20px var(--font-body);
+}
+
+.changes__date { margin: var(--space-16) 0 var(--space-8); font-family: var(--font-heading); font-size: 16px; line-height: 22px; color: var(--heading); }
+.changes__date:first-child { margin-top: 0; }
+.changes__list { margin: 0; padding-left: 1.2em; color: var(--heading); }
+.changes__list li { margin: 0 0 6px; }
+.changes__when { font-weight: 600; color: var(--text-dim); }
+
+@media (max-width: 720px) {
+  .suggestion { padding: var(--space-16); }
+}

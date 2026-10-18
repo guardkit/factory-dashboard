@@ -711,13 +711,16 @@ def test_the_speech_to_text_reply_cap(world: tuple[TestClient, FakeModel, FakeSp
 def test_every_voice_failure_is_one_sentence() -> None:
     sentences = [voice.NO_LENGTH, voice.TOO_BIG, voice.TOO_LONG, voice.NOT_AUDIO, voice.NO_RECORDING,
                  voice.CROSS_SITE, voice.VOICE_BUSY, voice.CANT_HEAR, voice.HEARD_NOTHING, voice.CANT_SPEAK,
-                 LIMITED, NOT_SET_UP]  # the chat's two that voice returns itself
+                 LIMITED, NOT_SET_UP,  # the chat's two that voice returns itself
+                 # Part F's voice note for the suggestion box
+                 *voice.NOTE_WORDS.values(), voice.NOTE_CANT_HEAR, voice.NOTE_HEARD_NOTHING, voice.NOTE_BUSY,
+                 voice.NOTES_LIMITED, voice.NOTE_CROSS_SITE]
     for sentence in sentences:
         assert len(re.findall(r"[.!?](\s|$)", sentence)) == 1, sentence
     mic = (Path(__file__).resolve().parent.parent / "frontend" / "static" / "mic.js").read_text(encoding="utf-8")
     words = re.findall(r'(?:error|offline|signin|failed|recorder): "([^"]+)"', mic)
     words += re.findall(r'set\("idle", "([^"]+)"\)', mic)
-    assert len(words) == 6
+    assert len(words) == 11  # the chat's six, and the voice note's five (Part F)
     for sentence in words:
         assert len(re.findall(r"[.!?](\s|$)", sentence)) == 1, sentence
 

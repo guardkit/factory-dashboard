@@ -22,6 +22,8 @@ WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 COPY backend ./backend
 COPY frontend ./frontend
+# The "What changed" page reads this list (backend/suggestions.py).
+COPY CHANGES.md ./
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
 # The board binds loopback on the host network; nothing is EXPOSEd because nothing is published —

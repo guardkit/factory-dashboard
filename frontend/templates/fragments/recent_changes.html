@@ -1,0 +1,12 @@
+{# "What changed recently": the newest few lines of CHANGES.md, as plain escaped text. #}
+<section class="panel-card recent-changes" aria-labelledby="recent-changes-title">
+  <header class="panel-card__header"><h2 class="panel-card__title" id="recent-changes-title">What changed recently</h2></header>
+  <div class="panel-card__body">
+  {% if recent %}
+    <ul class="changes__list">{% for date, item in recent %}<li><span class="changes__when">{{ date }}:</span> {{ item }}</li>{% endfor %}</ul>
+  {% else %}
+    <p class="true-empty">No changes are listed yet.</p>
+  {% endif %}
+  </div>
+  <footer class="panel-card__foot"><a href="/changes">Everything that changed</a></footer>
+</section>

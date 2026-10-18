@@ -1,8 +1,9 @@
 """FastAPI entrypoint: server-rendered pages, sessions, tenant resolution, the route guard.
 
-Server-rendered FastAPI + Jinja with HTMX for live updates. The app has no bus connection and no
-write path: every request opens the store read-only. Jinja autoescape is on, so every string from
-Forge's record (request sentences, error text) renders inert.
+Server-rendered FastAPI + Jinja with HTMX for live updates. The app has no bus connection, and every
+request opens the store read-only. The one thing it writes is suggestions.db, its own small database
+for "Suggest a change" (requirement 11, backend/suggestions.py). Jinja autoescape is on, so every
+string from Forge's record (request sentences, error text) and every suggestion renders inert.
 
 Sign-in (design 2026-10-17, requirement 2): accounts come from accounts.yaml in the configuration
 folder (backend/accounts.py); the signed cookie holds only the username. The account and its
@@ -36,7 +37,7 @@ from starlette.requests import ClientDisconnect
 from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from backend import accounts, auth, db, sse, voice
+from backend import accounts, auth, db, sse, suggestions, voice
 from backend.chat.service import Chat, FollowUp
 from backend.config_loader import (
     PLANS_PATH,
@@ -73,6 +74,8 @@ LOGIN_THROTTLED = (
 
 FormText = Annotated[str, Form()]
 OptionalFormText = Annotated[str, Form(max_length=2000)]
+# A suggestion's text: its length is checked by backend/suggestions.py, which says so in a sentence.
+LongFormText = Annotated[str, Form()]
 
 
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
@@ -186,6 +189,10 @@ def create_app(
     db_path = db_path or (Path(env_db) if env_db else BASE_DIR / "readmodel.db")
     load_plans(plans_path)  # validated at boot; mirrored by the projector at S4
     db.init_db(db_path, tenants.values())
+    # Suggestions (requirement 11): the one thing the web side writes, in its own small database
+    # beside the read model. The feed never opens it.
+    suggestions_path = suggestions.db_path_for(db_path.parent)
+    suggestions.init_db(suggestions_path)
 
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     # Fence 6: autoescape ON for every event-derived string.
@@ -208,11 +215,16 @@ def create_app(
     app.state.chat = Chat(db_path)
     # Voice (requirement 10): speech-to-text, then the same chat, then text-to-speech.
     app.state.voice = voice.Voice()
+    app.state.suggestions_path = suggestions_path
+    app.state.changes_path = suggestions.CHANGES_PATH
+    # Voice notes for the suggestion box: speech to text only, a few an hour for each account.
+    app.state.note_limit = voice.PerUserHourly()
 
     _register_exception_handlers(app)
     _register_routes(app)
     _register_chat_routes(app)
     _register_voice_routes(app)
+    _register_suggestion_routes(app)
     return app
 
 
@@ -629,39 +641,129 @@ def _voice_json(reply: voice.VoiceReply, templates: Jinja2Templates) -> JSONResp
     })
 
 
+async def _read_recording(  # noqa: PLR0911 (one return per refusal)
+    request: Request, cross_site: str,
+) -> tuple[bytes, str, dict[str, str]] | Response:
+    """The recording (field `audio`) and the form's other fields, or the refusal to send instead. The
+    body is read only after the same-origin and length checks, and never beyond the limit."""
+    if not same_origin(request):
+        return JSONResponse({"message": cross_site}, status_code=403)
+    length = request.headers.get("content-length", "")
+    if not length.isdigit():
+        return JSONResponse({"message": voice.NO_LENGTH}, status_code=411)
+    if int(length) > voice.MAX_BODY_BYTES:
+        return JSONResponse({"message": voice.TOO_BIG}, status_code=413)
+    try:
+        form = await request.form(max_files=1, max_fields=3, max_part_size=4096)
+    except StarletteHTTPException:  # a malformed form
+        return JSONResponse({"message": voice.NO_RECORDING}, status_code=400)
+    except ClientDisconnect:  # the caller went away mid-upload: nothing to answer, nothing to log
+        return Response(status_code=400)
+    try:
+        upload = form.get("audio")
+        if not isinstance(upload, UploadFile):
+            return JSONResponse({"message": voice.NO_RECORDING}, status_code=400)
+        audio = await upload.read(voice.MAX_WAV_BYTES + 1)
+        content_type = upload.content_type or ""
+        fields = {k: str(v) for k, v in form.items() if isinstance(v, str)}
+    finally:
+        await form.close()
+    return audio, content_type, fields
+
+
 def _register_voice_routes(app: FastAPI) -> None:
     """Voice (design requirement 10): the chat's guards, plus limits on the recording."""
 
     @app.post("/api/voice/ask")
-    async def voice_ask(request: Request, user: OperatorApi) -> Response:  # noqa: PLR0911 (one per refusal)
-        # The same guards as POST /chat: operators only (401/403 above), same-origin only. The body
-        # is read only after the guards and the length check, and never beyond the limit.
-        if not same_origin(request):
-            return JSONResponse({"message": voice.CROSS_SITE}, status_code=403)
-        length = request.headers.get("content-length", "")
-        if not length.isdigit():
-            return JSONResponse({"message": voice.NO_LENGTH}, status_code=411)
-        if int(length) > voice.MAX_BODY_BYTES:
-            return JSONResponse({"message": voice.TOO_BIG}, status_code=413)
-        try:
-            form = await request.form(max_files=1, max_fields=3, max_part_size=4096)
-        except StarletteHTTPException:  # a malformed form
-            return JSONResponse({"message": voice.NO_RECORDING}, status_code=400)
-        except ClientDisconnect:  # the caller went away mid-upload: nothing to answer, nothing to log
-            return Response(status_code=400)
-        try:
-            upload = form.get("audio")
-            if not isinstance(upload, UploadFile):
-                return JSONResponse({"message": voice.NO_RECORDING}, status_code=400)
-            audio = await upload.read(voice.MAX_WAV_BYTES + 1)
-            content_type = upload.content_type or ""
-            prior_q, prior_c = str(form.get("prior_question") or ""), str(form.get("prior_clarify") or "")
-        finally:
-            await form.close()
+    async def voice_ask(request: Request, user: OperatorApi) -> Response:
+        # The same guards as POST /chat: operators only (401/403 above), same-origin only.
+        got = await _read_recording(request, voice.CROSS_SITE)
+        if isinstance(got, Response):
+            return got
+        audio, content_type, fields = got
+        prior_q, prior_c = fields.get("prior_question", ""), fields.get("prior_clarify", "")
         follow_up = FollowUp(prior_q, prior_c) if prior_q and prior_c else None
         reply = await run_in_threadpool(voice.ask_by_voice, request.app.state.chat, request.app.state.voice,
                                         audio, content_type, user, follow_up)
         return _voice_json(reply, request.app.state.templates)
+
+    @app.post("/api/voice/transcribe")
+    async def voice_transcribe(request: Request, user: OperatorApi) -> Response:
+        # A voice note for the suggestion box (requirement 11): the same guards and recording limits,
+        # then speech to text only. The words go into the box for the person to check; nothing is
+        # stored here and nothing is spoken back.
+        got = await _read_recording(request, voice.NOTE_CROSS_SITE)
+        if isinstance(got, Response):
+            return got
+        audio, content_type, _fields = got
+        note = await run_in_threadpool(voice.transcribe_note, request.app.state.voice, audio, content_type,
+                                       user, request.app.state.note_limit)
+        if note.message:
+            return JSONResponse({"message": note.message}, status_code=note.status)
+        return JSONResponse({"transcript": note.transcript})
+
+
+def _suggest_form(request: Request, user: auth.ResolvedUser, *, from_page: str, text: str = "",
+                  error: str = "", status_code: int = 200) -> HTMLResponse:
+    changes = suggestions.read_changes(request.app.state.changes_path)
+    return _render(request, "suggest.html", {
+        "from_page": suggestions.clean_page(from_page), "text": text, "error": error,
+        "max_chars": suggestions.MAX_CHARS, "recent": suggestions.recent_changes(changes),
+        "suggest_page": True, "nav_active": "", "tenant": _tenant(request, user),
+    }, status_code=status_code)
+
+
+def _suggestions_page(request: Request, user: auth.ResolvedUser, *, sent: bool = False, error: str = "",
+                      status_code: int = 200) -> HTMLResponse:
+    changes = suggestions.read_changes(request.app.state.changes_path)
+    return _render(request, "suggestions.html", {
+        "rows": suggestions.list_all(request.app.state.suggestions_path), "sent": sent, "error": error,
+        "statuses": [(s, suggestions.STATUS_WORDS[s]) for s in suggestions.STATUSES],
+        "recent": suggestions.recent_changes(changes), "nav_active": "", "tenant": _tenant(request, user),
+    }, status_code=status_code)
+
+
+def _register_suggestion_routes(app: FastAPI) -> None:
+    """Suggest a change, the Suggestions list and What changed (design requirement 11). Operator
+    accounts only; every POST is same-origin only, like sign-in, sign-out and the chat."""
+
+    @app.get("/suggest", response_class=HTMLResponse)
+    def suggest_form(request: Request, user: OperatorPage,
+                     from_: Annotated[str, Query(alias="from")] = "") -> HTMLResponse:
+        return _suggest_form(request, user, from_page=from_)
+
+    @app.post("/suggest", response_class=HTMLResponse)
+    def suggest_submit(request: Request, user: OperatorApi, text: LongFormText = "",
+                       from_page: OptionalFormText = "") -> Response:
+        if not same_origin(request):
+            return HTMLResponse(suggestions.CROSS_SITE, status_code=403)
+        added, refusal = suggestions.add(request.app.state.suggestions_path, user, text, from_page)
+        if added is None:
+            code = 429 if refusal == suggestions.LIMITED else 400
+            # The words come back in the box (cut to the limit), so nothing typed is lost.
+            return _suggest_form(request, user, from_page=from_page, text=text[: suggestions.MAX_CHARS * 2],
+                                 error=refusal, status_code=code)
+        return RedirectResponse("/suggestions?sent=1", status_code=303)
+
+    @app.get("/suggestions", response_class=HTMLResponse)
+    def suggestions_list(request: Request, user: OperatorPage, sent: str = "") -> HTMLResponse:
+        return _suggestions_page(request, user, sent=sent == "1")
+
+    @app.post("/suggestions/{suggestion_id}/status", response_class=HTMLResponse)
+    def suggestion_status(request: Request, suggestion_id: str, user: OperatorApi,
+                          status: OptionalFormText = "") -> Response:
+        if not same_origin(request):
+            return HTMLResponse(suggestions.CROSS_SITE, status_code=403)
+        if not (suggestion_id.isdigit() and suggestions.set_status(
+                request.app.state.suggestions_path, int(suggestion_id), status, user)):
+            return _suggestions_page(request, user, error=suggestions.UNKNOWN, status_code=400)
+        return RedirectResponse(f"/suggestions#suggestion-{int(suggestion_id)}", status_code=303)
+
+    @app.get("/changes", response_class=HTMLResponse)
+    def changes(request: Request, user: OperatorPage) -> HTMLResponse:
+        return _render(request, "changes.html", {
+            "days": suggestions.read_changes(request.app.state.changes_path), "nav_active": "",
+            "tenant": _tenant(request, user)})
 
 
 _FRAGMENT_TEMPLATES: dict[str, str] = {
