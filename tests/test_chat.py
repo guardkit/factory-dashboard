@@ -115,6 +115,13 @@ def test_feature_status_by_title_words(ctx: tools.Context) -> None:
     assert waiting.fields["sent"] == "today at 10:00:00"
 
 
+def test_a_feature_that_stopped_says_where_it_stopped(ctx: tools.Context) -> None:
+    failed = answers.render(tools.feature_status(ctx, "FEAT-0006"))
+    assert "It stopped at the building step." in failed and "How far" not in failed
+    running = answers.render(tools.feature_status(ctx, "FEAT-0003"))
+    assert "How far: building." in running
+
+
 def test_feature_status_lists_every_feature_with_the_same_name(ctx: tools.Context) -> None:
     r = tools.feature_status(ctx, "export notes as a file")
     assert r.status == "ambiguous"

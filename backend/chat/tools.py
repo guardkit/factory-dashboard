@@ -301,6 +301,8 @@ def feature_status(ctx: Context, feature: str) -> Result:
         open_issues = [i for i in fp.issues if not i.closed_label]
         fields: dict[str, object] = {
             "label": f.label, "project": fp.project, "status_text": fp.status_text, "station": _station(f),
+            # Finished without being delivered: the journey marks this step "stopped", not reached.
+            "stopped": "yes" if not f.in_progress and not f.delivered_at else "",
             "verdict": fp.verdict.label, "verdict_reason": fp.verdict_reason, "elapsed": fp.elapsed,
             "sent": _when(fp.sent_label), "attempts": str(len(fp.attempts)),
             "delivered_on": dbread.delivered_row(f).delivered_date if f.delivered_at else "",

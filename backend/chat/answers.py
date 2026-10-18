@@ -66,7 +66,9 @@ def _feature_status(fields: dict[str, object]) -> str:
     if _s(fields, "delivered_on"):
         parts = [f"{head}: merged and checked on {_s(fields, 'delivered_on')}."]
     else:
-        parts = [f"{head}: {_sentence(_s(fields, 'status_text'))}", f"How far: {_s(fields, 'station')}."]
+        where = (f"It stopped at the {_s(fields, 'station')} step." if _s(fields, "stopped")
+                 else f"How far: {_s(fields, 'station')}.")
+        parts = [f"{head}: {_sentence(_s(fields, 'status_text'))}", where]
     verdict = _s(fields, "verdict")
     reason = _s(fields, "verdict_reason")
     if verdict == "not measured yet":
