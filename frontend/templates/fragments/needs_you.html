@@ -1,8 +1,14 @@
 {% import 'macros.html' as m %}
-{# What is waiting for a person, longest first. Decisions are made in the usual approval channel. #}
-<section class="panel-card needs-you state-{{ panel.state.value }}" id="panel-p4" data-panel="p4">
-  <header class="panel-card__header">
-    <h2 class="panel-card__title">{{ panel.title }} ({{ panel.items | length }})</h2>
+{# What is waiting for a person, longest first: the dark band at the top of Now. The look lives on
+   this root element, because live updates replace the whole section. Decisions are made in Slack;
+   the dashboard only shows them (there is no Slack address in the record, so no link). #}
+{% set n = panel.items | length %}
+<section class="panel-card needs-you panel-card--hero state-{{ panel.state.value }}" data-theme="dark" id="panel-p4" data-panel="p4" aria-labelledby="needs-you-title">
+  <header class="panel-card__header needs-you__head">
+    <div>
+      <p class="page-eyebrow">{{ panel.title }}</p>
+      <h2 class="panel-card__title needs-you__title" id="needs-you-title">{% if n %}<span class="key-figure">{{ n }} thing{{ 's' if n != 1 }}</span> need{{ '' if n != 1 else 's' }} you{% else %}Nothing needs you{% endif %}</h2>
+    </div>
     {{ m.asof_chip(panel.as_of) }}
   </header>
   <div class="panel-card__body">
@@ -10,17 +16,17 @@
     {% if panel.items %}
       <ul class="needs-you__list">
       {% for it in panel.items %}
-        <li class="needs-you__item">
+        <li class="needs-you__item panel-card panel-card--bar panel-card--wait">
+          <span class="needs-you__headline">{{ it.what }}</span>
+          <h3 class="needs-you__subject">{% if it.link and it.link != '/issues' %}<a href="{{ it.link }}">{{ it.subject }}</a>{% else %}{{ it.subject }}{% endif %}</h3>
+          <span class="needs-you__age num" title="{{ it.age_title }}">{{ it.age_label }}<span class="needs-you__age-word">waiting</span></span>
           {{ m.band_chip(it.band) }}
-          <span class="needs-you__headline">{{ it.what }}:</span>
-          {% if it.link and it.link != '/issues' %}<a href="{{ it.link }}">{{ it.subject }}</a>{% else %}<span>{{ it.subject }}</span>{% endif %}
-          <span class="needs-you__age" title="{{ it.age_title }}">for {{ it.age_label }}</span>
         </li>
       {% endfor %}
       </ul>
-      <p class="observes-only">Decide in the usual approval channel; this dashboard only shows it.</p>
+      <p class="observes-only">{{ m.icon('chat') }}Decide in Slack. This dashboard only shows what is waiting.</p>
     {% else %}
-      <p class="true-empty">{{ panel.empty_copy }}</p>
+      <p class="true-empty true-empty--circles">{{ panel.empty_copy }}</p>
     {% endif %}
   </div>
 </section>

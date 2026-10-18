@@ -87,3 +87,25 @@
   </tbody>
 </table>
 {%- endmacro %}
+
+{# Stage 2a. The Now page's work list: one row per feature, the whole row a link to the feature.
+   Title first, then the project and the code chip; the stage as the mini journey and the record's
+   own words; on track; elapsed; cost (not measured yet). On phones the elapsed and cost columns
+   fold into one line under the title. The Features and project pages keep feature_table (a test
+   reads a row there to its </tr>). #}
+{% macro feature_rows(rows) -%}
+<ul class="build-list">
+  <li class="build-list__head" aria-hidden="true"><span>Feature</span><span>Where it stands</span><span>On track</span><span class="num">Elapsed</span><span class="num">Cost</span></li>
+  {% for r in rows %}
+  <li><a class="build-row" href="{{ r.link }}">
+    <span class="build-row__head"><b class="feature-title">{{ r.title }}</b>
+      <span class="build-row__detail"><span class="build-row__project">{{ r.project }}</span>{% if r.code %} <span class="feature-id">{{ r.code }}</span>{% endif %}</span></span>
+    <span class="build-row__stage">{{ journey_bar(r.journey, mini=True) }}<span class="build-row__status">{{ r.status_text }}</span></span>
+    <span class="build-row__band">{{ band_chip(r.band) }}</span>
+    <span class="num build-row__elapsed">{{ r.elapsed }}</span>
+    <span class="num build-row__cost"><span class="spend-slot" data-state="not-measured">Not measured</span></span>
+    <span class="build-row__phone-line">{{ r.elapsed }} · cost not measured</span>
+  </a></li>
+  {% endfor %}
+</ul>
+{%- endmacro %}

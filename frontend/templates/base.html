@@ -52,11 +52,11 @@
     {% include "fragments/freshness.html" %}
   </div>
 
-  {# Full-width bands above the page grid (the Now page's Needs-you band). #}
-  {% block hero %}{% endblock %}
-
   <div class="frame">
     <main id="main" class="content">
+      {# Full-width bands at the top of the page (the Now page's Needs-you band). Inside #main, so the
+         skip link lands on it and a content refresh (freshness.js swaps #main) refreshes it too. #}
+      {% block hero %}{% endblock %}
       {% block content %}{% endblock %}
     </main>
 

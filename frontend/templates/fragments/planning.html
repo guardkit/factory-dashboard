@@ -1,28 +1,30 @@
 {% import 'macros.html' as m %}
-<section class="panel-card planning state-{{ panel.state.value }}" id="panel-p5" data-panel="p5">
-  <header class="panel-card__header">
-    <h2 class="panel-card__title">{{ panel.title }} <span class="panel-card__sub">last 7 days, and any still open</span></h2>
+<section class="now-section planning state-{{ panel.state.value }}" id="panel-p5" data-panel="p5" aria-labelledby="planning-title">
+  <header class="section-head">
+    <h2 class="section-title" id="planning-title">{{ panel.title }} <span class="section-head__sub">last 7 days, and any still open</span></h2>
     {{ m.asof_chip(panel.as_of) }}
   </header>
-  <div class="panel-card__body">
-    {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
-    {% if panel.rows %}
-      <table class="dense-table planning__table">
-        <thead><tr><th scope="col">Request</th><th scope="col">Project</th><th scope="col">Where it stands</th><th scope="col">Started</th></tr></thead>
-        <tbody>
-        {% for r in panel.rows %}
-          <tr class="planning__row">
-            <td><a href="{{ r.link }}">{{ r.title }}</a></td>
-            <td>{{ r.project }}</td>
-            <td>{{ r.status_text }}</td>
-            <td class="num">{{ r.age }} ago</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-      {% if panel.more %}<p class="page-lead">And {{ panel.more }} more: see <a href="/features">Features</a>.</p>{% endif %}
-    {% else %}
-      <p class="true-empty">{{ panel.empty_copy }}</p>
-    {% endif %}
+  <div class="panel-card panel-card--flush">
+    <div class="panel-card__body">
+      {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+      {% if panel.rows %}
+        <table class="dense-table planning__table">
+          <thead><tr><th scope="col">Request</th><th scope="col">Project</th><th scope="col">Where it stands</th><th scope="col" class="num">Started</th></tr></thead>
+          <tbody>
+          {% for r in panel.rows %}
+            <tr class="planning__row">
+              <td><a href="{{ r.link }}">{{ r.title }}</a></td>
+              <td>{{ r.project }}</td>
+              <td>{{ r.status_text }}</td>
+              <td class="num">{{ r.age }} ago</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="true-empty">{{ panel.empty_copy }}</p>
+      {% endif %}
+    </div>
+    {% if panel.rows and panel.more %}<p class="panel-card__foot"><span>And {{ panel.more }} more: see <a href="/features">Features</a>.</span></p>{% endif %}
   </div>
 </section>

@@ -1,27 +1,29 @@
 {% import 'macros.html' as m %}
-<section class="panel-card activity state-{{ panel.state.value }}" id="panel-p3" data-panel="p3">
-  <header class="panel-card__header">
-    <h2 class="panel-card__title">{{ panel.title }}</h2>
+<section class="now-section activity state-{{ panel.state.value }}" id="panel-p3" data-panel="p3" aria-labelledby="activity-title">
+  <header class="section-head">
+    <h2 class="section-title" id="activity-title">{{ panel.title }}</h2>
     {{ m.asof_chip(panel.as_of) }}
   </header>
-  <div class="panel-card__body">
-    {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
-    {% if panel.rows %}
-      <table class="dense-table activity__table">
-        <thead><tr><th scope="col">When</th><th scope="col">Feature</th><th scope="col">Step</th><th scope="col">Result</th></tr></thead>
-        <tbody>
-        {% for e in panel.rows %}
-          <tr class="activity__row">
-            <td class="num" title="{{ e.time_title }}">{{ e.time_label }}</td>
-            <td>{% if e.link %}<a href="{{ e.link }}">{{ e.subject }}</a>{% else %}{{ e.subject }}{% endif %}</td>
-            <td>{{ e.step }}</td>
-            <td class="activity__result activity__result--{{ e.result | replace(' ', '-') }}">{{ e.result }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <p class="true-empty">{{ panel.empty_copy }}</p>
-    {% endif %}
+  <div class="panel-card panel-card--flush">
+    <div class="panel-card__body">
+      {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+      {% if panel.rows %}
+        <table class="dense-table activity__table">
+          <thead><tr><th scope="col" class="num">When</th><th scope="col">Feature</th><th scope="col">Step</th><th scope="col">Result</th></tr></thead>
+          <tbody>
+          {% for e in panel.rows %}
+            <tr class="activity__row">
+              <td class="num" title="{{ e.time_title }}">{{ e.time_label }}</td>
+              <td>{% if e.link %}<a href="{{ e.link }}">{{ e.subject }}</a>{% else %}{{ e.subject }}{% endif %}</td>
+              <td>{{ e.step }}</td>
+              <td class="activity__result activity__result--{{ e.result | replace(' ', '-') }}">{{ e.result }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="true-empty">{{ panel.empty_copy }}</p>
+      {% endif %}
+    </div>
   </div>
 </section>
