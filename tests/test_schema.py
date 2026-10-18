@@ -14,10 +14,12 @@ CONFIG = Path(__file__).resolve().parent / "fixtures" / "tenants_test.yaml"
 EXPECTED_TABLES = {
     "tenants", "users", "change_log", "service_health", "mirror_status", "plan_milestones",
     "forge_builds", "forge_stage_log", "forge_planning_runs", "forge_planning_events", "forge_queue",
-    "forge_missions", "usage_gateway", "usage_frontier", "cost_rollups",
+    "forge_missions", "spend_calls", "cost_feed_status",
 }
-# The July bus-fed tables are gone: Forge's record replaced them.
-REMOVED = {"builds", "stage_events", "approvals", "issues", "ledger", "agents", "consumer_watermarks", "norms"}
+# The July bus-fed tables are gone: Forge's record replaced them. The July cost tables, never fed,
+# are replaced by the copy of LiteLLM's spend log (part B).
+REMOVED = {"builds", "stage_events", "approvals", "issues", "ledger", "agents", "consumer_watermarks", "norms",
+           "usage_gateway", "usage_frontier", "cost_rollups"}
 
 
 def _tables(conn: sqlite3.Connection) -> set[str]:

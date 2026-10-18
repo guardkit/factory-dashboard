@@ -1,0 +1,25 @@
+# Nominal prices for the factory's model calls (design of 17 October 2026, requirement 5).
+#
+# The factory runs its own local model, so no call costs money. These are the prices the same tokens
+# would cost at OpenRouter, so that features and projects can be compared. They are public prices.
+#
+# LiteLLM was given the same prices on 17 October 2026, so calls since then carry LiteLLM's own
+# `spend`. The dashboard uses that where it is set. Where a call has tokens but no spend (calls made
+# before the prices were set), the dashboard prices it here from its tokens and labels it
+# "estimated". A call on a model that is not listed here is "not priced" and is never counted as 0.
+
+source: OpenRouter public model list (https://openrouter.ai/api/v1/models)
+fetched_on: '2026-10-17'
+currency: USD
+
+# When LiteLLM started storing each call's x-feature-id header as a tag (the restart that switched
+# it on finished at 06:57:36 UTC). Features sent before this have no per-feature cost.
+tagging_started_at: '2026-10-17T06:57:36Z'
+
+prices:
+  # The factory's model. Its local checkpoint is Qwen3.8 Flash Next; OpenRouter lists no "Flash
+  # Next" checkpoint, so the same generation and tier, qwen/qwen3.8-flash, is used.
+  - provider_model: openai/qwen3.8-flash-next-autoround
+    priced_as: qwen/qwen3.8-flash
+    input_per_token: 1.5e-07
+    output_per_token: 4.7e-07

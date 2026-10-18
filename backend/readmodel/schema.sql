@@ -168,40 +168,39 @@ CREATE TABLE IF NOT EXISTS plan_milestones (
 );
 
 -- ---------------------------------------------------------------------------------------------
--- Cost tables from the July design, still unfed. Part B of the October design replaces them with
--- LiteLLM's own spend log; they stay until then so nothing that reads them breaks.
+-- Cost: a copy of LiteLLM's spend log (design of 17 October 2026, requirement 3). The feed reads it
+-- through a SELECT-only database login every 60 seconds and keeps one summary row per model call,
+-- under LiteLLM's own request_id, so reading a row twice changes nothing. Every call is kept.
+-- (This replaces the July design's usage_gateway, usage_frontier and cost_rollups tables, which
+-- nothing ever fed or read.)
 -- ---------------------------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS usage_gateway (
-    period            TEXT,
+CREATE TABLE IF NOT EXISTS spend_calls (
+    request_id        TEXT PRIMARY KEY,   -- LiteLLM's unique id for the call
+    started_at        TEXT NOT NULL,      -- UTC, fixed-width 'YYYY-MM-DDTHH:MM:SS.ffffffZ' so text order is time order
+    ended_at          TEXT,
+    model_name        TEXT,               -- LiteLLM's model name (model_group); it shows the role. Stored, not shown.
+    provider_model    TEXT,               -- the model behind that name, which the price list is keyed on
     key_alias         TEXT,
-    project           TEXT,
-    seat              TEXT,
-    requests          INTEGER,
-    prompt_tokens     INTEGER,
-    completion_tokens INTEGER,
-    cost_gbp          REAL,
-    is_nominal        INTEGER,
-    PRIMARY KEY (period, key_alias)
+    feature_tag       TEXT,               -- the call's x-feature-id (Forge's correlation id), or NULL
+    status            TEXT,               -- 'success' | 'failure'
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    litellm_spend     REAL NOT NULL DEFAULT 0,
+    cost_usd          REAL,               -- nominal cost; NULL when the call's model has no price
+    cost_basis        TEXT NOT NULL,      -- 'litellm' | 'estimated' (priced here from tokens) | 'no tokens' | 'not priced'
+    price_ref         TEXT                -- which price: 'qwen/qwen3.8-flash, OpenRouter 2026-10-17'
 );
-CREATE TABLE IF NOT EXISTS usage_frontier (
-    feature_id    TEXT,
-    task_id       TEXT,
-    stage         TEXT,
-    model         TEXT,
-    provider      TEXT,
-    input_tokens  INTEGER,
-    output_tokens INTEGER,
-    cost_gbp      REAL,
-    source        TEXT CHECK (source IN ('b7_payload','build_event','operator_reported')),
-    PRIMARY KEY (feature_id, task_id, stage)
-);
-CREATE TABLE IF NOT EXISTS cost_rollups (
-    scope_type       TEXT CHECK (scope_type IN ('project','feature','seat')),
-    scope_id         TEXT,
-    window           TEXT,
-    frontier_gbp     REAL,
-    local_tokens     INTEGER,
-    local_nominal_gbp REAL,
-    coverage_note    TEXT,
-    PRIMARY KEY (scope_type, scope_id, window)
+CREATE INDEX IF NOT EXISTS spend_calls_started ON spend_calls(started_at);
+CREATE INDEX IF NOT EXISTS spend_calls_tag ON spend_calls(feature_tag, started_at);
+
+-- When the spend log was last read, kept apart from Forge's mirror_status: one can be healthy while
+-- the other is stale. last_success_at is set only by a pass that read through to the newest row.
+CREATE TABLE IF NOT EXISTS cost_feed_status (
+    source            TEXT PRIMARY KEY,   -- 'litellm'
+    last_attempt_at   TEXT,
+    last_success_at   TEXT,
+    last_error        TEXT,               -- a plain sentence; never a connection string
+    earliest_start    TEXT,               -- the oldest call held
+    last_reconcile_at TEXT,
+    reconcile_note    TEXT
 );

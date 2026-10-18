@@ -14,18 +14,15 @@
     {% with panel = view.planning %}{% include "fragments/planning.html" %}{% endwith %}
   </div>
   <aside class="home-grid__rail" aria-label="Spend and machinery">
-    {# Cost is not measured yet: two honest gaps, never a zero, no sparkline and no split. #}
+    {# Every model call today and this week, all projects, tagged or not: a gap, never a zero. #}
     <h2 class="rail-title">Spend</h2>
-    <div class="stat-tile stat-tile--empty">
-      <span class="stat-tile__value">{{ m.icon('slash') }}Not measured</span>
-      <span class="stat-tile__label">Today, all projects</span>
-      <span class="stat-tile__sub">Cost is not measured yet.</span>
+    {% for slot, label in ((view.spend_today, 'Today, all projects'), (view.spend_week, 'This week, all projects')) %}
+    <div class="stat-tile{% if slot.empty %} stat-tile--empty{% endif %}">
+      <span class="stat-tile__value">{{ m.spend_value(slot) }}</span>
+      <span class="stat-tile__label">{{ label }}</span>
+      <span class="stat-tile__sub">{{ m.spend_sub(slot) }}</span>
     </div>
-    <div class="stat-tile stat-tile--empty">
-      <span class="stat-tile__value">{{ m.icon('slash') }}Not measured</span>
-      <span class="stat-tile__label">This week, all projects</span>
-      <span class="stat-tile__sub">Cost is not measured yet.</span>
-    </div>
+    {% endfor %}
     <h2 class="rail-title rail-title--spaced">Machinery</h2>
     {% with panel = view.serving %}{% include "fragments/services.html" %}{% endwith %}
     {% with panel = view.feed %}{% include "fragments/feed.html" %}{% endwith %}

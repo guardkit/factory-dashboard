@@ -44,7 +44,8 @@ def test_features_head_counts_the_rows_it_shows(world: World) -> None:  # noqa: 
         assert f'<h1 class="page-title">{rows} feature{"" if rows == 1 else "s"}</h1>' in head
         assert '<nav class="window-links" aria-label="Period">' in head  # the period switch sits in the head
         assert 'class="panel-card panel-card--flush features' in page and "asof-chip" in page
-        assert page.count(">Not measured</span>") == rows  # cost: an honest gap in every row, never a figure
+        # cost: an honest gap in every row, never a figure (no cost import in this world)
+        assert page.count("Cost data not available</span>") == rows and "$" not in page
 
 
 def test_projects_head_counts_projects_and_keeps_the_figures_plain(world: World) -> None:  # noqa: F811

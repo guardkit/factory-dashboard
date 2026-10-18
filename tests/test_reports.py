@@ -108,6 +108,7 @@ def test_export_template_is_clean_of_internal_fields() -> None:
     text = (TEMPLATES / "reports_export.html").read_text(encoding="utf-8").lower()
     for token in _DENY_TOKENS:
         assert token not in text, token
+    assert "spend" not in text and "spend_slot" not in text   # no cost in the client export
 
 
 def test_export_shows_only_deliveries_and_the_four_plan_fields(store: sqlite3.Connection) -> None:
@@ -120,7 +121,7 @@ def test_export_shows_only_deliveries_and_the_four_plan_fields(store: sqlite3.Co
     assert "U1" not in html                          # nobody's identity
     # Rich's approved brief: the client report carries no costs (the coordinator's decision of
     # 18 October 2026). No cost section, column or wording at all.
-    for word in ("cost", "spend", "£"):
+    for word in ("cost", "spend", "£", "$", "nominal"):
         assert word not in html.lower(), word
     assert {m.milestone_id for m in export.milestones} == {"M1", "M2", "M3"}
     assert "behind" in html and "ahead" in html
@@ -165,9 +166,9 @@ def test_the_weekly_report_shows_spend_as_not_measured_never_a_figure(store: sql
     assert not report.headline.withheld
     env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=select_autoescape(default=True))
     html = env.get_template("reports.html").render(report=report, report_tenant="operator")
-    tile = html[html.index('class="stat-tile stat-tile--empty" data-state="not-measured"'):]
+    tile = html[html.index('class="stat-tile stat-tile--empty" data-state="not-available"'):]
     tile = tile[: tile.index("</div>")]
-    assert "Not measured" in tile and "Spend" in tile
+    assert "Cost data not available" in tile and "Spend" in tile and "$" not in tile
     assert "£" not in html
     assert f'<strong class="key-figure">{report.headline.delivered_count} features merged and checked</strong>' in html
 

@@ -56,11 +56,146 @@ class BandChip:
 
 @dataclass(frozen=True)
 class SpendSlot:
-    """Cost is not measured yet (it arrives with part B of the October design). Shown as a gap,
-    never as a zero."""
+    """A cost figure, or the reason there is none. An unmeasured cost is a gap, never a zero.
 
-    text: str = "Cost: not measured yet"
-    plain_language: bool = False
+    States:
+    - 'measured': `value` holds the nominal figure ("$2.20"); `value` is "" when the record holds
+      no model calls (`label` then says "No model calls recorded").
+    - 'not_measured': the calls were not tagged by feature (before 17 October 2026) or have no
+      price; `reason` says which.
+    - 'not_available': LiteLLM's spend log has never been read.
+
+    `estimated` is set when some calls were priced from their tokens because LiteLLM recorded no
+    spend for them. `stale` is set when the last good read of the spend log is over 10 minutes
+    old, with `stale_text` to show. `price_label` names the price source and date."""
+
+    state: str = "not_measured"
+    value: str = ""
+    label: str = "Not measured"
+    reason: str = ""
+    amount_usd: float | None = None
+    calls: int | None = None
+    failed_calls: int | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    estimated: bool = False
+    estimated_calls: int = 0
+    unpriced_calls: int = 0
+    price_label: str = ""
+    stale: bool = False
+    stale_text: str = ""
+    scope: str = ""          # 'feature' | 'project' | 'factory' | ''
+
+    @property
+    def measured(self) -> bool:
+        return self.state == "measured"
+
+    @property
+    def empty(self) -> bool:
+        """No figure to show (a stat tile's --empty state)."""
+        return not self.value
+
+    @property
+    def text(self) -> str:
+        """One line for simple markup: "$2.20 nominal", "Not measured", "Cost data not available"."""
+        if self.value:
+            return f"{self.value} nominal" + (" (part estimated)" if self.estimated else "")
+        return self.label
+
+    # Usage (calls and tokens) is shown whenever the record holds it, apart from the price: calls on
+    # a model with no price still have known counts, and only their cost is "Not measured". The
+    # counts are None (shown "—") only when no calls were read: before tagging, or no import yet.
+
+    @property
+    def calls_text(self) -> str:
+        """Model calls for a table cell: "312", or "—" when no calls were read."""
+        return str(self.calls) if self.calls is not None else "—"
+
+    @property
+    def tokens_in_text(self) -> str:
+        return fmt_tokens(self.tokens_in) if self.tokens_in is not None else "—"
+
+    @property
+    def tokens_out_text(self) -> str:
+        return fmt_tokens(self.tokens_out) if self.tokens_out is not None else "—"
+
+    @property
+    def detail(self) -> str:
+        """Calls and tokens: "312 model calls, 13.4 M tokens in, 183 k tokens out"."""
+        if self.calls is None:
+            return ""
+        noun = "call" if self.calls == 1 else "calls"
+        tokens_in, tokens_out = fmt_tokens(self.tokens_in or 0), fmt_tokens(self.tokens_out or 0)
+        return f"{self.calls} model {noun}, {tokens_in} tokens in, {tokens_out} tokens out"
+
+
+@dataclass(frozen=True)
+class TimeSegment:
+    """One period of a feature's (or project's) time. `seg` is the bar class suffix: plan, build,
+    review (merge and check), wait, none (between steps)."""
+
+    key: str
+    label: str
+    kind: str                # 'machine' | 'wait' | 'none'
+    seg: str
+    seconds: float
+    text: str
+    share: float             # of elapsed, 0..1
+    open: bool = False       # still going on now
+
+
+@dataclass(frozen=True)
+class TimeSlot:
+    """Elapsed, machine and waiting time. 'not_measured' when the record has no time it was sent.
+    Waiting is what James can act on, so `waiting_parts` lists it by kind, longest first."""
+
+    state: str = "not_measured"
+    elapsed: str = ""
+    elapsed_secs: float = 0.0
+    machine: str = ""
+    machine_secs: float = 0.0
+    waiting: str = ""
+    waiting_secs: float = 0.0
+    so_far: bool = False
+    segments: tuple[TimeSegment, ...] = ()
+    reason: str = ""
+    not_measured_count: int = 0   # features left out of a sum because their time is not measured
+
+    @property
+    def measured(self) -> bool:
+        return self.state == "measured"
+
+    @property
+    def waiting_parts(self) -> tuple[TimeSegment, ...]:
+        return tuple(sorted((s for s in self.segments if s.kind == "wait"), key=lambda s: -s.seconds))
+
+    @property
+    def machine_parts(self) -> tuple[TimeSegment, ...]:
+        return tuple(s for s in self.segments if s.kind == "machine")
+
+
+@dataclass(frozen=True)
+class StageCostRow:
+    """Cost of one stage of a feature: planning, building, merge and check."""
+
+    key: str                 # 'planning' | 'build' | 'review'
+    label: str
+    seg: str                 # bar class suffix: plan | build | review
+    spend: SpendSlot
+    share: float             # of the feature's priced cost, 0..1
+
+
+@dataclass(frozen=True)
+class WeekRow:
+    """One London week (Monday to Sunday) of a project, or of the whole factory."""
+
+    week_from: str           # ISO date of the Monday
+    week_label: str          # "13 Oct"
+    sent: int                # features sent that week
+    delivered: int           # merged and checked that week
+    spend: SpendSlot         # tagged calls that started that week
+    time: TimeSlot           # summed over the features sent that week
+    untagged: SpendSlot | None = None   # factory-wide calls that week with no feature tag
 
 
 @dataclass(frozen=True)
@@ -103,6 +238,8 @@ class FeatureRow:
     sent_label: str
     sent_title: str
     in_progress: bool
+    spend: SpendSlot = field(default_factory=SpendSlot)
+    time: TimeSlot = field(default_factory=TimeSlot)
 
 
 @dataclass(frozen=True)
@@ -205,6 +342,7 @@ class DeliveredRow:
     project_link: str
     commit: str              # short id of the commit that was checked and published, or ""
     spend: SpendSlot
+    time: TimeSlot = field(default_factory=TimeSlot)
 
 
 @dataclass(frozen=True)
@@ -290,6 +428,8 @@ class FeaturePage:
     issues: tuple[IssueRow, ...]
     activity: tuple[ActivityRow, ...]
     spend: SpendSlot
+    time: TimeSlot = field(default_factory=TimeSlot)
+    cost_by_stage: tuple[StageCostRow, ...] = ()
 
 
 # --- the project page -----------------------------------------------------------------------------
@@ -307,6 +447,11 @@ class ProjectView:
     spend: SpendSlot
     open_issues_total: int = 0   # every unresolved issue, the listed ones and the older hidden ones
     hidden_line: str = ""        # how many old open failures the 14-day cut-off leaves out
+    time: TimeSlot = field(default_factory=TimeSlot)        # summed over the project's features
+    weeks: tuple[WeekRow, ...] = ()                          # newest first
+    spend_week: SpendSlot = field(default_factory=SpendSlot)  # this week's tagged calls
+    untagged_note: str = ""      # how much factory-wide usage had no feature tag this week
+    features_total: int = 0      # every feature of the project on record
 
 
 # --- weekly report ------------------------------------------------------------------------------
@@ -335,9 +480,13 @@ class ReportHeadline:
     behind_count: int
     on_target_count: int
     ahead_count: int
-    spend: SpendSlot
+    spend: SpendSlot                 # tagged calls of the report's projects in the window
     withheld: bool = False
     withheld_since: str = ""
+    waiting: TimeSlot = field(default_factory=TimeSlot)       # time of the features delivered in the window
+    # Every call in the window, tagged or not: only on the operator's whole-factory report (None on a
+    # client-scoped report, which shows nothing outside its own projects).
+    factory_usage: SpendSlot | None = None
 
 
 @dataclass(frozen=True)
@@ -380,8 +529,10 @@ class WeeklyReport:
     client_tenants: tuple[tuple[str, str], ...] = ()
 
 
-# The client-safe export renders only these shapes: delivered rows (title, project, date, commit,
-# the cost gap) and the four sanctioned plan fields. No issues, no internals.
+# The client-safe export renders only these shapes: delivered rows (title, project, date, commit)
+# and the four sanctioned plan fields. No issues, no internals, and no costs: Rich's approved brief
+# for part B keeps cost out of the client export (it supersedes the design's §8 sentence about adding
+# per-project spend to it).
 
 
 @dataclass(frozen=True)
@@ -391,7 +542,6 @@ class ExportDeliveredRow:
     project: str
     delivered_date: str
     commit: str
-    spend: SpendSlot
 
 
 @dataclass(frozen=True)
@@ -410,7 +560,6 @@ class ExportReport:
     as_of: AsOf
     delivered_rows: tuple[ExportDeliveredRow, ...]
     milestones: tuple[ExportMilestone, ...]
-    spend: SpendSlot
     milestones_withheld: bool = False
     withheld_since: str = ""
 
@@ -431,6 +580,7 @@ class PageChrome:
     banner: Banner | None = None
     notes: tuple[str, ...] = field(default_factory=tuple)
     version: str = ""        # the version of the data behind the page (see dbread.data_version)
+    cost_banner: Banner | None = None   # the spend log's own staleness, apart from Forge's
 
 
 # --- display formatting: the one place time and age are formatted ------------------------------------
@@ -470,6 +620,24 @@ def fmt_age(seconds: float) -> str:
     if mins:
         return f"{mins} min"
     return f"{s} s"
+
+
+def fmt_usd(amount: float) -> str:
+    """'$2.20', '$0.04', '$0.0031' (small figures keep two significant digits), '$1,204'."""
+    if amount >= 1000:
+        return f"${amount:,.0f}"
+    if amount >= 0.01 or amount == 0:
+        return f"${amount:,.2f}"
+    return f"${amount:.2g}" if amount >= 0.0001 else "under $0.0001"
+
+
+def fmt_tokens(n: int) -> str:
+    """'13.4 M', '183 k', '940'."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f} M"
+    if n >= 1000:
+        return f"{n / 1000:.0f} k"
+    return str(n)
 
 
 def dot_state_for(age_secs: float, threshold_secs: int) -> str:

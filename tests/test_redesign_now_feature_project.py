@@ -56,7 +56,7 @@ def test_now_lists_work_as_rows_that_link_to_the_feature(world: World) -> None: 
     rows = re.findall(r'<a class="build-row" href="([^"]+)">', in_progress)
     assert sorted(rows) == ["/features/FEAT-0003", "/features/FEAT-0004"]
     assert '<span class="feature-id">FEAT-0004</span>' in in_progress   # a code chip, no brackets
-    assert "Not measured" in in_progress and "£" not in in_progress
+    assert "Cost data not available" in in_progress and "£" not in in_progress and "$" not in in_progress
 
 
 def test_the_rail_shows_spend_as_not_measured(world: World) -> None:  # noqa: F811
@@ -64,7 +64,8 @@ def test_the_rail_shows_spend_as_not_measured(world: World) -> None:  # noqa: F8
     body = client.get("/").text
     rail = body[body.index('class="home-grid__rail"'):]
     rail = rail[:rail.index("</aside>")]
-    assert rail.count("stat-tile stat-tile--empty") == 2 and rail.count("Not measured") == 2
+    assert rail.count("stat-tile stat-tile--empty") == 2 and rail.count("Cost data not available") == 2
+    assert "$" not in rail
     assert "£" not in rail and 'data-panel="p6"' in rail and 'data-panel="proj"' in rail
 
 
@@ -77,7 +78,7 @@ def test_the_waiting_tile_follows_the_open_wait(world: World) -> None:  # noqa: 
     assert "stat-tile--key" not in building and "Waiting now" not in building
     delivered = client.get("/features/FEAT-0001").text      # every wait closed
     assert "stat-tile--key" not in delivered and "wait-row--open" not in delivered
-    assert "Not measured" in delivered and "£" not in delivered
+    assert "Cost data not available" in delivered and "£" not in delivered and "$" not in delivered
 
 
 def test_numeric_columns_say_so_in_their_header(world: World) -> None:  # noqa: F811
@@ -93,7 +94,7 @@ def test_the_project_page_shows_counts_and_a_spend_gap(world: World) -> None:  #
     tiles = body[body.index('class="stat-grid project-summary"'):]
     tiles = tiles[:tiles.index("</section>")]
     assert tiles.count('<div class="stat-tile') == 4
-    assert "Spend to date" in tiles and "Not measured" in tiles and "£" not in tiles
+    assert "Spend to date" in tiles and "Cost data not available" in tiles and "£" not in tiles and "$" not in tiles
     assert "of 10" not in body and "On plan" not in body
 
 

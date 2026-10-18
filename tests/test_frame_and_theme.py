@@ -165,7 +165,9 @@ def test_a_features_row_says_its_cost_is_not_measured(world: tuple[TestClient, P
     body = client.get("/features").text
     start = body.index('<tr class="feature-list__row')
     row = body[start: body.index("</tr>", start)]
-    assert '<span class="spend-slot" data-state="not-measured">Not measured</span>' in row
+    # No cost import in this world: the cell is the honest gap, never a figure.
+    assert '<span class="spend-slot" data-state="not-available"' in row and "Cost data not available</span>" in row
+    assert "$" not in row
 
 
 def test_waiting_for_a_person_is_purple_in_the_journey() -> None:

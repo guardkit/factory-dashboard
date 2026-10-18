@@ -18,7 +18,7 @@
     <table class="dense-table projects__table">
       <thead>
         <tr><th scope="col">Project</th><th scope="col" class="num">Features</th><th scope="col" class="num">In progress</th>
-          <th scope="col" class="num">Merged and checked</th><th scope="col" class="num">Open issues</th></tr>
+          <th scope="col" class="num">Merged and checked</th><th scope="col" class="num">Open issues</th><th scope="col" class="num">Cost</th></tr>
       </thead>
       <tbody>
       {% for r in view.rows %}
@@ -29,6 +29,7 @@
           <td class="num">{{ r.in_progress }}</td>
           <td class="num">{{ r.delivered }}</td>
           <td class="num">{{ r.open_issues }}</td>
+          <td class="num">{{ m.spend_slot(r.spend, compact=True) }}</td>
         </tr>
       {% endfor %}
       </tbody>

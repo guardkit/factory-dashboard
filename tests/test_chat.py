@@ -108,7 +108,7 @@ def test_feature_status_by_code_matches_the_feature_page(ctx: tools.Context) -> 
     assert r.fields["attempts"] == "1"
     assert r.fields["delivered_on"] == "16 Oct 2026"
     assert r.fields["stale_note"] == ""
-    assert r.fields["cost"] == "Cost: not measured yet"
+    assert r.fields["cost"] == page.spend.text == "Cost data not available"   # no cost import in this world
     assert [ref.href for ref in r.refs] == ["/features/FEAT-0001", "/projects/acme/notes"]
 
 

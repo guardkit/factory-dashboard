@@ -52,16 +52,37 @@
 </div>
 {%- endmacro %}
 
-{# Cost is not measured yet: shown as a hatched gap, never as a zero. #}
-{% macro spend_slot(s) -%}
-<span class="spend-slot" data-state="not-measured">{{ icon('slash') }}{{ s.text }}</span>
+{# A cost figure inline (a SpendSlot): the nominal figure as plain text, `est` when part of it was
+   priced from tokens; otherwise the slot's own words in the hatched gap with the slash icon, never
+   a zero. The reason (calls left out for want of a price, "counts calls from 17 October", why it is
+   not measured) and the stale label are always shown; `compact` (a table cell) puts the reason in
+   the tooltip, beside the price source. data-state is measured, not-measured or not-available. #}
+{% macro spend_slot(s, compact=False) -%}
+{%- set state = (s.state | replace('_', '-')) if s.state is defined else 'not-measured' -%}
+<span class="spend-slot" data-state="{{ state }}" title="{{ s.price_label if s.price_label is defined else '' }}{% if compact and s.reason %} {{ s.reason }}{% endif %}">
+  {%- if s.value %}{% if s.estimated %}<span class="est">{{ s.value }}</span>{% else %}{{ s.value }}{% endif %} nominal
+  {%- elif state == 'measured' %}{{ s.label }}
+  {%- else %}{{ icon('slash') }}{{ s.label }}{% endif %}
+  {%- if s.reason and not compact %} <span class="stat-tile__sub">{{ s.reason }}</span>{% endif %}
+  {%- if s.stale %} <span class="stat-tile__sub">({{ s.stale_text }})</span>{% endif %}</span>
 {%- endmacro %}
 
-{# A spend tile's value, from the page's spend slot: the figure once the cost feed carries one
-   (`value`, with the slot's own `label` otherwise), else "Not measured" with the slash icon. No
-   tile writes the words itself, so a measured cost replaces them everywhere at once. #}
+{# A spend tile's value, from the page's spend slot (a SpendSlot): the figure as plain text, `est`
+   when part of it was priced from tokens; else the slot's own words with the slash icon ("Not
+   measured", "Cost data not available", "No model calls recorded"). No tile writes the words
+   itself, so a measured cost replaces them everywhere at once. The tile drops stat-tile--empty when
+   `s.empty` is false, and puts `spend_sub(s)` in its __sub. #}
 {% macro spend_value(s) -%}
-{%- if s.value is defined and s.value %}{{ s.value }}{% else %}{{ icon('slash') }}{{ s.label if s.label is defined and s.label else 'Not measured' }}{% endif %}
+{%- if s.value is defined and s.value %}{% if s.estimated %}<span class="est">{{ s.value }}</span>{% else %}{{ s.value }}{% endif %}
+{%- else %}{{ icon('slash') }}{{ s.label if s.label is defined and s.label else 'Not measured' }}{% endif %}
+{%- endmacro %}
+
+{# A spend tile's sub line: the dated price source ("Nominal: OpenRouter price for … on 17 Oct
+   2026"), the estimate, the reason, the stale label. #}
+{% macro spend_sub(s) -%}
+{%- if s.value %}{{ s.price_label if s.price_label else 'Nominal' }}{% if s.estimated %}; part estimated from tokens{% endif %}. {% endif %}
+{%- if s.reason %}{{ s.reason }} {% endif %}
+{%- if s.stale %}({{ s.stale_text }}){% endif %}
 {%- endmacro %}
 
 {# The card's data is older than it should be: the amber badge, with the age. #}
@@ -88,7 +109,7 @@
       <td>{{ band_chip(r.band) }}</td>
       <td class="num">{{ r.elapsed }}</td>
       <td class="num" title="{{ r.sent_title }}">{{ r.sent_label }}</td>
-      <td><span class="spend-slot" data-state="not-measured">Not measured</span></td>
+      <td class="num">{{ spend_slot(r.spend, compact=True) }}</td>
     </tr>
   {% endfor %}
   </tbody>
@@ -97,7 +118,7 @@
 
 {# Stage 2a. The Now page's work list: one row per feature, the whole row a link to the feature.
    Title first, then the project and the code chip; the stage as the mini journey and the record's
-   own words; on track; elapsed; cost (not measured yet). On phones the elapsed and cost columns
+   own words; on track; elapsed; cost. On phones the elapsed and cost columns
    fold into one line under the title. The Features and project pages keep feature_table (a test
    reads a row there to its </tr>). #}
 {% macro feature_rows(rows) -%}
@@ -110,8 +131,8 @@
     <span class="build-row__stage">{{ journey_bar(r.journey, mini=True) }}<span class="build-row__status">{{ r.status_text }}</span></span>
     <span class="build-row__band">{{ band_chip(r.band) }}</span>
     <span class="num build-row__elapsed">{{ r.elapsed }}</span>
-    <span class="num build-row__cost"><span class="spend-slot" data-state="not-measured">Not measured</span></span>
-    <span class="build-row__phone-line">{{ r.elapsed }} · cost not measured</span>
+    <span class="num build-row__cost">{{ spend_slot(r.spend, compact=True) }}</span>
+    <span class="build-row__phone-line">{{ r.elapsed }} · {{ spend_slot(r.spend) }}</span>
   </a></li>
   {% endfor %}
 </ul>

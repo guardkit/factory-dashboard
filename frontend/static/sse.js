@@ -34,8 +34,9 @@
     if (!slot) return;
     var existing = slot.querySelector(".banner--sse_paused");
     // The stale-data banner (the worse condition) always wins: never show both. style.css also
-    // hides this one if the stale banner arrives later, through the freshness poll.
-    if (slot.querySelector(".banner--stale")) { if (existing) existing.remove(); return; }
+    // hides this one if the stale banner arrives later, through the freshness poll. The cost
+    // feed's own stale banner (data-feed="cost") says nothing about live updates, so it does not.
+    if (slot.querySelector('.banner--stale:not([data-feed="cost"])')) { if (existing) existing.remove(); return; }
     if (paused && !existing) {
       var b = document.createElement("div");
       b.className = "banner banner--sse_paused";
