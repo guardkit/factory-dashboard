@@ -579,8 +579,9 @@ def test_a_speech_model_silent_after_one_byte_cannot_hold_the_lock(store: Path) 
 
 
 def test_a_real_connection_silent_after_one_byte_is_cut_off() -> None:
-    """Over a real socket on loopback: headers and one byte, then silence. The call ends at the
-    deadline, and the worker's connection is shut so it does not linger."""
+    """Over a real socket on loopback: headers and one byte, a second byte just before the deadline, then
+    silence. The second byte restarts httpx's own read timeout, so only the watchdog's socket shutdown
+    can end the worker near the deadline (2 s) rather than at deadline plus timeout (3.6 s)."""
     server = socket.socket()
     server.bind(("127.0.0.1", 0))
     server.listen(1)
@@ -590,26 +591,44 @@ def test_a_real_connection_silent_after_one_byte_is_cut_off() -> None:
         conn, _ = server.accept()
         conn.recv(65536)
         conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nR")
+        if not stop.wait(1.6):
+            conn.sendall(b"I")
         stop.wait(10)
         conn.close()
 
     threading.Thread(target=serve, daemon=True).start()
     port = server.getsockname()[1]
-    v = voice.Voice(voice.VoiceSettings(tts_url=f"http://127.0.0.1:{port}/v1/audio/speech", timeout_seconds=0.5))
+    v = voice.Voice(voice.VoiceSettings(tts_url=f"http://127.0.0.1:{port}/v1/audio/speech", timeout_seconds=2.0))
     start = time.monotonic()
     try:
         with pytest.raises(voice.VoiceUnavailable):
             v.speak("Hello.")
         took = time.monotonic() - start
-        deadline = time.monotonic() + 2
-        while any(t.name == "voice-model-call" for t in threading.enumerate()) and time.monotonic() < deadline:
+        while any(t.name == "voice-model-call" for t in threading.enumerate()) and time.monotonic() - start < 6:
             time.sleep(0.02)
-        lingering = any(t.name == "voice-model-call" for t in threading.enumerate())
+        worker_gone_at = time.monotonic() - start
     finally:
         stop.set()
         server.close()
-    assert took < 1.5
-    assert not lingering
+    assert took < 2.5
+    assert worker_gone_at < 2.8, worker_gone_at
+
+
+def test_the_speech_to_text_reply_cap(world: tuple[TestClient, FakeModel, FakeSpeech]) -> None:
+    """A well-formed transcript reply over 64 KB is refused (only the cap can refuse it); one just under is
+    read."""
+    client, model, speech = world
+    over = json.dumps({"text": "a" * voice.MAX_STT_REPLY_BYTES}).encode()
+    speech.stt = (200, over)
+    r = _ask(client)
+    assert r.status_code == 503 and r.json() == {"message": voice.CANT_HEAR}
+    assert model.calls == []
+    under = json.dumps({"text": "Any issues? " + " " * (voice.MAX_STT_REPLY_BYTES - 100)}).encode()
+    assert len(under) <= voice.MAX_STT_REPLY_BYTES
+    speech.stt = (200, under)
+    model.replies.append('{"query": "open_issues"}')
+    r = _ask(client)
+    assert r.status_code == 200 and r.json()["transcript"] == "Any issues?"
 
 
 def test_every_voice_failure_is_one_sentence() -> None:
