@@ -170,7 +170,7 @@ def test_the_weekly_report_shows_spend_as_not_measured_never_a_figure(store: sql
 
 def test_issues_have_their_own_card_with_the_closed_ones_behind_a_count(store: sqlite3.Connection) -> None:
     """On real data the week's issues ran to some 70 rows beside the short plan card, leaving a long
-    empty column; they now fill their own card, open ones first, closed ones behind "N closed"."""
+    empty column; they now fill their own card, open ones first, closed ones behind "N now closed"."""
     report = dbread.weekly_report(store, "operator", NOW, window=WEEK)
     env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=select_autoescape(default=True))
     html = env.get_template("reports.html").render(report=report, report_tenant="operator")
@@ -182,13 +182,35 @@ def test_issues_have_their_own_card_with_the_closed_ones_behind_a_count(store: s
     closed = [r for r in rows if not r.is_open]
     if closed:
         before, details = card.split('<details class="report-issues__closed">')
-        assert f"<summary>{len(closed)} closed this week</summary>" in details
+        assert f"<summary>{len(closed)} now closed</summary>" in details
         assert details.count("report-issues__row--closed") == len(closed)  # every closed row, behind the count
         assert "report-issues__row--closed" not in before                 # and only open rows above it
         assert before.count('<li class="report-issues__row') == len(rows) - len(closed)
     else:
         assert "<details" not in card
     assert card.count('<li class="report-issues__row') == len(rows)
+
+
+def test_an_issue_closed_after_the_window_is_not_called_closed_this_week(tmp_path: Path) -> None:
+    """The rows are issues opened OR closed in the window; open or closed is their state now. A
+    failure from the week that was retried after it is "now closed", and the week's own closed
+    count stays 0."""
+    fake = ForgeFake(tmp_path / "forge.db")
+    fake.planning("c-f", "Sort the notes.", state="FAILED", error="Gave up.")       # 16 Oct, in the window
+    fake.planning("c-g", "Sort the notes.", start=2 * 24 * 60, end=2 * 24 * 60 + 20)  # 18 Oct: closes it
+    now = T0 + timedelta(days=3)
+    conn = store_from(fake, tmp_path / "readmodel.db", now)
+    report = dbread.weekly_report(conn, "operator", now, window=("2026-10-12", "2026-10-17"))
+    rows = [r for r in report.issues.rows if r.kind == "Planning failed"]
+    assert len(rows) == 1 and not rows[0].is_open
+    assert report.issues.opened == 1 and report.issues.closed == 0
+    env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=select_autoescape(default=True))
+    html = env.get_template("reports.html").render(report=report, report_tenant="operator")
+    card = html[html.index('<section class="panel-card report-issues">'):]
+    card = card[:card.index("</section>")]
+    assert "1 opened · 0 closed" in card
+    assert "<summary>1 now closed</summary>" in card and "closed this week" not in card
+    assert "None of these issues is still open." in card
 
 
 def test_no_spend_tile_writes_its_own_words() -> None:

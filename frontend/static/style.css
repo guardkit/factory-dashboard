@@ -1249,7 +1249,7 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 .plan-row--no_baseline .named-gap { padding: 0; border: 0; background: none; color: var(--text-dim); font-weight: 500; font-size: 14px; line-height: 20px; }
 .panel-card__body > .report-issues__counts { margin: 0 0 var(--space-12); font-size: 13px; line-height: 18px; color: var(--text-dim); }
 .report-issues__row--closed .signal-row__name, .report-issues__row--closed .signal-row__name a { color: var(--text-dim); font-weight: 500; }
-/* The week's closed issues wait behind "N closed this week", under the open ones. */
+/* The issues that are closed now wait behind "N now closed", under the open ones. */
 .report-issues__closed { margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--line); }
 .report-issues__closed > summary {
   cursor: pointer; min-height: 32px; padding-top: 6px;

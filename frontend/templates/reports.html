@@ -116,8 +116,10 @@
   </div>
 </section>
 
-{# Issues have their own full-width card, as in the design: open ones first, the closed ones behind
-   a disclosure that says how many there are. #}
+{# Issues have their own full-width card, as in the design: open ones first, the rest behind a
+   disclosure that says how many there are. The rows are the issues opened or closed in the window,
+   and open or closed is their state NOW: one opened this week may have closed after it, so the
+   disclosure says "now closed", not "closed this week" (the counts line has the week's figures). #}
 {% set open_issues = report.issues.rows | selectattr('is_open') | list %}
 {% set closed_issues = report.issues.rows | rejectattr('is_open') | list %}
 {% macro report_issue_list(rows) -%}
@@ -139,10 +141,10 @@
       {{ report.issues.opened }} opened · {{ report.issues.closed }} closed{% if report.issues.oldest_open_age %} · oldest still open: {{ report.issues.oldest_open_age }}{% endif %}
     </p>
     {% if report.issues.rows %}
-      {% if open_issues %}{{ report_issue_list(open_issues) }}{% else %}<p class="true-empty">No open issues.</p>{% endif %}
+      {% if open_issues %}{{ report_issue_list(open_issues) }}{% else %}<p class="true-empty">None of these issues is still open.</p>{% endif %}
       {% if closed_issues %}
       <details class="report-issues__closed">
-        <summary>{{ closed_issues | length }} closed this week</summary>
+        <summary>{{ closed_issues | length }} now closed</summary>
         {{ report_issue_list(closed_issues) }}
       </details>
       {% endif %}
