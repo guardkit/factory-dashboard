@@ -102,23 +102,27 @@ class SpendSlot:
             return f"{self.value} nominal" + (" (part estimated)" if self.estimated else "")
         return self.label
 
+    # Usage (calls and tokens) is shown whenever the record holds it, apart from the price: calls on
+    # a model with no price still have known counts, and only their cost is "Not measured". The
+    # counts are None (shown "—") only when no calls were read: before tagging, or no import yet.
+
     @property
     def calls_text(self) -> str:
-        """Model calls for a table cell: "312", or "—" when the cost is not measured."""
-        return str(self.calls) if self.measured and self.calls is not None else "—"
+        """Model calls for a table cell: "312", or "—" when no calls were read."""
+        return str(self.calls) if self.calls is not None else "—"
 
     @property
     def tokens_in_text(self) -> str:
-        return fmt_tokens(self.tokens_in) if self.measured and self.tokens_in is not None else "—"
+        return fmt_tokens(self.tokens_in) if self.tokens_in is not None else "—"
 
     @property
     def tokens_out_text(self) -> str:
-        return fmt_tokens(self.tokens_out) if self.measured and self.tokens_out is not None else "—"
+        return fmt_tokens(self.tokens_out) if self.tokens_out is not None else "—"
 
     @property
     def detail(self) -> str:
         """Calls and tokens: "312 model calls, 13.4 M tokens in, 183 k tokens out"."""
-        if self.calls is None or not self.measured:
+        if self.calls is None:
             return ""
         noun = "call" if self.calls == 1 else "calls"
         tokens_in, tokens_out = fmt_tokens(self.tokens_in or 0), fmt_tokens(self.tokens_out or 0)

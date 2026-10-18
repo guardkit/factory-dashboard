@@ -715,9 +715,11 @@ def factory_spend(conn: sqlite3.Connection, book: CostBook, lo: datetime, now: d
 
 
 def _stage_rows(conn: sqlite3.Connection, f: Feature, book: CostBook) -> tuple[StageCostRow, ...]:
-    """Cost split into planning, building, and merge and check, for a measured feature."""
+    """Calls, tokens and cost split into planning, building, and merge and check, whenever the
+    feature has attributable calls. Each stage is priced on its own: a stage whose calls have no
+    price says "Not measured" for its cost and still shows its counts."""
     slot = book.feature_slot(f)
-    if not slot.measured or not slot.calls:
+    if not slot.calls:      # no calls, before tagging, or no import yet: nothing to split
         return ()
     split = cost.split_by_stage(f, cost.feature_calls(conn, f))
     total = sum(t.cost for t in split.values())

@@ -275,3 +275,71 @@ def test_calls_that_used_no_tokens_cost_nothing_and_say_so() -> None:
     s = _slot(Totals(calls=2, failed=2))
     assert s.state == "measured" and s.value == "$0.00" and s.reason == "None of these calls used any tokens."
     assert load_prices().label == PRICE_LABEL
+
+
+# --- R7 (round 2): usage is shown apart from price ---------------------------------------------------------
+
+UNPRICED_PROJECT = "acme/unpriced"
+NO_PRICE = "openai/coach-ft-v4"
+
+
+@pytest.fixture
+def unpriced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """An entirely unpriced feature in its own project (u1), and a feature whose planning calls are
+    priced and whose build calls are not (m1)."""
+    now = datetime.now(UTC)
+    t0 = now - timedelta(hours=3)
+    monkeypatch.setattr(forge_fake, "T0", t0)
+    fake = ForgeFake(tmp_path / "forge.db")
+    fake.planning("u1", "Nothing here has a price.", state="RUNNING", end=None, repo=UNPRICED_PROJECT)
+    fake.planning("m1", "Half priced.")
+    fake.build("bm", "FEAT-00M1", "m1", status="RUNNING", completed=None)
+    path = tmp_path / "readmodel.db"
+    conn = store_from(fake, path, now)
+    calls = FakeSpend(t0)
+    calls.add("u-a", 5, "u1", prompt=3_000, completion=300, provider_model=NO_PRICE)
+    calls.add("u-b", 8, "u1", prompt=2_000, completion=200, provider_model=NO_PRICE)
+    calls.add("m-plan", 5, "m1", prompt=10_000, completion=1_000)                       # planning, priced
+    calls.add("m-build", 40, "m1", prompt=50_000, completion=5_000, provider_model=NO_PRICE)   # building, no price
+    import_once(conn, calls, now)
+    conn.close()
+    with TestClient(create_app(db_path=path, tenants_path=_registry(tmp_path / "t.yaml")),
+                    base_url=LOOPBACK_URL) as client:
+        login(client)
+        yield client
+
+
+def test_an_unpriced_feature_still_shows_its_calls_and_tokens(unpriced: TestClient) -> None:
+    body = unpriced.get("/features/u1").text
+    card = body[body.index('id="cost-title"'):]
+    card = _visible(card[:card.index("</section>")])
+    assert "2 model calls, 5 k tokens in, 500 tokens out" in card     # the usage is known
+    assert "Not measured" in card and "None of these calls has a price." in card   # only the cost is not
+    assert "$" not in card
+    planning = card[card.index("Planning"):]
+    assert planning.split()[1:4] == ["2", "5", "k"]                   # the stage row carries the counts too
+
+
+def test_an_unpriced_project_still_shows_its_calls_and_tokens(unpriced: TestClient) -> None:
+    body = unpriced.get(f"/projects/{UNPRICED_PROJECT}").text
+    table = body[body.index("Cost and time by week"):]
+    table = table[:table.index("</table>")]
+    total = _visible(table[table.index("In total"):table.index("</tr>", table.index("In total"))])
+    assert total.split()[2:7] == ["1", "0", "2", "5", "k"]            # 1 feature, 0 merged, 2 calls, 5 k in
+    assert "Not measured" in total and "$" not in total
+
+
+def test_an_unpriced_stage_beside_a_priced_stage(unpriced: TestClient) -> None:
+    body = unpriced.get("/features/FEAT-00M1").text
+    card = body[body.index('id="cost-title"'):]
+    card = card[:card.index("</section>")]
+
+    def row(label: str) -> str:
+        at = card.index(f'<th scope="row">{label}</th>')
+        return _visible(card[at:card.index("</tr>", at)])
+
+    planning, building = row("Planning"), row("Building")
+    assert planning.split()[1] == "1" and "$" in planning and "nominal" in planning
+    assert building.split()[1:4] == ["1", "50", "k"] and "Not measured" in building and "$" not in building
+    # The feature's own figure is the priced part, and it says the rest is not counted.
+    assert UNPRICED in _visible(card)
