@@ -208,6 +208,8 @@
   --pad-cell-client: 12px;
   --rail-width: 340px;
   --chat-width: 440px;
+  --login-circle-1: #24402F;  /* the sign-in panel's two soft circles, on its Deep Green */
+  --login-circle-2: #213A2B;
   --readline-height: 37px; /* the read-time line under the top bar; the chat's heights subtract it */
 }
 
@@ -1298,8 +1300,8 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
   padding: 40px 56px; display: flex; flex-direction: column; justify-content: space-between; gap: var(--space-48);
 }
 .login-brand::before, .login-brand::after { content: ""; position: absolute; z-index: -1; border-radius: 50%; }
-.login-brand::before { width: 640px; height: 640px; right: -240px; top: -260px; background: #24402F; }
-.login-brand::after { width: 460px; height: 460px; right: -60px; bottom: -300px; background: #213A2B; }
+.login-brand::before { width: 640px; height: 640px; right: -240px; top: -260px; background: var(--login-circle-1); }
+.login-brand::after { width: 460px; height: 460px; right: -60px; bottom: -300px; background: var(--login-circle-2); }
 .login-brand__mark { display: flex; align-items: center; gap: 10px; }
 .login-brand .page-title { font-size: 46px; line-height: 52px; max-width: 13em; }
 .login-brand__site { margin: 0; font-size: 14px; line-height: 20px; color: var(--text-dim); }
