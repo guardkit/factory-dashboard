@@ -1,21 +1,40 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en-GB" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sign in · Factory dashboard</title>
+  <title>Sign in · Appmilla Factory</title>
   <link rel="stylesheet" href="/static/style.css">
+  {# Not deferred: it sets the light or dark theme before the first paint. #}
+  <script src="/static/theme.js"></script>
 </head>
 <body class="layout-login">
-  <main id="main" class="login-card">
-    <h1 class="login-card__title">Sign in to the factory dashboard</h1>
-    <p class="login-card__note">Shows what the software factory is building, what it cost and how long it took. It only reads; it changes nothing.</p>
-    {% if error %}<p class="login-card__error" role="alert">{{ error }}</p>{% endif %}
-    <form method="post" action="/login" class="login-form">
-      <label>Username <input type="text" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
-      <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
-      <button type="submit">Sign in</button>
-    </form>
+  <main id="main" class="login-layout">
+    <section class="login-brand" data-theme="dark">
+      <div class="login-brand__mark">
+        <img class="topbar__logo" src="/static/logos/appmilla-icon-A.png" alt="" width="37" height="24">
+        <img class="topbar__wordmark" src="/static/logos/appmilla-wordmark-white-on-dark.png" alt="appmilla" width="73" height="19">
+        <span class="topbar__product">Factory</span>
+      </div>
+      <div class="page-head">
+        <p class="page-eyebrow">Appmilla · AI software factory</p>
+        <h1 class="page-title">See what's being built, <span class="key-figure">at a glance.</span></h1>
+        <p class="page-lead">What needs you, what is being built and what has been delivered, straight from Appmilla's own factory.</p>
+      </div>
+      <p class="login-brand__site">appmilla.com</p>
+    </section>
+    <section class="login-panel">
+      <div class="login-card">
+        <h2 class="login-card__title">Sign in to the factory dashboard</h2>
+        {% if error %}<p class="login-card__error" role="alert">{{ error }}</p>{% endif %}
+        <form method="post" action="/login" class="login-form">
+          <label>Username <input type="text" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+          <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
+          <button type="submit" class="button--primary button--block">Sign in</button>
+        </form>
+        <p class="login-card__note">The dashboard only reads; it changes nothing. Clients see their own projects only. Trouble signing in? Ask your Appmilla contact.</p>
+      </div>
+    </section>
   </main>
 </body>
 </html>

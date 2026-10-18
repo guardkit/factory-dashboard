@@ -1,46 +1,69 @@
 {% extends "base.html" %}
 {% import 'macros.html' as m %}
-{% block title %}{{ view.project }} · Factory dashboard{% endblock %}
+{% block title %}{{ view.project }} · Appmilla Factory{% endblock %}
 {% block content %}
-<h1 class="page-title">{{ view.project }}</h1>
-
-<section class="panel-card project-summary">
-  <header class="panel-card__header"><h2 class="panel-card__title">Summary</h2></header>
-  <div class="panel-card__body">
-    <ul class="project-summary__list">
-      <li><span class="num">{{ view.in_progress }}</span> in progress</li>
-      <li><span class="num">{{ view.delivered_7d }}</span> merged and checked in the last 7 days
-        (<span class="num">{{ view.delivered_total }}</span> in all)</li>
-      <li><span class="num">{{ view.open_issues_total }}</span> open {{ 'issue' if view.open_issues_total == 1 else 'issues' }}</li>
-      <li>Spend to date: {{ m.spend_slot(view.spend) }}; this week: {{ m.spend_slot(view.spend_week) }}</li>
-      {% if view.time.measured %}<li>Time, {{ 'measured features' if view.time.not_measured_count else 'all features' }}: machine {{ view.time.machine }}, waiting {{ view.time.waiting }}{% if view.time.reason %} <span class="stat-tile__sub">{{ view.time.reason }}</span>{% endif %}</li>
-      {% elif view.time.reason %}<li><span class="honest-badge honest-badge--not-measured">Time not measured</span> <span class="stat-tile__sub">{{ view.time.reason }}</span></li>{% endif %}
-    </ul>
-  </div>
-</section>
-
 {% set panel = view.features %}
-<section class="panel-card project-features state-{{ panel.state.value }}">
-  <header class="panel-card__header">
-    <h2 class="panel-card__title">{{ panel.title }}</h2>
-    {{ m.asof_chip(panel.as_of, source='factory') }}
+<header class="page-head page-head--split">
+  <div>
+    <p class="page-eyebrow">Project</p>
+    <h1 class="page-title">{{ view.project }}</h1>
+  </div>
+  {{ m.asof_chip(panel.as_of, source='factory') }}
+</header>
+
+{# Only the counts the record carries: no plan, so no "of N planned" and no on-plan verdict. #}
+<section class="stat-grid project-summary" aria-label="Project at a glance">
+  <div class="stat-tile">
+    <span class="stat-tile__value num">{{ view.in_progress }}</span>
+    <span class="stat-tile__label">In progress</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-tile__value num">{{ view.delivered_7d }}</span>
+    <span class="stat-tile__label">Merged and checked, last 7 days</span>
+    <span class="stat-tile__sub"><span class="num">{{ view.delivered_total }}</span> in all</span>
+  </div>
+  <div class="stat-tile {% if view.open_issues_total %}stat-tile--attention{% endif %}">
+    <span class="stat-tile__value num">{{ view.open_issues_total }}</span>
+    <span class="stat-tile__label">Open issues</span>
+  </div>
+  <div class="stat-tile{% if view.spend.empty %} stat-tile--empty{% endif %}">
+    <span class="stat-tile__value">{{ m.spend_value(view.spend) }}</span>
+    <span class="stat-tile__label">Spend to date</span>
+    <span class="stat-tile__sub">{{ m.spend_sub(view.spend) }} This week: {{ m.spend_slot(view.spend_week, compact=True) }}</span>
+  </div>
+</section>
+{% if view.time.measured %}<p class="page-lead">Time, {{ 'measured features' if view.time.not_measured_count else 'all features' }}: machine {{ view.time.machine }}, waiting {{ view.time.waiting }}{% if view.time.reason %} <span class="stat-tile__sub">{{ view.time.reason }}</span>{% endif %}</p>
+{% elif view.time.reason %}<p class="page-lead"><span class="honest-badge honest-badge--not-measured">{{ m.icon('slash') }}Time not measured</span> <span class="stat-tile__sub">{{ view.time.reason }}</span></p>{% endif %}
+
+<section class="project-features state-{{ panel.state.value }}" aria-labelledby="project-features-title">
+  <header class="section-head">
+    <h2 class="section-title" id="project-features-title">{{ panel.title }} <span class="section-head__sub">· {{ panel.rows | length }}</span></h2>
   </header>
-  <div class="panel-card__body">
-    {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
-    <p class="page-lead">{{ panel.note }}</p>
-    {% if panel.rows %}{{ m.feature_table(panel.rows, show_project=False) }}{% else %}<p class="true-empty">{{ panel.empty_copy }}</p>{% endif %}
+  <div class="panel-card panel-card--flush">
+    <div class="panel-card__body">
+      {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+      {% if panel.note %}<p class="page-lead">{{ panel.note }}</p>{% endif %}
+      {% if panel.rows %}{{ m.feature_table(panel.rows, show_project=False) }}{% else %}<p class="true-empty">{{ panel.empty_copy }}</p>{% endif %}
+    </div>
   </div>
 </section>
 
-<section class="panel-card project-issues">
-  <header class="panel-card__header"><h2 class="panel-card__title">Open issues</h2></header>
+<section class="panel-card project-issues" aria-labelledby="project-issues-title">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title" id="project-issues-title">Open issues</h2>
+    {# Every unresolved issue, the listed ones and the older hidden ones (tests read this line). #}
+    <ul class="issue-counts"><li><span class="num">{{ view.open_issues_total }}</span> open {{ 'issue' if view.open_issues_total == 1 else 'issues' }}</li></ul>
+  </header>
   <div class="panel-card__body">
     {% if view.hidden_line %}<p class="page-lead issues-hidden">{{ view.hidden_line }}</p>{% endif %}
     {% if view.issues %}
-      <ul class="issue-list">
+      <ul class="signal-list issue-list">
       {% for i in view.issues %}
-        <li>{{ m.band_chip(i.band) }} <strong>{{ i.kind }}</strong>: <a href="{{ i.link }}">{{ i.subject }}</a>
-          <span title="{{ i.opened_title }}">({{ i.opened_label }})</span>. {{ i.detail }}</li>
+        <li class="signal-row">
+          <b class="signal-row__name">{{ i.kind }}</b>
+          <p class="signal-row__text"><a href="{{ i.link }}">{{ i.subject }}</a> · <span title="{{ i.opened_title }}">opened {{ i.opened_label }}</span>{% if i.detail %} <span class="signal-row__detail">{{ i.detail }}</span>{% endif %}</p>
+          {% if i.kind.startswith('Waiting') %}{{ m.status_pill('wait', 'Waiting', i.age) }}{% else %}{{ m.band_chip(i.band) }}{% endif %}
+        </li>
       {% endfor %}
       </ul>
     {% elif not view.open_issues_total %}<p class="true-empty">No open issues for this project.</p>{% endif %}

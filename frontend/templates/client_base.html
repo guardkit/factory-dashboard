@@ -1,33 +1,41 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en-GB" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}{{ tenant.display_name if tenant is defined else 'Delivery' }}{% endblock %}</title>
+  <title>{% block title %}Appmilla Factory{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
+  {# Not deferred: it sets the light or dark theme before the first paint. #}
+  <script src="/static/theme.js"></script>
   <script src="/static/htmx.min.js" defer></script>
   <script src="/static/freshness.js" defer></script>
 </head>
-{# ux §7.2 — the client-tenant layout. Reduced top bar, NO operator nav, roomier density, and the
-   plain-language honesty rule: client surfaces never cite internal ask ids. Dark at birth; D3
-   lights the feed. The template layer additionally references NO operator-only fields. #}
+{# The client layout: the same top bar with one place (Home), the client's own name, and no
+   operator places, machinery, costs, chat or live-update connection. Client surfaces never cite
+   internal ask ids, and this template references no operator-only fields. #}
 <body class="layout-client">
   <a class="skip-link" href="#main">Skip to content</a>
+  {% include "icon_sprite.html" %}
 
   <header class="topbar topbar--client">
-    <div class="topbar__brand">{{ tenant.display_name if tenant is defined and tenant else 'Delivery' }}</div>
+    <a class="topbar__brand" href="/">
+      <img class="topbar__logo" src="/static/logos/appmilla-icon-A.png" alt="" width="37" height="24">
+      <img class="topbar__wordmark" src="/static/logos/appmilla-wordmark-white-on-dark.png" alt="appmilla" width="73" height="19">
+      <span class="topbar__product">Factory</span>
+    </a>
     <nav class="topnav topnav--client" aria-label="Primary">
       <ul>
-        <li><a href="/" class="topnav__item topnav__item--active" aria-current="page">Delivered</a></li>
-        <li><a href="/" class="topnav__item">Projects</a></li>
-        {# Chat appears at D4+. #}
+        <li><a href="/" class="topnav__item topnav__item--active" aria-current="page">Home</a></li>
       </ul>
     </nav>
     <div class="topbar__cluster">
-      <details class="user-menu">
-        <summary>{{ tenant.display_name if tenant is defined and tenant else 'session' }}</summary>
-        <ul><li><form method="post" action="/logout" class="user-menu__form"><button type="submit" class="user-menu__signout">Log out</button></form></li></ul>
-      </details>
+      {% if tenant is defined and tenant %}<span class="org-chip" title="{{ tenant.display_name }}">{{ tenant.display_name }}</span>{% endif %}
+      <button type="button" class="theme-switch" hidden><span class="visually-hidden">Switch to </span><span class="theme-switch__label">Dark</span><span class="theme-switch__mode"> mode</span></button>
+      <span class="user-menu">
+        {% if signed_in %}<span class="user-menu__avatar" aria-hidden="true">{{ signed_in.display_name[:1] | upper }}</span>
+        <span class="user-menu__name">Signed in as {{ signed_in.display_name }}</span>{% endif %}
+        <form method="post" action="/logout" class="user-menu__form"><button type="submit" class="user-menu__signout">Sign out</button></form>
+      </span>
     </div>
   </header>
 
@@ -36,9 +44,5 @@
       {% block content %}{% endblock %}
     </main>
   </div>
-
-  <footer class="site-footer">
-    <span class="site-footer__repo">Delivery view · v1</span>
-  </footer>
 </body>
 </html>

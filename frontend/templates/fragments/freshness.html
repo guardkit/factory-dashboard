@@ -10,7 +10,7 @@
      hx-get="/fragments/freshness" hx-trigger="every {{ freshness_poll_secs | default(30) }}s" hx-swap="outerHTML"
      {%- if not standalone %} hx-swap-oob="true"{% endif %}>
   <span class="read-asof">{{ m.asof_chip(chrome.read_as_of, source='factory') }}</span>
-  {% if chrome.banner %}<div class="banner banner--{{ chrome.banner.kind }}" role="status">{{ chrome.banner.text }}</div>{% endif %}
-  {% if chrome.cost_banner %}<div class="banner banner--{{ chrome.cost_banner.kind }}" data-feed="cost" role="status">{{ chrome.cost_banner.text }}</div>{% endif %}
+  {% if chrome.banner %}<div class="banner banner--{{ chrome.banner.kind }}" role="status">{{ m.icon('alert') }}<span class="banner__text">{{ chrome.banner.text }}</span></div>{% endif %}
+  {% if chrome.cost_banner %}<div class="banner banner--{{ chrome.cost_banner.kind }}" data-feed="cost" role="status">{{ m.icon('alert') }}<span class="banner__text">{{ chrome.cost_banner.text }}</span></div>{% endif %}
 </div>
 {% endif %}

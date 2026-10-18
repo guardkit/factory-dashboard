@@ -1,71 +1,97 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Weekly report — {{ report.tenant_display }} (client-safe)</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-{# The CLIENT-SAFE version. It renders ONLY: delivered features (title, project, date, commit) and
-   the four agreed plan fields (id, title, target window, deviation). A separate,
-   standalone page with no internal navigation; nothing about work in progress, problems, models,
-   people, costs or other projects. Tests check this template for internal-only tokens. #}
-<body class="layout-client">
-  {% import 'macros.html' as m %}
-  <main class="content content--client report-export">
-    <a class="report-export__back" href="/reports?tenant={{ report_tenant }}&from={{ report.window_from }}&to={{ report.window_to }}">← back to the internal report</a>
-    <header class="report-export__head">
-      <h1>Weekly report — {{ report.tenant_display }}</h1>
-      <p class="report-export__meta">
-        <span>Week: {{ report.window_from }} to {{ report.window_to }}</span>
-        {{ m.asof_chip(report.as_of, source='factory') }}
-      </p>
-    </header>
+{% extends "base.html" %}
+{% import 'macros.html' as m %}
+{% block title %}Client-safe report · {{ report.tenant_display }} · Appmilla Factory{% endblock %}
+{# The CLIENT-SAFE version. The document renders ONLY: delivered features (title, code, project,
+   date) and the four agreed plan fields (id, title, target window, deviation). An operator previews
+   it inside the operator frame; printing keeps only the document. Nothing about work in progress,
+   problems, models, people, money or other projects. Its heading names the report's own client
+   and week, never the signed-in account. Tests check this template for internal-only tokens. #}
+{% block content %}
+{% if report_tenant == 'operator' %}
+{# The all-projects report has no client: a document made from it would carry every client's work.
+   So there is no document and no Save as PDF here, only the way to choose a client. #}
+<div class="page-head">
+  <p class="page-eyebrow">Weekly report · Client-safe version</p>
+  <h1 class="page-title">Choose a client first</h1>
+  <p class="page-lead">A client-safe version is made for one client at a time, so it never shows another client's work. Choose the client on the internal report, then open its client-safe version.</p>
+</div>
+<p><a class="button--secondary" href="/reports?tenant=operator&from={{ report.window_from }}&to={{ report.window_to }}">Back to the internal report</a></p>
+{% else %}
+<div class="report-toolbar no-print">
+  <nav class="report-rendering" aria-label="Report version">
+    <a class="report-rendering__link" href="/reports?tenant={{ report_tenant }}&from={{ report.window_from }}&to={{ report.window_to }}">Internal report</a>
+    <span class="report-rendering__active" aria-current="page">Client-safe version</span>
+  </nav>
+  <div class="report-toolbar__end">
+    <button type="button" class="button--secondary button--compact" data-print>{{ m.icon('print') }}Save as PDF</button>
+  </div>
+</div>
+<p class="hint no-print">This is exactly what the client receives: their project only, with no machinery and no other clients.</p>
 
-    <section class="report-export__section">
-      <h2>Delivered this week</h2>
-      {% if report.delivered_rows %}
-        <table class="dense-table">
-          <thead>
-            <tr><th scope="col">Delivered</th><th scope="col">Feature</th><th scope="col">Project</th></tr>
-          </thead>
-          <tbody>
-          {% for r in report.delivered_rows %}
-            <tr>
-              <td class="num">{{ r.delivered_date }}</td>
-              <td><span class="feature-title">{{ r.title }}</span> <span class="feature-id">({{ r.feature_id }})</span></td>
-              <td>{{ r.project }}</td>
-            </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-      {% else %}
-        <p class="true-empty">No features were delivered in this week.</p>
-      {% endif %}
-    </section>
+<article class="report-export" data-theme="light" aria-labelledby="export-title">
+  <header class="report-export__head report-export__brand">
+    <img src="/static/logos/appmilla-wordmark-deepgreen-on-light.png" alt="appmilla" width="100" height="26">
+    <span>Weekly summary for {{ report.tenant_display }}<br>Week <span class="report-export__date">{{ report.window_from }}</span> to <span class="report-export__date">{{ report.window_to }}</span></span>
+  </header>
 
-    <section class="report-export__section">
-      <h2>Plan and milestones</h2>
-      {% if report.milestones_withheld %}
-        <p class="report-withheld">Plan status is not available right now.</p>
-      {% elif report.milestones %}
-        <ul class="plan-list">
-          {% for ms in report.milestones %}
-            <li class="plan-row">
-              {{ m.band_chip(ms.band) }}
-              <span class="plan-row__id">{{ ms.milestone_id }} "{{ ms.title }}"</span>
-              <span class="plan-row__target">{{ ms.target_window }}</span>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="true-empty">No milestones agreed yet.</p>
-      {% endif %}
-    </section>
+  <div class="page-head">
+    <p class="page-eyebrow">{{ report.tenant_display }} · Weekly summary</p>
+    <h1 class="page-title" id="export-title">Week <span class="report-export__date">{{ report.window_from }}</span> to <span class="report-export__date">{{ report.window_to }}</span></h1>
+    {# The time in plain words: a client document names no record or machinery. #}
+    {# "Prepared 18 Oct 2026, 16:55": the date and time from the as-of's own ISO time (London), shown
+       only when it carries one. #}
+    {% set iso = report.as_of.title_iso %}
+    {% set months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] %}
+    {% set has_time = iso and iso | length >= 16 and iso[4] == '-' and iso[10] == 'T' %}
+    {# Fresh only when the delivery information was read within its threshold; otherwise the document
+       says so in words that print, and the empty sentence below is qualified. #}
+    {% set fresh = has_time and report.as_of.dot_state in ('live', 'empty') %}
+    <p class="page-head__meta"><span>{% if has_time %}Prepared <time datetime="{{ iso }}">{{ iso[8:10] | int }} {{ months[(iso[5:7] | int) - 1] }} {{ iso[0:4] }}, {{ iso[11:16] }}</time>{% else %}No delivery information has been read yet.{% endif %}</span></p>
+    {% if not fresh %}
+    <p class="honest-badge honest-badge--stale report-export__freshness" role="note">{{ m.icon('clock') }}This summary may be out of date: the delivery information could not be brought up to date{% if has_time %} after the time above{% endif %}.</p>
+    {% endif %}
+  </div>
 
-    <footer class="report-export__foot">
-      An automatically composed summary. Your delivery manager adds the narrative before it reaches you.
-    </footer>
-  </main>
-</body>
-</html>
+  <section class="report-export__section">
+    <h2>Delivered this week</h2>
+    {% if report.delivered_rows %}
+      <ul class="deliv-list">
+        {% for r in report.delivered_rows %}
+          <li>
+            <b>{{ r.title }}</b>
+            <p><span class="feature-id">{{ r.feature_id }}</span> {{ r.project }}</p>
+            {{ m.status_pill('done', 'Delivered', r.delivered_date) }}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="true-empty">{% if fresh %}No features were delivered in this week.{% else %}No deliveries are shown for this week, but this summary may be out of date.{% endif %}</p>
+    {% endif %}
+  </section>
+
+  <section class="report-export__section">
+    <h2>Plan and milestones</h2>
+    {% if report.milestones_withheld %}
+      <p class="report-withheld">{{ m.icon('x') }}Plan status is not available right now.</p>
+    {% elif report.milestones %}
+      <ul class="deliv-list">
+        {% for ms in report.milestones %}
+          <li>
+            <b>{{ ms.title }}</b>
+            <p><span class="feature-id">{{ ms.milestone_id }}</span> Target: {{ ms.target_window }}</p>
+            {{ m.band_chip(ms.band) }}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="true-empty">No milestones agreed yet.</p>
+    {% endif %}
+  </section>
+
+  <footer class="report-export__foot">
+    <span>An automatically composed summary. Your delivery manager adds the narrative before it reaches you.</span>
+    <span>Prepared by Appmilla · appmilla.com</span>
+  </footer>
+</article>
+{% endif %}
+{% endblock %}

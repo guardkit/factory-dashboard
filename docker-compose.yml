@@ -1,6 +1,7 @@
 # The factory dashboard: one image, two containers.
 #
-#   board  — the web pages, on 127.0.0.1:8090 (loopback only; nothing is published).
+#   board  — the web pages and the chat, on 127.0.0.1:8090 (loopback only; nothing is published). The
+#            chat calls LiteLLM on :4000 with its own key (FACTORY_DASH_CHAT_KEY, from ./.env).
 #   projector ("the feed") — copies Forge's build record into ./data every 15 s, read-only, and checks the model
 #            gateway, the model server and the bus monitor every 30 s. No bus connection.
 #
@@ -24,6 +25,11 @@ services:
     environment:
       FACTORY_DASH_DB: /data/readmodel.db
       FACTORY_DASH_CONFIG_DIR: /config
+      # The chat's own LiteLLM key, limited to the `dashboard-chat` model name. Compose reads it from
+      # ./.env (gitignored, mode 600 — see .env.example), the same file the feed uses; only this one
+      # value is passed, so the board never holds the file's other logins. Empty: the chat says it
+      # is not switched on, and the pages work as before.
+      FACTORY_DASH_CHAT_KEY: ${FACTORY_DASH_CHAT_KEY:-}
     volumes:
       - ./data:/data
       # Accounts and the session secret (README "Accounts and access"), outside the repository,

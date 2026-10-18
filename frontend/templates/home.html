@@ -1,21 +1,32 @@
 {% extends "base.html" %}
 {% import 'macros.html' as m %}
-{% block title %}Now · Factory dashboard{% endblock %}
-{% block content %}
+{% block title %}Now · Appmilla Factory{% endblock %}
+{% block hero %}
 <h1 class="page-title visually-hidden">Now</h1>
-{# What needs a person first, then what is in progress, then the machinery. #}
+{# What needs a person first (the dark band), then what is in progress, then the machinery. #}
 {% with panel = view.needs_you %}{% include "fragments/needs_you.html" %}{% endwith %}
-<p class="spend-split"><span class="stat-tile"><span class="stat-tile__label">Today, all projects</span> <span class="stat-tile__value">{{ m.spend_slot(view.spend_today) }}</span></span> <span class="stat-tile"><span class="stat-tile__label">This week, all projects</span> <span class="stat-tile__value">{{ m.spend_slot(view.spend_week) }}</span></span></p>
+{% endblock %}
+{% block content %}
 <div class="home-grid">
   <div class="home-grid__main">
     {% with panel = view.in_flight %}{% include "fragments/in_progress.html" %}{% endwith %}
     {% with panel = view.activity %}{% include "fragments/activity.html" %}{% endwith %}
     {% with panel = view.planning %}{% include "fragments/planning.html" %}{% endwith %}
   </div>
-  <aside class="home-grid__rail">
-    <h2 class="rail-title">Machinery</h2>
+  <aside class="home-grid__rail" aria-label="Spend and machinery">
+    {# Every model call today and this week, all projects, tagged or not: a gap, never a zero. #}
+    <h2 class="rail-title">Spend</h2>
+    {% for slot, label in ((view.spend_today, 'Today, all projects'), (view.spend_week, 'This week, all projects')) %}
+    <div class="stat-tile{% if slot.empty %} stat-tile--empty{% endif %}">
+      <span class="stat-tile__value">{{ m.spend_value(slot) }}</span>
+      <span class="stat-tile__label">{{ label }}</span>
+      <span class="stat-tile__sub">{{ m.spend_sub(slot) }}</span>
+    </div>
+    {% endfor %}
+    <h2 class="rail-title rail-title--spaced">Machinery</h2>
     {% with panel = view.serving %}{% include "fragments/services.html" %}{% endwith %}
     {% with panel = view.feed %}{% include "fragments/feed.html" %}{% endwith %}
+    <p class="rail-link"><a href="/fleet">Open Fleet</a></p>
   </aside>
 </div>
 {% endblock %}

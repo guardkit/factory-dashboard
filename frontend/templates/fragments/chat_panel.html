@@ -1,0 +1,17 @@
+{# The chat panel: the side drawer on wide screens, and the whole of /chat on narrow ones.
+   Answers come from the server's fixed templates, filled from the dashboard's records; this only
+   shows them. Without scripts the form posts to /chat and the page comes back with the answer. #}
+<section class="chat" aria-labelledby="chat-title">
+  <h2 id="chat-title" class="chat__title">Ask about the factory</h2>
+  <p class="chat__note">Answers come from the dashboard's records, with links to them. Ask about a feature, a project, issues or deliveries.</p>
+  <div id="chat-log" class="chat__log" aria-live="polite">
+    {% for exchange in exchanges %}{% with question = exchange.question, answer = exchange.answer %}{% include "fragments/chat_exchange.html" %}{% endwith %}{% endfor %}
+  </div>
+  <form class="chat__form" method="post" action="/chat"
+        hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-disabled-elt="find button">
+    <label for="chat-question" class="chat__label">Your question</label>
+    <textarea id="chat-question" class="chat__input" name="question" rows="2" maxlength="500" required></textarea>
+    <button type="submit" class="chat__ask">Ask</button>
+    <span class="chat__working">Looking it up…</span>
+  </form>
+</section>

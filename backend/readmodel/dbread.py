@@ -549,9 +549,19 @@ def _in_window(t: datetime | None, lo: datetime, hi: datetime) -> bool:
     return t is not None and lo <= t < hi
 
 
-def delivered_in(factory: Factory, lo: datetime, hi: datetime, projects: tuple[str, ...] = ()) -> list[Feature]:
+#: Projects in scope: None means every project (only the operator's own view asks for that); a tuple
+#: means exactly those projects, so an empty tuple matches nothing.
+Scope = tuple[str, ...] | None
+
+
+def in_scope(project: str, projects: Scope) -> bool:
+    """True when `project` is in scope: every project for None, else only the ones named."""
+    return projects is None or project in projects
+
+
+def delivered_in(factory: Factory, lo: datetime, hi: datetime, projects: Scope = None) -> list[Feature]:
     out = [f for f in factory.features if f.outcome is Outcome.DELIVERED and _in_window(f.delivered_at, lo, hi)
-           and (not projects or f.project in projects)]
+           and in_scope(f.project, projects)]
     out.sort(key=lambda f: f.delivered_at or lo)
     return out
 
@@ -621,6 +631,7 @@ class IssuesView:
     closed_rows: tuple[IssueRow, ...]
     note: str
     hidden_line: str = ""    # how many old open failures the 14-day cut-off leaves out
+    hidden_count: int = 0    # that number, so a total of open issues can include them (the chat)
 
 
 @dataclass(frozen=True)
@@ -672,6 +683,13 @@ def _open(db_path: Path) -> sqlite3.Connection:
     except sqlite3.Error:
         conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()  # any read fixes the snapshot
     return conn
+
+
+def snapshot(db_path: Path) -> sqlite3.Connection:
+    """One read snapshot (see `_open`) for a caller that builds one answer from several views, such
+    as the chat: pass it to each view as ``conn=`` and close it when done. A view given ``conn``
+    reads on it and leaves it open; without one it opens and closes its own, as the pages do."""
+    return _open(db_path)
 
 
 def home_view(db_path: Path, now: datetime | None = None) -> HomeView:
@@ -738,9 +756,11 @@ def _norms_line(norms: Norms) -> str:
             f"Build: {norms.build_minutes.describe()}.")
 
 
-def feature_page(db_path: Path, key: str, now: datetime | None = None) -> tuple[PageChrome, FeaturePage] | None:
+def feature_page(db_path: Path, key: str, now: datetime | None = None, *,
+                 conn: sqlite3.Connection | None = None) -> tuple[PageChrome, FeaturePage] | None:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         factory, norms = load_factory(conn, now), load_norms()
         f = factory.feature(key)
@@ -784,7 +804,8 @@ def feature_page(db_path: Path, key: str, now: datetime | None = None) -> tuple[
         )
         return page_chrome(conn, now), page
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
 def _build_words(b: Build) -> str:
@@ -811,9 +832,11 @@ def _mission_words(status: str) -> str:
             "NOT_MERGED": "not merged"}.get(status, status.lower())
 
 
-def project_view(db_path: Path, project: str, now: datetime | None = None) -> ProjectView:
+def project_view(db_path: Path, project: str, now: datetime | None = None, *,
+                 conn: sqlite3.Connection | None = None) -> ProjectView:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         factory, norms = load_factory(conn, now), load_norms()
         fr = freshness(conn)
@@ -842,7 +865,8 @@ def project_view(db_path: Path, project: str, now: datetime | None = None) -> Pr
             untagged_note=_untagged_note(conn, book, now),
         )
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
 def _project_tags(book: CostBook, factory: Factory, project: str) -> set[str]:
@@ -879,6 +903,13 @@ def tagged_spend(book: CostBook, factory: Factory, projects: Iterable[str], *, l
     names = tuple(projects)
     if book.state == "never":
         return book.not_available()
+    if not names:
+        return SpendSlot(state="not_measured", label="Not measured", price_label=book.prices.label,
+                         reason="This covers no projects.")
+    if not any(f.project in names for f in factory.features) and not any(
+            m.target_repo in names for m in factory.missions):
+        return SpendSlot(state="not_measured", label="Not measured", price_label=book.prices.label,
+                         reason="No work on record for this.")
     if (hi is not None and hi <= book.tagging_started()) or not any(
             _has_work_since_tagging(book, factory, p) for p in names):
         return _before_tagging_slot(book)
@@ -981,9 +1012,10 @@ def projects_view(db_path: Path, now: datetime | None = None) -> ProjectsView:
         conn.close()
 
 
-def issues_view(db_path: Path, now: datetime | None = None) -> IssuesView:
+def issues_view(db_path: Path, now: datetime | None = None, *, conn: sqlite3.Connection | None = None) -> IssuesView:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         factory, norms = load_factory(conn, now), load_norms()
         open_, closed, hidden = recent(find_issues(factory, norms, now), now)
@@ -991,26 +1023,32 @@ def issues_view(db_path: Path, now: datetime | None = None) -> IssuesView:
                 "later attempt. Closed: issues that closed in the last 7 days.")
         return IssuesView(chrome=page_chrome(conn, now), open_rows=tuple(issue_row(i, now) for i in open_),
                           closed_rows=tuple(issue_row(i, now) for i in closed), note=note,
-                          hidden_line=hidden_line(hidden))
+                          hidden_line=hidden_line(hidden), hidden_count=hidden)
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
-def delivered_view(db_path: Path, window: tuple[str, str] | None = None, now: datetime | None = None) -> DeliveredView:
+def delivered_view(db_path: Path, window: tuple[str, str] | None = None, now: datetime | None = None, *,
+                   conn: sqlite3.Connection | None = None) -> DeliveredView:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         return DeliveredView(chrome=page_chrome(conn, now), panel=delivered_panel(conn, now, window=window))
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
-def chrome_view(db_path: Path, now: datetime | None = None) -> PageChrome:
-    conn = _open(db_path)
+def chrome_view(db_path: Path, now: datetime | None = None, *, conn: sqlite3.Connection | None = None) -> PageChrome:
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         return page_chrome(conn, now or _now())
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
 def fleet_view(db_path: Path, now: datetime | None = None) -> FleetView:
@@ -1032,7 +1070,15 @@ def fleet_view(db_path: Path, now: datetime | None = None) -> FleetView:
 _TARGET_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 
-def _tenant_projects(conn: sqlite3.Connection, tenant: str) -> tuple[str, ...]:
+OPERATOR_TENANT = "operator"
+
+
+def _tenant_projects(conn: sqlite3.Connection, tenant: str) -> Scope:
+    """The projects a report covers. Only the operator's own view covers every project (None).
+    A client tenant covers exactly the projects configured for it: when they are missing, empty
+    or unreadable that is NO project, never every project, so one client never sees another's."""
+    if tenant == OPERATOR_TENANT:
+        return None
     row = conn.execute("SELECT projects_json FROM tenants WHERE tenant_slug=?", (tenant,)).fetchone()
     if not row or not row[0]:
         return ()
@@ -1040,7 +1086,9 @@ def _tenant_projects(conn: sqlite3.Connection, tenant: str) -> tuple[str, ...]:
         data = json.loads(row[0])
     except (ValueError, TypeError):
         return ()
-    return tuple(str(p) for p in data) if isinstance(data, list) else ()
+    if not isinstance(data, list):
+        return ()
+    return tuple(p for p in data if isinstance(p, str) and p)
 
 
 def _tenant_display(conn: sqlite3.Connection, tenant: str) -> str:
@@ -1073,11 +1121,11 @@ def _deviation(*, tracked: set[str], delivered: dict[str, datetime], target_star
 
 
 def _plan_rows(
-    conn: sqlite3.Connection, tenant: str, factory: Factory, projects: tuple[str, ...],
+    conn: sqlite3.Connection, tenant: str, factory: Factory, projects: Scope,
     active: list[Feature], ref: date,
 ) -> tuple[list[MilestoneRow], int, int, int]:
     delivered = {f.code: f.delivered_at for f in factory.features
-                 if f.delivered_at and f.code and (not projects or f.project in projects)}
+                 if f.delivered_at and f.code and in_scope(f.project, projects)}
     milestones = conn.execute(
         "SELECT milestone_id, title, feature_ids_json, project, target_window FROM plan_milestones "
         "WHERE tenant=? ORDER BY milestone_id", (tenant,),
@@ -1085,12 +1133,24 @@ def _plan_rows(
     rows: list[MilestoneRow] = []
     covered: set[str] = set()
     behind = on_target = ahead = 0
+    if projects == ():
+        milestones = []          # a client with no projects in scope has no plan to show
+    on_record = {f.code: f for f in factory.features if f.code}
     for mid, title, ids_json, project, target_window in milestones:
+        if project and not in_scope(str(project), projects):
+            continue             # a milestone of a project this view does not cover
         try:
             ids = {str(x) for x in json.loads(ids_json or "[]")}
         except (ValueError, TypeError):
             ids = set()
-        tracked = ids or {f.code for f in factory.features if project and f.project == project and f.code}
+        # A feature on record outside the scope is dropped. A code with no record yet (planned, not
+        # started) carries nothing from any project, so it stays: it is this tenant's own plan.
+        mine = {c for c in ids if c in on_record and in_scope(on_record[c].project, projects)}
+        if not project and projects is not None and not mine:
+            continue             # no project of its own and none of its features in scope
+        tracked = ({c for c in ids if c not in on_record or c in mine} if ids
+                   else {f.code for f in factory.features
+                         if project and f.project == project and f.code and in_scope(f.project, projects)})
         covered |= tracked
         dev, band = _deviation(tracked=tracked, delivered={k: v for k, v in delivered.items() if v},
                                target_start=_target_start(target_window), ref=ref)
@@ -1112,12 +1172,12 @@ def _plan_rows(
 
 
 def _report_issues(factory: Factory, norms: Norms, lo: datetime, hi: datetime, now: datetime,
-                   projects: tuple[str, ...]) -> IssuesEncountered:
+                   projects: Scope) -> IssuesEncountered:
     opened = closed = 0
     oldest = 0.0
     rows: list[ReportIssueRow] = []
     for i in find_issues(factory, norms, now):
-        if projects and i.project not in projects:
+        if not in_scope(i.project, projects):
             continue
         o_in, c_in = _in_window(i.opened_at, lo, hi), _in_window(i.closed_at, lo, hi)
         if not (o_in or c_in):
@@ -1141,7 +1201,7 @@ def _report_parts(conn: sqlite3.Connection, tenant: str, now: datetime, window: 
     projects = _tenant_projects(conn, tenant)
     factory, norms = load_factory(conn, now), load_norms()
     delivered = delivered_in(factory, lo, hi, projects)
-    in_progress = [f for f in factory.features if f.in_progress and (not projects or f.project in projects)]
+    in_progress = [f for f in factory.features if f.in_progress and in_scope(f.project, projects)]
     stale = not freshness(conn).fresh(now)
     fr = freshness(conn)
     since = vm.fmt_wall(fr.read_at, now=now) if fr.read_at else "the dashboard started"
@@ -1158,8 +1218,11 @@ def weekly_report(
     (win_from, win_to, lo, hi, projects, factory, norms, delivered, in_progress, stale, since,
      plan_rows, behind, on_target, ahead) = _report_parts(conn, tenant, now, window)
     book = load_cost_book(conn, now)
-    names = projects or tuple(sorted({f.project for f in factory.features if f.project}
-                                     | {m.target_repo for m in factory.missions if m.target_repo}))
+    # The operator's report (projects is None) covers every project; a client's covers exactly its own
+    # projects, and an empty set means none (main's client-scope rule), never every project.
+    every = ({f.project for f in factory.features if f.project}
+             | {m.target_repo for m in factory.missions if m.target_repo})
+    names = projects if projects is not None else tuple(sorted(every))
     spend = tagged_spend(book, factory, names, lo=lo, hi=hi)
     headline = ReportHeadline(
         delivered_count=len(delivered), in_flight_count=len(in_progress), behind_count=behind,
@@ -1206,13 +1269,15 @@ def _client_tenants(conn: sqlite3.Connection) -> tuple[tuple[str, str], ...]:
 
 
 def weekly_report_view(db_path: Path, tenant: str, window: tuple[str, str] | None = None,
-                       now: datetime | None = None) -> WeeklyReport:
+                       now: datetime | None = None, *, conn: sqlite3.Connection | None = None) -> WeeklyReport:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         return weekly_report(conn, tenant, now, window=window, client_tenants=_client_tenants(conn))
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
 def export_report_view(db_path: Path, tenant: str, window: tuple[str, str] | None = None,
@@ -1282,11 +1347,13 @@ def health(db_path: Path, now: datetime | None = None) -> dict[str, object]:
 
 def cost_summary(db_path: Path, *, feature: str | None = None, project: str | None = None,
                  lo: datetime | None = None, hi: datetime | None = None,
-                 now: datetime | None = None) -> cost.CostSummary:
+                 now: datetime | None = None, conn: sqlite3.Connection | None = None) -> cost.CostSummary:
     """Tagged model calls, tokens and nominal cost for one feature (code, request id or title) or one
-    project, optionally only calls that started in [lo, hi)."""
+    project, optionally only calls that started in [lo, hi). For the chat: pass the answer's
+    snapshot as ``conn=`` (`dbread.snapshot`) so it agrees with the other views of the answer."""
     now = now or datetime.now(UTC)
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         factory, book = load_factory(conn, now), load_cost_book(conn, now)
         scope, name, chosen = cost.scope(factory, feature, project)
@@ -1308,15 +1375,18 @@ def cost_summary(db_path: Path, *, feature: str | None = None, project: str | No
             stale=slot.stale, price_label=book.prices.label, refs=tuple(f.code or f.key for f in chosen),
         )
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
 def time_summary(db_path: Path, *, feature: str | None = None, project: str | None = None,
                  lo: datetime | None = None, hi: datetime | None = None,
-                 now: datetime | None = None) -> cost.TimeSummary:
-    """Elapsed, machine and waiting time for one feature or the features of one project sent in [lo, hi)."""
+                 now: datetime | None = None, conn: sqlite3.Connection | None = None) -> cost.TimeSummary:
+    """Elapsed, machine and waiting time for one feature or the features of one project sent in [lo, hi).
+    For the chat: pass the answer's snapshot as ``conn=`` (`dbread.snapshot`)."""
     now = now or datetime.now(UTC)
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         factory = load_factory(conn, now)
         scope, name, chosen = cost.scope(factory, feature, project)
@@ -1347,4 +1417,5 @@ def time_summary(db_path: Path, *, feature: str | None = None, project: str | No
             so_far=any(t.so_far for _f, t in known), refs=tuple(f.code or f.key for f, _t in known),
         )
     finally:
-        conn.close()
+        if owned:
+            conn.close()

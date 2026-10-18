@@ -1,52 +1,94 @@
 {% extends "base.html" %}
 {% import 'macros.html' as m %}
-{% block title %}Weekly report · Factory dashboard{% endblock %}
+{% block title %}Weekly report · Appmilla Factory{% endblock %}
 {% block content %}
 {# The weekly delivery report. If the factory's record is stale, the counts and plan colours are
    withheld rather than shown from old data. The client-safe version is a separate page. #}
-<div class="report-head">
-  <h1 class="page-title">Weekly report — {{ report.tenant_display }}</h1>
-  <form class="window-form" method="get" action="/reports">
+{% set h = report.headline %}
+{% set has_plan = h.behind_count or h.on_target_count or h.ahead_count %}
+<div class="page-head page-head--split">
+  <div>
+    <p class="page-eyebrow">Weekly report · {{ report.tenant_display }}</p>
+    <h1 class="page-title">{{ report.window_from }} to {{ report.window_to }}</h1>
+  </div>
+  <form class="window-form no-print" method="get" action="/reports">
     <input type="hidden" name="tenant" value="{{ report_tenant }}">
     <label>From <input type="date" name="from" value="{{ report.window_from }}"></label>
-    <label>to <input type="date" name="to" value="{{ report.window_to }}"></label>
+    <label>To <input type="date" name="to" value="{{ report.window_to }}"></label>
     <button type="submit">Show</button>
   </form>
 </div>
+
 <div class="report-toolbar">
-  <span class="report-rendering">
-    <span class="report-rendering__active">Internal report</span> ·
+  <nav class="report-rendering" aria-label="Report version">
+    <span class="report-rendering__active" aria-current="page">Internal report</span>
+    {# A client-safe version is only ever for one client: the all-projects report offers none. #}
+    {% if report_tenant != 'operator' %}
     <a class="report-rendering__link"
        href="/reports?view=export&tenant={{ report_tenant }}&from={{ report.window_from }}&to={{ report.window_to }}">Client-safe version</a>
-  </span>
+    {% endif %}
+  </nav>
+  {% if report_tenant == 'operator' %}<p class="hint report-toolbar__hint">{% if report.client_tenants %}For a client-safe version, choose a client:{% else %}A client-safe version is made for one client; none is set up yet.{% endif %}</p>{% endif %}
   {% if report.client_tenants %}
-  <span class="report-engagements">
-    Client:
-    <a href="/reports?tenant=operator" class="{% if report_tenant == 'operator' %}report-engagements__active{% endif %}">all projects</a>
+  <nav class="report-engagements" aria-label="Client">
+    <a href="/reports?tenant=operator"{% if report_tenant == 'operator' %} class="report-engagements__active" aria-current="page"{% endif %}>All projects</a>
     {% for slug, display in report.client_tenants %}
-      <a href="/reports?tenant={{ slug }}" class="{% if report_tenant == slug %}report-engagements__active{% endif %}">{{ display }}</a>
+      <a href="/reports?tenant={{ slug }}"{% if report_tenant == slug %} class="report-engagements__active" aria-current="page"{% endif %}>{{ display }}</a>
     {% endfor %}
-  </span>
+  </nav>
   {% endif %}
 </div>
 
-<section class="panel-card report-headline state-{{ 'lagging' if report.headline.withheld else 'live' }}">
+<section class="panel-card report-headline state-{{ 'lagging' if h.withheld else 'live' }}">
   <header class="panel-card__header">
     <h2 class="panel-card__title">This week</h2>
     {{ m.asof_chip(report.chrome.read_as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
-    {% if report.headline.withheld %}
-      <p class="report-withheld">Figures withheld: the factory's record was last read at {{ report.headline.withheld_since }}.</p>
+    {% if h.withheld %}
+      <p class="report-withheld">{{ m.icon('x') }}Figures withheld: the factory's record was last read at {{ h.withheld_since }}.</p>
     {% else %}
       <p class="report-headline__line">
-        {{ report.headline.delivered_count }} feature{{ '' if report.headline.delivered_count == 1 else 's' }} merged and checked ·
-        {{ report.headline.in_flight_count }} in progress{% if report.headline.behind_count or report.headline.on_target_count or report.headline.ahead_count %} ·
-        {{ report.headline.behind_count }} milestone{{ 's' if report.headline.behind_count != 1 else '' }} behind ·
-        {{ report.headline.on_target_count }} on target{% if report.headline.ahead_count %} · {{ report.headline.ahead_count }} ahead{% endif %}{% endif %}
+        <strong class="key-figure">{{ h.delivered_count }} feature{{ '' if h.delivered_count == 1 else 's' }} merged and checked</strong> ·
+        {{ h.in_flight_count }} in progress{% if has_plan %} ·
+        {{ h.behind_count }} milestone{{ 's' if h.behind_count != 1 else '' }} behind ·
+        {{ h.on_target_count }} on target{% if h.ahead_count %} · {{ h.ahead_count }} ahead{% endif %}{% endif %}
       </p>
     {% endif %}
-    <p>Spend: {{ m.spend_slot(report.headline.spend) }}{% if report.headline.waiting.measured %}; waiting for people and the queue, features merged this week: {{ report.headline.waiting.waiting }}{% endif %}; all model calls: {{ m.spend_slot(report.headline.factory_usage) }}</p>
+  </div>
+</section>
+
+{% if not h.withheld %}
+<section class="stat-grid{% if not has_plan %} stat-grid--3{% endif %} report-stats" aria-label="The week in numbers">
+  <div class="stat-tile"><span class="stat-tile__value num">{{ h.delivered_count }}</span><span class="stat-tile__label">Merged and checked</span></div>
+  <div class="stat-tile"><span class="stat-tile__value num">{{ h.in_flight_count }}</span><span class="stat-tile__label">In progress</span></div>
+  {% if has_plan %}
+  <div class="stat-tile{% if h.behind_count %} report-stats__tile--behind{% endif %}"><span class="stat-tile__value num">{{ h.behind_count }}</span><span class="stat-tile__label">Milestones behind</span></div>
+  {% endif %}
+  <div class="stat-tile{% if h.spend.empty %} stat-tile--empty{% endif %}" data-state="{{ (h.spend.state if h.spend.state is defined else 'not_measured') | replace('_', '-') }}"><span class="stat-tile__value">{{ m.spend_value(h.spend) }}</span><span class="stat-tile__label">Spend</span><span class="stat-tile__sub">{{ m.spend_sub(h.spend) }}{% if h.waiting.measured %} Waiting, features merged this week: {{ h.waiting.waiting }}.{% endif %} All model calls: {{ m.spend_slot(h.factory_usage) }}</span></div>
+</section>
+{% endif %}
+
+<section class="panel-card report-delivered">
+  <header class="panel-card__header"><h2 class="panel-card__title">Merged and checked this week</h2></header>
+  <div class="panel-card__body">
+    {% if report.delivered_rows %}
+      <ul class="report-delivered__list signal-list">
+        {% for r in report.delivered_rows %}
+          <li class="report-delivered__row signal-row" title="{{ r.delivered_title }}">
+            <b class="signal-row__name"><a class="feature-title" href="{{ r.link }}">{{ r.title }}</a></b>
+            <p class="signal-row__text">
+              {% if r.project_link %}<a href="{{ r.project_link }}">{{ r.project }}</a>{% else %}{{ r.project }}{% endif %}
+              <span class="feature-id">{{ r.code }}</span>
+              {% if r.commit %}<span class="report-delivered__commit">commit <span class="feature-id">{{ r.commit }}</span></span>{% endif %}
+            </p>
+            {{ m.status_pill('done', 'Merged', r.delivered_date) }}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="true-empty">Nothing was merged and checked in this week.</p>
+    {% endif %}
   </div>
 </section>
 
@@ -56,19 +98,19 @@
   </header>
   <div class="panel-card__body">
     {% if report.plan.withheld %}
-      <p class="report-withheld">Plan status withheld: the factory's record was last read at {{ report.plan.withheld_since }}.</p>
+      <p class="report-withheld">{{ m.icon('x') }}Plan status withheld: the factory's record was last read at {{ report.plan.withheld_since }}.</p>
     {% elif report.plan.milestones %}
-      <ul class="plan-list">
+      <ul class="plan-list signal-list">
         {% for ms in report.plan.milestones %}
-          <li class="plan-row plan-row--{{ ms.deviation }}">
-            {{ m.band_chip(ms.band) }}
+          <li class="plan-row plan-row--{{ ms.deviation }} signal-row">
             {% if ms.milestone_id %}
-              <span class="plan-row__id">{{ ms.title }}</span>
-              <span class="plan-row__detail">{{ ms.detail }}</span>
+              <b class="plan-row__id signal-row__name">{{ ms.title }}</b>
+              <p class="plan-row__detail signal-row__text">{{ ms.detail }}</p>
             {% else %}
-              <a class="plan-row__id" href="{{ ms.feature_link }}">{{ ms.title }}</a>
-              <span class="plan-row__detail named-gap">{{ ms.detail }}</span>
+              <b class="signal-row__name"><a class="plan-row__id" href="{{ ms.feature_link }}">{{ ms.title }}</a></b>
+              <p class="signal-row__text"><span class="plan-row__detail named-gap">{{ ms.detail }}</span></p>
             {% endif %}
+            {{ m.band_chip(ms.band) }}
           </li>
         {% endfor %}
       </ul>
@@ -78,49 +120,45 @@
   </div>
 </section>
 
-<div class="report-two-col">
-  <section class="panel-card report-delivered">
-    <header class="panel-card__header"><h2 class="panel-card__title">Merged and checked this week</h2></header>
-    <div class="panel-card__body">
-      {% if report.delivered_rows %}
-        <ul class="report-delivered__list">
-          {% for r in report.delivered_rows %}
-            <li class="report-delivered__row">
-              <a class="feature-title" href="{{ r.link }}">{{ r.title }}</a> <span class="feature-id">({{ r.code }})</span>
-              <span class="num" title="{{ r.delivered_title }}">{{ r.delivered_date }}</span>
-              {% if r.commit %}<span class="num">commit {{ r.commit }}</span>{% endif %}
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="true-empty">Nothing was merged and checked in this week.</p>
+{# Issues have their own full-width card, as in the design: open ones first, the rest behind a
+   disclosure that says how many there are. The rows are the issues opened or closed in the window,
+   and open or closed is their state NOW: one opened this week may have closed after it, so the
+   disclosure says "now closed", not "closed this week" (the counts line has the week's figures). #}
+{% set open_issues = report.issues.rows | selectattr('is_open') | list %}
+{% set closed_issues = report.issues.rows | rejectattr('is_open') | list %}
+{% macro report_issue_list(rows) -%}
+<ul class="report-issues__list signal-list">
+  {% for it in rows %}
+    <li class="report-issues__row signal-row{% if not it.is_open %} report-issues__row--closed{% endif %}">
+      <b class="signal-row__name"><a href="{{ it.scope_link }}">{{ it.headline }}</a></b>
+      {% if it.is_open and it.kind.startswith('Waiting') %}{{ m.status_pill('wait', 'Waiting') }}
+      {% elif it.is_open %}{{ m.band_chip(it.band) }}
+      {% else %}{{ m.status_pill('neutral', 'Closed') }}{% endif %}
+    </li>
+  {% endfor %}
+</ul>
+{%- endmacro %}
+<section class="panel-card report-issues">
+  <header class="panel-card__header"><h2 class="panel-card__title">Issues this week</h2></header>
+  <div class="panel-card__body">
+    <p class="report-issues__counts">
+      {{ report.issues.opened }} opened · {{ report.issues.closed }} closed{% if report.issues.oldest_open_age %} · oldest still open: {{ report.issues.oldest_open_age }}{% endif %}
+    </p>
+    {% if report.issues.rows %}
+      {% if open_issues %}{{ report_issue_list(open_issues) }}{% else %}<p class="true-empty">None of these issues is still open.</p>{% endif %}
+      {% if closed_issues %}
+      <details class="report-issues__closed">
+        <summary>{{ closed_issues | length }} now closed</summary>
+        {{ report_issue_list(closed_issues) }}
+      </details>
       {% endif %}
-    </div>
-  </section>
+    {% else %}
+      <p class="true-empty">No issues opened or closed this week.</p>
+    {% endif %}
+  </div>
+</section>
 
-  <section class="panel-card report-issues">
-    <header class="panel-card__header"><h2 class="panel-card__title">Issues this week</h2></header>
-    <div class="panel-card__body">
-      <p class="report-issues__counts">
-        {{ report.issues.opened }} opened · {{ report.issues.closed }} closed{% if report.issues.oldest_open_age %} · oldest still open: {{ report.issues.oldest_open_age }}{% endif %}
-      </p>
-      {% if report.issues.rows %}
-        <ul class="report-issues__list">
-          {% for it in report.issues.rows %}
-            <li class="report-issues__row {% if not it.is_open %}report-issues__row--closed{% endif %}">
-              {{ m.band_chip(it.band) }}
-              <a href="{{ it.scope_link }}">{{ it.headline }}</a>{% if not it.is_open %} (closed){% endif %}
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="true-empty">No issues opened or closed this week.</p>
-      {% endif %}
-    </div>
-  </section>
-</div>
-
-<section class="panel-card report-inflight state-{{ 'lagging' if report.headline.withheld else 'live' }}">
+<section class="panel-card panel-card--flush report-inflight state-{{ 'lagging' if h.withheld else 'live' }}">
   <header class="panel-card__header"><h2 class="panel-card__title">In progress now</h2></header>
   <div class="panel-card__body">
     {% if report.in_flight_rows %}{{ m.feature_table(report.in_flight_rows) }}

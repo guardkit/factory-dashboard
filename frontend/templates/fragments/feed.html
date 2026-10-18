@@ -1,16 +1,16 @@
 {% import 'macros.html' as m %}
-{# Is the dashboard itself up to date? #}
-<section class="panel-card feed state-{{ panel.state.value }}" id="panel-proj" data-panel="proj">
+{# Is the dashboard itself up to date? An old read puts the amber bar on the card. #}
+<section class="panel-card feed state-{{ panel.state.value }}{% if panel.state.value == 'lagging' %} panel-card--bar panel-card--risk{% endif %}" id="panel-proj" data-panel="proj">
   <header class="panel-card__header">
     <h2 class="panel-card__title">{{ panel.title }}</h2>
     {{ m.asof_chip(panel.as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
     <p class="feed__heartbeat">
-      <span class="status-dot status-dot--{{ 'ok' if panel.heartbeat_ok else 'fail' }}" aria-hidden="true">●</span>
-      The feed is {{ panel.heartbeat_label }}.
+      {% if panel.heartbeat_ok %}{{ m.status_pill('done', 'Running') }}{% else %}<span class="honest-badge honest-badge--stopped">{{ m.icon('x') }}Stopped</span>{% endif %}
+      <span class="feed__heartbeat-text">The feed is {{ panel.heartbeat_label }}.</span>
     </p>
     <p class="feed__read">{{ panel.read_label }}. It is read every 15 seconds while the feed runs.</p>
-    {% if panel.error %}<p class="feed__error">Last attempt failed: {{ panel.error }}</p>{% endif %}
+    {% if panel.error %}<p class="feed__error">{{ m.icon('alert') }}<span>Last attempt failed: {{ panel.error }}</span></p>{% endif %}
   </div>
 </section>

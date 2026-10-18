@@ -1,29 +1,35 @@
 {% extends "base.html" %}
 {% import 'macros.html' as m %}
-{% block title %}Projects · Factory dashboard{% endblock %}
+{% block title %}Projects · Appmilla Factory{% endblock %}
 {% block content %}
-<h1 class="page-title">Projects</h1>
-<section class="panel-card projects">
+{% set count = view.rows | length %}
+<header class="page-head projects-head">
+  <p class="page-eyebrow">All projects · Projects</p>
+  <h1 class="page-title">{{ count }} project{{ '' if count == 1 else 's' }}</h1>
+  <p class="page-lead">Every project the factory has worked on. Open one to see its features and issues.</p>
+</header>
+<section class="panel-card panel-card--flush projects" aria-labelledby="projects-title">
   <header class="panel-card__header">
-    <h2 class="panel-card__title">Every project on record</h2>
+    <h2 class="panel-card__title" id="projects-title">Every project on record</h2>
     {{ m.asof_chip(view.as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
     {% if view.rows %}
     <table class="dense-table projects__table">
       <thead>
-        <tr><th scope="col">Project</th><th scope="col">Features</th><th scope="col">In progress</th>
-          <th scope="col">Merged and checked</th><th scope="col">Open issues</th><th scope="col">Cost</th></tr>
+        <tr><th scope="col">Project</th><th scope="col" class="num">Features</th><th scope="col" class="num">In progress</th>
+          <th scope="col" class="num">Merged and checked</th><th scope="col" class="num">Open issues</th><th scope="col" class="num">Cost</th></tr>
       </thead>
       <tbody>
       {% for r in view.rows %}
+        {# A zero-width space after the "/" lets a long owner/name wrap there on a phone. #}
         <tr class="project-row">
-          <td><a href="{{ r.link }}">{{ r.project }}</a></td>
+          <td><a class="feature-title" href="{{ r.link }}">{{ r.project | replace('/', '/\u200b') }}</a></td>
           <td class="num">{{ r.features }}</td>
           <td class="num">{{ r.in_progress }}</td>
           <td class="num">{{ r.delivered }}</td>
           <td class="num">{{ r.open_issues }}</td>
-          <td>{{ m.spend_slot(r.spend, compact=True) }}</td>
+          <td class="num">{{ m.spend_slot(r.spend, compact=True) }}</td>
         </tr>
       {% endfor %}
       </tbody>

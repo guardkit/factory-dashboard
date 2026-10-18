@@ -318,14 +318,15 @@ def test_pages_show_the_figures_and_never_a_zero_for_a_gap(live_pages: tuple[Tes
     assert "5 model calls" in feature and "OpenRouter price for qwen/qwen3.8-flash on 17 Oct 2026" in feature
     assert "machine 1 h 26 min, waiting 2 min" in feature
     old = client.get("/features/old").text
-    assert 'honest-badge--not-measured">Not measured' in old and "$0" not in old
+    assert 'data-state="not-measured"' in old and "Not measured" in old and "$0" not in old
     home = client.get("/").text
     today = dbread.home_view(path).spend_today
     assert "Today, all projects" in home and "This week, all projects" in home and today.value in home
     project = client.get(f"/projects/{REPO}").text
     assert "Spend to date" in project and f"${C1:.2f}" in project   # only this project's features
     assert f"${C1:.2f}" in client.get("/projects").text
-    assert "Spend:" in client.get("/reports").text
+    report = client.get("/reports").text
+    assert '<span class="stat-tile__label">Spend</span>' in report and "All model calls:" in report
     for url in ("/", "/features", f"/projects/{REPO}", "/projects", "/features/FEAT-0001", "/features/old",
                 "/reports", "/fragments/freshness"):
         visible = re.sub(r"<[^>]+>", " ", client.get(url).text)
@@ -428,3 +429,37 @@ def test_each_figures_reason_is_shown_where_the_figure_is(live_pages: tuple[Test
     # In a table cell the reason goes into the tooltip, not the cell.
     projects = client.get("/projects").text
     assert f'title="Nominal: OpenRouter price for qwen/qwen3.8-flash on 17 Oct 2026 {counts}"' in projects
+
+
+# --- merge with main: the chat's snapshot, and the client scope ------------------------------------------
+
+
+def test_the_chat_summaries_read_on_the_answers_snapshot(store: Path) -> None:
+    conn = dbread.snapshot(store)
+    try:
+        c = dbread.cost_summary(store, feature="FEAT-0001", now=NOW, conn=conn)
+        t = dbread.time_summary(store, feature="FEAT-0001", now=NOW, conn=conn)
+        conn.execute("SELECT 1").fetchone()          # still open: a view given conn never closes it
+    finally:
+        conn.close()
+    assert (c.calls, c.cost_usd) == (5, pytest.approx(C1)) and t.elapsed_secs == 5400
+
+
+def test_a_clients_report_counts_only_its_own_projects(store: Path) -> None:
+    writer = sqlite3.connect(store)
+    writer.executemany(
+        "INSERT INTO tenants (tenant_slug, display_name, projects_json) VALUES (?, ?, ?)",
+        [("acmeco", "Acme", f'["{REPO}"]'), ("otherco", "Other", '["other/app"]'), ("emptyco", "Empty", "[]")])
+    writer.commit()
+    writer.close()
+    conn = db.connect_ro(store)
+    try:
+        week = ("2026-10-12", "2026-10-18")
+        own = dbread.weekly_report(conn, "acmeco", NOW, window=week).headline.spend
+        other = dbread.weekly_report(conn, "otherco", NOW, window=week).headline.spend
+        empty = dbread.weekly_report(conn, "emptyco", NOW, window=week).headline.spend
+    finally:
+        conn.close()
+    assert own.calls == 7 and own.amount_usd == pytest.approx(C1 + MA)
+    assert other.state == "not_measured" and other.amount_usd is None and other.reason == "No work on record for this."
+    assert empty.state == "not_measured" and empty.reason == "This covers no projects."   # none, never every project

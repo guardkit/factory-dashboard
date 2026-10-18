@@ -1,15 +1,18 @@
 {% import 'macros.html' as m %}
-<section class="panel-card in-progress state-{{ panel.state.value }}" id="panel-p2" data-panel="p2">
-  <header class="panel-card__header">
-    <h2 class="panel-card__title">{{ panel.title }} ({{ panel.rows | length }})</h2>
+{# Work in progress on Now: a section title, then a flush card with one row per feature. #}
+<section class="now-section in-progress state-{{ panel.state.value }}" id="panel-p2" data-panel="p2" aria-labelledby="in-progress-title">
+  <header class="section-head">
+    <h2 class="section-title" id="in-progress-title">{{ panel.title }} ({{ panel.rows | length }})</h2>
     {{ m.asof_chip(panel.as_of, source='factory') }}
   </header>
-  <div class="panel-card__body">
-    {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
-    {% if panel.rows %}
-      {{ m.feature_table(panel.rows) }}
-    {% else %}
-      <p class="true-empty">{{ panel.empty_copy }}</p>
-    {% endif %}
+  <div class="panel-card panel-card--flush">
+    <div class="panel-card__body">
+      {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+      {% if panel.rows %}
+        {{ m.feature_rows(panel.rows) }}
+      {% else %}
+        <p class="true-empty">{{ panel.empty_copy }}</p>
+      {% endif %}
+    </div>
   </div>
 </section>

@@ -6,14 +6,19 @@
     {{ m.asof_chip(panel.as_of) }}
   </header>
   <div class="panel-card__body">
-    <ul class="service-list">
+    <ul class="service-list signal-list">
     {% for s in panel.services %}
-      <li class="service-row service-row--{{ s.dot }}">
-        <span class="status-dot status-dot--{{ s.dot }}" aria-hidden="true">{% if s.dot == 'unknown' %}?{% else %}●{% endif %}</span>
-        <span class="service-row__name">{{ s.name }}</span>
-        <span class="service-row__detail">{{ s.detail }}</span>
+      <li class="service-row service-row--{{ s.dot }} signal-row">
+        <b class="service-row__name signal-row__name">{{ s.name }}</b>
+        <p class="service-row__detail signal-row__text">{{ s.detail }} <span class="feature-id">{{ s.endpoint }}</span></p>
+        {% if s.dot == 'ok' %}{{ m.status_pill('done', 'Up') }}
+        {% elif s.dot == 'fail' %}{{ m.status_pill('fail', 'Not answering') }}
+        {% else %}{{ m.status_pill('neutral', 'Unknown') }}{% endif %}
         {% if s.resident_models %}
-          <span class="service-row__resident">models: {{ s.resident_models | join(', ') }}</span>
+          <details class="service-row__models">
+            <summary>{{ s.resident_models | length }} model{{ '' if s.resident_models | length == 1 else 's' }} loaded</summary>
+            <span class="service-row__resident">{% for name in s.resident_models %}<span class="feature-id">{{ name }}</span>{% endfor %}</span>
+          </details>
         {% endif %}
       </li>
     {% endfor %}

@@ -1,4 +1,181 @@
-"""Deterministic post-model grounding checker (entailment + completeness + freshness — DDR-DASH-003).
+"""Grounding by construction (design 2026-10-17, requirement 9).
 
-STAGE-OWNED: built at D4.
+The model does one of two things: names a query and its arguments, or says what kind of
+clarification it needs. It never writes text the user sees. `parse_reply` holds it to exactly that:
+
+- the reply must be one JSON object, either ``{"query": <name>, "args": {...}}`` or
+  ``{"clarify": <kind>}``, optionally with ``"options": [<id>, ...]``, with no other keys (so a
+  reply carrying its own answer, figures or status in free text is refused);
+- the query must be one of the registered ones, and its arguments the ones that query takes, as
+  short strings; ``{"query": "none"}`` (the model saying the records cannot answer) is refused;
+- the clarify kind must be one of `CLARIFY_KINDS`. Options are allowed only for ``which_feature``
+  (feature codes) and ``which_project`` (``owner/name``); the chat then checks each one is on record
+  and writes the question from the records (`backend/chat/answers.py`), so the question shown is
+  always the server's own sentence.
+
+Anything else becomes a `Rejection`, which the chat answers with the one fixed sentence.
+
+`figures_grounded` is the last check on a written answer: every run of digits in it must be a run
+of digits in the query's fields. The templates hold no digits, so this only fails if a template or
+a field goes wrong; the chat then refuses rather than show an unchecked figure.
 """
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+
+from backend.chat.registry import QuerySpec
+
+MAX_ARG_CHARS = 120
+MAX_REPLY_CHARS = 2000
+
+
+@dataclass(frozen=True)
+class Choice:
+    query: str
+    args: dict[str, str]
+
+
+#: What the model may ask for, by name; `answers.clarify_question` writes each one's sentence.
+CLARIFY_KINDS = ("which_feature", "which_project", "which_period", "rephrase")
+#: The kinds that may name options, and the form each option must take.
+_OPTION_FORMS = {
+    "which_feature": re.compile(r"^FEAT-[0-9A-Z]{1,16}$", re.IGNORECASE),
+    "which_project": re.compile(r"^[A-Za-z0-9_.-]{1,60}/[A-Za-z0-9_.-]{1,60}$"),
+}
+MAX_OPTIONS = 5
+
+
+@dataclass(frozen=True)
+class Clarify:
+    kind: str
+    options: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Rejection:
+    reason: str      # for the log and the tests; never shown to the user
+
+
+Reply = Choice | Clarify | Rejection
+
+_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
+_THINK_RE = re.compile(r"^<think>.*?</think>\s*", re.DOTALL)
+def _strip(raw: str) -> str:
+    text = _THINK_RE.sub("", raw.strip())
+    m = _FENCE_RE.match(text)
+    return m.group(1) if m else text
+
+
+def _clarify(data: dict[str, object]) -> Reply:  # noqa: PLR0911 (one return per rule)
+    kind = data["clarify"]
+    if not isinstance(kind, str) or kind not in CLARIFY_KINDS:
+        return Rejection("clarify kind is not one of " + ", ".join(CLARIFY_KINDS))
+    options = data.get("options")
+    if options is None or options == []:
+        return Clarify(kind)
+    form = _OPTION_FORMS.get(kind)
+    if form is None:
+        return Rejection(f"clarify kind {kind} takes no options")
+    if not isinstance(options, list) or not all(isinstance(o, str) for o in options):
+        return Rejection("clarify options are not a list of text")
+    if len(options) > MAX_OPTIONS or len(set(options)) != len(options):
+        return Rejection("clarify options are too many or repeated")
+    if bad := [o for o in options if not form.match(o)]:
+        return Rejection(f"clarify option {bad[0][:MAX_ARG_CHARS]!r} is not a {kind[6:]} id")
+    return Clarify(kind, tuple(options))
+
+
+def _args_problem(spec: QuerySpec, args: object) -> tuple[str, dict[str, str]]:
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        return "args is not an object", {}
+    unknown = set(args) - spec.arg_names()
+    if unknown:
+        return f"unknown argument(s) {sorted(unknown)} for {spec.name}", {}
+    clean: dict[str, str] = {}
+    for name, value in args.items():
+        if value is None or value == "":
+            continue
+        if not isinstance(value, str):
+            return f"argument {name} is not text", {}
+        text = " ".join(value.split())
+        if len(text) > MAX_ARG_CHARS:
+            return f"argument {name} is too long", {}
+        if text:
+            clean[name] = text
+    missing = [a.name for a in spec.args if a.required and a.name not in clean]
+    if missing:
+        return f"missing argument(s) {missing} for {spec.name}", {}
+    return "", clean
+
+
+def parse_reply(raw: str, queries: Mapping[str, QuerySpec]) -> Reply:  # noqa: PLR0911 (one return per rule)
+    """Hold the model's reply to the schema; anything else is a Rejection."""
+    if not isinstance(raw, str) or not raw.strip():
+        return Rejection("empty reply")
+    if len(raw) > MAX_REPLY_CHARS:
+        return Rejection("reply too long")
+    try:
+        data = json.loads(_strip(raw))
+    except ValueError:
+        return Rejection("reply is not JSON")
+    if not isinstance(data, dict):
+        return Rejection("reply is not a JSON object")
+    keys = set(data)
+    if "clarify" in keys:
+        if not keys <= {"clarify", "options"}:
+            return Rejection(f"reply has the wrong keys {sorted(keys)}")
+        return _clarify(data)
+    if "query" not in keys or not keys <= {"query", "args"}:
+        return Rejection(f"reply has the wrong keys {sorted(keys)}")
+    name = data["query"]
+    if not isinstance(name, str):
+        return Rejection("query name is not text")
+    if name == "none":
+        return Rejection("the model says the records cannot answer this")
+    spec = queries.get(name)
+    if spec is None:
+        return Rejection(f"unknown query {name!r}")
+    problem, args = _args_problem(spec, data.get("args"))
+    if problem:
+        return Rejection(problem)
+    return Choice(name, args)
+
+
+# --- the last check on a written answer ---------------------------------------------------------------
+
+_RUN_RE = re.compile(r"\d+")
+
+
+def _strings(value: object) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for v in value.values():
+            yield from _strings(v)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            yield from _strings(v)
+    elif value is not None:
+        yield str(value)
+
+
+def ungrounded_figures(text: str, fields: Mapping[str, object]) -> list[str]:
+    """Digit runs in the answer that are not digit runs of any field."""
+    known = {run for s in _strings(fields) for run in _RUN_RE.findall(s)}
+    return [run for run in _RUN_RE.findall(text) if run not in known]
+
+
+def figures_grounded(text: str, fields: Mapping[str, object]) -> bool:
+    return not ungrounded_figures(text, fields)
+
+
+def mentioned(name: str, *texts: str) -> bool:
+    """True when `name` (as words) appears in one of the user's own texts, so it may be echoed."""
+    want = " ".join(re.findall(r"[a-z0-9]+", name.lower()))
+    return bool(want) and any(want in " ".join(re.findall(r"[a-z0-9]+", t.lower())) for t in texts)
