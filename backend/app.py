@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from jinja2 import select_autoescape
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.templating import Jinja2Templates
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from backend import accounts, auth, db, sse
 from backend.config_loader import (
@@ -66,6 +67,45 @@ LOGIN_THROTTLED = (
 FormText = Annotated[str, Form()]
 
 
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
+
+
+def _request_host(scope: Scope) -> str:
+    """The Host header's name, lower-cased, without the port."""
+    for name, value in scope.get("headers", ()):
+        if name == b"host":
+            host = bytes(value).decode("latin-1").strip().lower()
+            if host.startswith("["):  # [v6]:port
+                return host.split("]", 1)[0] + "]"
+            return host.rsplit(":", 1)[0] if ":" in host else host
+    return ""
+
+
+def _is_loopback_request(scope: Scope) -> bool:
+    """True only for a browser talking to the board on loopback directly (the SSH tunnel), never
+    for anything that came through a proxy that says it forwarded the request."""
+    if any(name in (b"x-forwarded-proto", b"x-forwarded-host") for name, _ in scope.get("headers", ())):
+        return False
+    return _request_host(scope) in LOOPBACK_HOSTS
+
+
+class SessionsByHost:
+    """Signed session cookie: HttpOnly, SameSite=Lax, and Secure for every request except one
+    whose Host is localhost or 127.0.0.1 (any port). The board always sees plain HTTP (behind
+    Docker and tailscale serve), so the scheme cannot decide this. Safari refuses a Secure cookie
+    from http://localhost, so the SSH tunnel needs it plain; the tailnet entry always gets Secure.
+    Both halves share one key, so a cookie made by either is accepted by both."""
+
+    def __init__(self, app: ASGIApp, secret_key: str, max_age: int) -> None:
+        common = {"secret_key": secret_key, "max_age": max_age, "same_site": "lax"}
+        self._secure = SessionMiddleware(app, https_only=True, **common)  # type: ignore[arg-type]
+        self._loopback = SessionMiddleware(app, https_only=False, **common)  # type: ignore[arg-type]
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        inner = self._loopback if _is_loopback_request(scope) else self._secure
+        await inner(scope, receive, send)
+
+
 class _LoginRedirect(Exception):
     """Unauthenticated request to a protected route -> bounce to /login."""
 
@@ -80,7 +120,6 @@ def create_app(
     tenants_path: Path = TENANTS_PATH,
     plans_path: Path = PLANS_PATH,
     config_dir: Path | None = None,
-    secure_cookie: bool | None = None,
 ) -> FastAPI:
     """Build the board. Refuses to start (accounts.ConfigError) without a session secret of at
     least 32 characters and a usable accounts.yaml in the configuration folder."""
@@ -88,8 +127,6 @@ def create_app(
     key = accounts.read_session_secret(config_dir)
     tenants = load_tenants(tenants_path)
     account_store = accounts.AccountStore(config_dir / accounts.ACCOUNTS_FILE, tenants.keys())
-    if secure_cookie is None:
-        secure_cookie = not accounts.insecure_cookie_allowed()
 
     # The same env contract the projector honours (FACTORY_DASH_DB), so the composed container
     # points BOTH processes at the one mounted read-model; bare/dev runs keep the repo-root default.
@@ -103,14 +140,7 @@ def create_app(
     templates.env.autoescape = select_autoescape(default=True, default_for_string=True)
 
     app = FastAPI(title="factory-dashboard", docs_url=None, redoc_url=None)
-    # HttpOnly is always set by Starlette; Secure unless FACTORY_DASH_INSECURE_COOKIE=1 (local tests).
-    app.add_middleware(
-        SessionMiddleware,
-        secret_key=key,
-        max_age=SESSION_MAX_AGE,
-        same_site="lax",
-        https_only=secure_cookie,
-    )
+    app.add_middleware(SessionsByHost, secret_key=key, max_age=SESSION_MAX_AGE)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     app.state.db_path = db_path
@@ -229,16 +259,16 @@ def _render(
 
 
 def _sign_in(request: Request, username: str, password: str) -> Response:
-    """Check the password against accounts.yaml, behind the per-username throttle. A locked
-    username is refused before its password is checked, even when the password is right."""
+    """Check the password against accounts.yaml, behind the per-username throttle. The attempt is
+    counted (atomically, before the slow hash) so parallel guesses cannot overrun the limit; a
+    locked username is refused before its password is checked, even when the password is right."""
     username = username.strip()
     throttle: accounts.LoginThrottle = request.app.state.login_throttle
-    if throttle.is_locked(username):
+    if not throttle.try_attempt(username):
         return _render(request, "login.html", {"error": LOGIN_THROTTLED}, status_code=429)
     store: accounts.AccountStore = request.app.state.accounts
     account = store.authenticate(username, password)
     if account is None:
-        throttle.record_failure(username)
         return _render(request, "login.html", {"error": LOGIN_FAILED}, status_code=401)
     throttle.record_success(username)
     request.session.clear()  # a fresh session on every sign-in

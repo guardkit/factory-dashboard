@@ -18,6 +18,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TENANTS_TEST = Path(__file__).resolve().parent / "fixtures" / "tenants_test.yaml"
+LOOPBACK_URL = "http://localhost:8090"
 
 # A test-only account, written to a temporary configuration folder for every test.
 TEST_USER = "tester"
@@ -52,19 +53,20 @@ def client_account_row() -> dict[str, object]:
 
 @pytest.fixture(autouse=True)
 def config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Every app built in a test reads this folder (FACTORY_DASH_CONFIG_DIR). The plain-HTTP test
-    client needs FACTORY_DASH_INSECURE_COOKIE=1; the Secure flag has its own test."""
+    """Every app built in a test reads this folder (FACTORY_DASH_CONFIG_DIR)."""
     folder = tmp_path / "config"
     folder.mkdir()
     (folder / "session_secret").write_text(TEST_SECRET + "\n", encoding="utf-8")
     write_accounts(folder, [account_row()])
     monkeypatch.setenv("FACTORY_DASH_CONFIG_DIR", str(folder))
-    monkeypatch.setenv("FACTORY_DASH_INSECURE_COOKIE", "1")
     return folder
 
 
-def login(client: TestClient, username: str = TEST_USER, password: str = TEST_PASSWORD):  # type: ignore[no-untyped-def]
-    return client.post("/login", data={"username": username, "password": password})
+def login(  # type: ignore[no-untyped-def]
+    client: TestClient, username: str = TEST_USER, password: str = TEST_PASSWORD, follow: bool = True
+):
+    return client.post("/login", data={"username": username, "password": password},
+                       follow_redirects=follow)
 
 
 @pytest.fixture
@@ -74,7 +76,8 @@ def app(tmp_path: Path):  # type: ignore[no-untyped-def]
 
 @pytest.fixture
 def client(app) -> Iterator[TestClient]:  # type: ignore[no-untyped-def]
-    with TestClient(app) as c:
+    # The SSH-tunnel address: the only host whose cookie is not Secure, so plain-HTTP tests sign in.
+    with TestClient(app, base_url=LOOPBACK_URL) as c:
         yield c
 
 

@@ -32,8 +32,10 @@ and compose refuses to start it if the folder itself is missing.
 
 3. Start or recreate the board: `docker compose up -d board`.
 
-After five wrong passwords for one username within 15 minutes, that username must wait 15
-minutes. A restart clears the count.
+After five sign-in attempts for one username within 15 minutes, that username must wait 15
+minutes; a right password clears the count. A restart clears it too. Known limit: the lock is per
+username, so anyone who can reach the sign-in page can keep a known username locked out by
+repeatedly typing wrong passwords for it.
 
 **Reaching it from another laptop or phone (tailnet only).** The board listens on
 `127.0.0.1:8090` only. To offer it over HTTPS to devices on the tailnet, on the Dell:
@@ -50,7 +52,15 @@ tailscale serve --https=8443 off
 
 Never use Tailscale Funnel for this; that would put it on the public internet.
 
-The session cookie is marked Secure, HttpOnly and SameSite=Lax, and lasts 14 days. A browser sends
-a Secure cookie only over HTTPS, except to the loopback address itself, so the existing SSH tunnel
-to `http://127.0.0.1:8090` keeps working (checked in Chrome on 18 October 2026). `FACTORY_DASH_INSECURE_COOKIE=1`
-drops the Secure flag; it is for the test suite only, and compose never sets it.
+**The session cookie.** It is HttpOnly and SameSite=Lax, and lasts 14 days. It is marked Secure
+(sent only over HTTPS) for every address except `localhost` and `127.0.0.1`. The board itself
+always sees plain HTTP (tailscale serve does the HTTPS), so it decides by the address in the
+request, not by the scheme.
+
+- **James and other devices** use the tailnet HTTPS address above; the cookie there is Secure.
+- **Rich's SSH tunnel** works in every browser, Safari included, through
+  `http://localhost:8090` or `http://127.0.0.1:8090`; on those two addresses the cookie is not
+  marked Secure.
+
+A copied session cookie stays valid until it expires (14 days), unless that account is removed
+from `accounts.yaml` or the session secret is changed.

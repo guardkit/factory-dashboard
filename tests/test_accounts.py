@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import sqlite3
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import backend.app as app_module
+import itsdangerous
 import pytest
 from backend import accounts
 from backend.accounts import AccountStore, ConfigError, LoginThrottle
@@ -19,6 +25,7 @@ from tests.conftest import (
     TENANTS_TEST,
     TEST_DISPLAY_NAME,
     TEST_PASSWORD,
+    TEST_SECRET,
     TEST_USER,
     account_row,
     client_account_row,
@@ -244,62 +251,135 @@ def test_logout_ends_the_session(client: TestClient) -> None:
 # --- cookie ------------------------------------------------------------------------
 
 
-def test_session_cookie_is_secure_httponly_lax_14_days(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.delenv("FACTORY_DASH_INSECURE_COOKIE")
-    app = create_app(db_path=tmp_path / "r.db", tenants_path=TENANTS_TEST)
-    with TestClient(app, base_url="https://testserver") as c:
-        r = login(c)
-        assert r.status_code == 200  # the Secure cookie came back over HTTPS
-        cookie = r.history[0].headers["set-cookie"].lower()
-    assert "secure" in cookie
+def _set_cookie(client: TestClient, **headers: str) -> str:
+    r = client.post("/login", data={"username": TEST_USER, "password": TEST_PASSWORD},
+                    headers=headers, follow_redirects=False)
+    assert r.status_code == 303
+    return r.headers["set-cookie"].lower()
+
+
+@pytest.mark.parametrize("base_url", ["https://dashboard.example:8443", "http://dashboard.example"])
+def test_session_cookie_is_secure_httponly_lax_14_days_off_loopback(app, base_url: str) -> None:  # type: ignore[no-untyped-def]
+    """Any host other than localhost/127.0.0.1 gets Secure, whatever the scheme: behind Docker and
+    tailscale serve the board always sees plain HTTP."""
+    with TestClient(app, base_url=base_url) as c:
+        cookie = _set_cookie(c)
+    assert "; secure" in cookie
     assert "httponly" in cookie
     assert "samesite=lax" in cookie
     assert f"max-age={14 * 24 * 60 * 60}" in cookie
 
 
-def test_insecure_cookie_only_with_the_env_switch(client: TestClient) -> None:
-    cookie = login(client).history[0].headers["set-cookie"].lower()
-    assert "secure" not in cookie
-    assert "httponly" in cookie
+def test_secure_cookie_round_trips_over_https(app) -> None:  # type: ignore[no-untyped-def]
+    with TestClient(app, base_url="https://dashboard.example:8443") as c:
+        assert login(c).status_code == 200
+        assert c.get("/", follow_redirects=False).status_code == 200
+
+
+@pytest.mark.parametrize("base_url", ["http://localhost:8090", "http://127.0.0.1:8090",
+                                      "http://LOCALHOST", "http://127.0.0.1"])
+def test_loopback_host_gets_a_plain_cookie_for_the_ssh_tunnel(app, base_url: str) -> None:  # type: ignore[no-untyped-def]
+    """Safari refuses a Secure cookie from http://localhost; the tunnel must work in every browser."""
+    with TestClient(app, base_url=base_url) as c:
+        cookie = _set_cookie(c)
+        assert "; secure" not in cookie
+        assert "httponly" in cookie and "samesite=lax" in cookie
+        assert c.get("/", follow_redirects=False).status_code == 200  # signed in over plain HTTP
+
+
+@pytest.mark.parametrize("header", ["X-Forwarded-Proto", "X-Forwarded-Host"])
+def test_a_proxied_request_naming_loopback_still_gets_secure(app, header: str) -> None:  # type: ignore[no-untyped-def]
+    with TestClient(app, base_url="http://127.0.0.1:8090") as c:
+        assert "; secure" in _set_cookie(c, **{header: "https"})
+
+
+def test_sign_out_clears_the_cookie_with_the_same_flags(app) -> None:  # type: ignore[no-untyped-def]
+    with TestClient(app, base_url="https://dashboard.example:8443") as c:
+        login(c)
+        r = c.get("/logout", follow_redirects=False)
+    assert "; secure" in r.headers["set-cookie"].lower()
+
+
+def test_sign_in_starts_a_fresh_session(client: TestClient) -> None:
+    """Anything in the session before sign-in (for example planted by someone else) is dropped."""
+    signer = itsdangerous.TimestampSigner(TEST_SECRET)
+    planted = signer.sign(base64.b64encode(json.dumps({"planted": "x"}).encode())).decode()
+    client.cookies.set("session", planted)
+    r = login(client, follow=False)
+    value = r.headers["set-cookie"].split("session=", 1)[1].split(";", 1)[0]
+    data = json.loads(base64.b64decode(signer.unsign(value)))
+    assert data == {"username": TEST_USER}
 
 
 # --- throttling ----------------------------------------------------------------------
 
 
-def test_throttle_locks_after_five_failures_and_reopens_after_15_minutes() -> None:
+def test_throttle_allows_five_attempts_then_locks_for_15_minutes() -> None:
     now = [1000.0]
     t = LoginThrottle(clock=lambda: now[0])
-    for _ in range(4):
-        t.record_failure("james")
-    assert not t.is_locked("james")
-    t.record_failure("james")
+    for _ in range(5):
+        assert t.try_attempt("james")
+    assert not t.try_attempt("james")
     assert t.is_locked("james")
-    assert not t.is_locked("someone-else")
+    assert t.try_attempt("someone-else")
     now[0] += 15 * 60 - 1
-    assert t.is_locked("james")
+    assert not t.try_attempt("james")
     now[0] += 2
-    assert not t.is_locked("james")
+    assert t.try_attempt("james")
 
 
-def test_throttle_counts_only_failures_within_15_minutes() -> None:
+def test_throttle_counts_only_attempts_within_15_minutes() -> None:
     now = [0.0]
     t = LoginThrottle(clock=lambda: now[0])
     for _ in range(4):
-        t.record_failure("james")
+        t.try_attempt("james")
     now[0] += 15 * 60 + 1
-    t.record_failure("james")
+    t.try_attempt("james")
     assert not t.is_locked("james")
 
 
-def test_success_clears_the_failure_count() -> None:
+def test_success_clears_the_count() -> None:
     t = LoginThrottle()
     for _ in range(4):
-        t.record_failure("james")
+        t.try_attempt("james")
     t.record_success("james")
-    t.record_failure("james")
+    for _ in range(4):
+        t.try_attempt("james")
     assert not t.is_locked("james")
+
+
+def test_throttle_is_atomic_under_threads() -> None:
+    t = LoginThrottle()
+    barrier = threading.Barrier(40)
+
+    def go() -> bool:
+        barrier.wait()
+        return t.try_attempt("james")
+
+    with ThreadPoolExecutor(max_workers=40) as pool:
+        results = list(pool.map(lambda _: go(), range(40)))
+    assert results.count(True) == 5
+
+
+def test_parallel_wrong_passwords_check_at_most_five_hashes(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sixty wrong passwords at once: only five reach the (slow) password check."""
+    calls: list[str] = []
+    lock = threading.Lock()
+    real = accounts.verify_password
+
+    def slow_verify(password: str, stored: str) -> bool:
+        with lock:
+            calls.append(password)
+        time.sleep(0.05)
+        return real(password, stored)
+
+    monkeypatch.setattr(accounts, "verify_password", slow_verify)
+    with ThreadPoolExecutor(max_workers=30) as pool:
+        codes = list(pool.map(lambda i: login(client, password=f"wrong-{i}").status_code, range(60)))
+    assert len(calls) == 5
+    assert codes.count(401) == 5 and codes.count(429) == 55
 
 
 def test_login_route_refuses_after_five_failures_even_with_the_right_password(client: TestClient) -> None:
@@ -309,3 +389,30 @@ def test_login_route_refuses_after_five_failures_even_with_the_right_password(cl
     assert r.status_code == 429
     assert LOGIN_THROTTLED in r.text
     assert client.get("/", follow_redirects=False).headers["location"] == "/login"
+
+
+def test_a_right_password_clears_earlier_failures(client: TestClient) -> None:
+    for _ in range(4):
+        login(client, password="wrong")
+    assert login(client).status_code == 200
+    client.get("/logout")
+    for _ in range(4):
+        assert login(client, password="wrong").status_code == 401
+    assert login(client).status_code == 200
+
+
+def test_an_unknown_username_still_runs_a_password_check(
+    config_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """So a wrong username takes as long as a wrong password and does not reveal who exists."""
+    seen: list[str] = []
+    real = accounts.verify_password
+
+    def recording(password: str, stored: str) -> bool:
+        seen.append(stored)
+        return real(password, stored)
+
+    monkeypatch.setattr(accounts, "verify_password", recording)
+    store = AccountStore(config_dir / "accounts.yaml")
+    assert store.authenticate("nobody", "anything") is None
+    assert seen == [accounts._DUMMY_HASH]

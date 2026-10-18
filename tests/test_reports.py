@@ -20,7 +20,7 @@ from backend.projector.projections.base import iso
 from backend.readmodel import dbread
 from starlette.testclient import TestClient
 
-from tests.conftest import login
+from tests.conftest import LOOPBACK_URL, login
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 TENANTS_REPORTS = FIXTURES / "tenants_reports.yaml"
@@ -422,6 +422,6 @@ def operator_client_reports(tmp_path: Path):  # type: ignore[no-untyped-def]
     operator. Yields (client, db_path) so a test can project data via the rw connection first."""
     db_path = tmp_path / "readmodel.db"
     app = create_app(db_path=db_path, tenants_path=TENANTS_REPORTS, plans_path=PLANS_PACK)
-    with TestClient(app) as client:
+    with TestClient(app, base_url=LOOPBACK_URL) as client:
         login(client)
         yield client, db_path

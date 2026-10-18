@@ -68,11 +68,6 @@ def config_dir() -> Path:
     return Path(raw) if raw else DEFAULT_CONFIG_DIR
 
 
-def insecure_cookie_allowed() -> bool:
-    """Only for local tests and loopback checks over plain HTTP."""
-    return os.environ.get("FACTORY_DASH_INSECURE_COOKIE") == "1"
-
-
 def read_session_secret(folder: Path) -> str:
     path = folder / SESSION_SECRET_FILE
     try:
@@ -212,8 +207,10 @@ class AccountStore:
 
 
 class LoginThrottle:
-    """After ``limit`` failed attempts for one username within ``window`` seconds, refuse further
-    attempts for ``lockout`` seconds. Kept in memory; a restart clears it."""
+    """At most ``limit`` sign-in attempts for one username within ``window`` seconds; reaching the
+    limit locks the username for ``lockout`` seconds. An attempt is counted BEFORE its password is
+    checked, in one step under the lock, so parallel guesses cannot overrun the limit while the
+    slow hash runs. A successful sign-in clears the count. Kept in memory; a restart clears it."""
 
     def __init__(
         self,
@@ -224,38 +221,43 @@ class LoginThrottle:
     ) -> None:
         self.limit, self.window, self.lockout, self.clock = limit, window, lockout, clock
         self._lock = threading.Lock()
-        self._failures: dict[str, deque[float]] = {}
+        self._attempts: dict[str, deque[float]] = {}
         self._locked_until: dict[str, float] = {}
 
     def _prune(self, now: float) -> None:
         for name in [n for n, until in self._locked_until.items() if until <= now]:
             del self._locked_until[name]
-        for name in list(self._failures):
-            times = self._failures[name]
+        for name in list(self._attempts):
+            times = self._attempts[name]
             while times and times[0] <= now - self.window:
                 times.popleft()
             if not times:
-                del self._failures[name]
+                del self._attempts[name]
 
     def is_locked(self, username: str) -> bool:
         with self._lock:
-            now = self.clock()
-            self._prune(now)
+            self._prune(self.clock())
             return username in self._locked_until
 
-    def record_failure(self, username: str) -> None:
+    def try_attempt(self, username: str) -> bool:
+        """Check and count one attempt atomically. False means refuse it without checking the
+        password (the username is locked)."""
         with self._lock:
             now = self.clock()
             self._prune(now)
-            times = self._failures.setdefault(username, deque())
+            if username in self._locked_until:
+                return False
+            times = self._attempts.setdefault(username, deque())
             times.append(now)
             if len(times) >= self.limit:
                 self._locked_until[username] = now + self.lockout
-                del self._failures[username]
+                del self._attempts[username]
+            return True
 
     def record_success(self, username: str) -> None:
         with self._lock:
-            self._failures.pop(username, None)
+            self._attempts.pop(username, None)
+            self._locked_until.pop(username, None)
 
 
 # --- command line -----------------------------------------------------------
