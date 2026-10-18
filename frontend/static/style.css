@@ -1034,8 +1034,6 @@ a.build-row:hover .feature-title { text-decoration: underline; }
 .home-grid__rail .serving .panel-card__header, .home-grid__rail .feed .panel-card__header { margin-bottom: var(--space-8); }
 .home-grid__rail .serving .panel-card__body, .home-grid__rail .feed .panel-card__body { font-size: 13px; line-height: 18px; }
 .home-grid__rail .serving .service-list { gap: 10px; }
-.home-grid__rail .serving .service-row { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
-.home-grid__rail .serving .service-row > :not(.status-dot):not(.status-pill) { grid-column: 2; }
 .home-grid__rail .serving .service-row__name { font-size: 14px; }
 .home-grid__rail .serving .service-row__resident,
 .home-grid__rail .serving details { font-size: 12px; }
