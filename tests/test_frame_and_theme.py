@@ -207,3 +207,13 @@ def test_phone_tab_bar_offers_ask_to_operators(operator_client: TestClient) -> N
 def test_no_temporary_chat_style_block_left() -> None:
     css = (Path(__file__).resolve().parent.parent / "frontend" / "static" / "style.css").read_text(encoding="utf-8")
     assert "chat (Part D)" not in css
+
+
+def test_chat_heights_subtract_the_banners_that_are_showing() -> None:
+    """ai-transition-c8's Part E browser test: with the stale banner showing, the drawer's microphone
+    fell 30px below the fold. Every chat height now subtracts the visible banners."""
+    css = (Path(__file__).resolve().parent.parent / "frontend" / "static" / "style.css").read_text(encoding="utf-8")
+    assert '--banner-stack: calc(var(--banner-a, 0px) + var(--banner-b, 0px) + var(--banner-c, 0px))' in css
+    assert 'body:has(.banner-slot .banner--stale:not([data-feed="cost"])) { --banner-a: var(--banner-line); }' in css
+    heights = re.findall(r"height: calc\(100d?vh - [^;]*var\(--readline-height\)[^;]*\);", css)
+    assert len(heights) == 6 and all("var(--banner-stack, 0px)" in h for h in heights), heights
