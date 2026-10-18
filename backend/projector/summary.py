@@ -96,21 +96,36 @@ def _last_seen(features: list[Feature], mission: Mission | None) -> datetime | N
     return max(times, default=None)
 
 
+def _mission_by_prefix(f: Feature, missions: dict[str, Mission]) -> Mission | None:
+    """The Linear mission a feature is a part of. Forge names each part's attempt
+    `<mission correlation id>-<KEY>-a<n>` (planning run, queue item and build alike), and only a
+    part that reached a build carries the mission's id, so a part that stopped in planning is
+    found by that prefix."""
+    if f.mission is not None and f.mission.correlation_id in missions:
+        return f.mission
+    for tag in feature_tags(f):
+        for corr, m in missions.items():
+            if tag.startswith(corr + "-"):
+                return m
+    return None
+
+
 def linear_attempts(factory: Factory, now: datetime) -> dict[str, tuple[Mission | None, list[Feature]]]:
-    """Linear-originated attempts seen in the last 30 days: a mission (``lin-m-…``) with the features
-    that are its parts, or a single issue (``lin-<identifier>-<n>``) with the feature whose queue,
-    planning or build ids carry it."""
-    found: dict[str, tuple[Mission | None, list[Feature]]] = {}
-    for m in factory.missions:
-        if m.correlation_id.startswith(LINEAR_PREFIX):
-            found[m.correlation_id] = (m, [f for f in factory.features if f.mission is not None
-                                           and f.mission.id == m.id])
+    """Linear-originated attempts seen in the last 30 days: a mission (``lin-m-…``) with every part
+    on record (built or not), or a single issue (``lin-<identifier>-<n>``) with the feature whose
+    queue, planning or build ids carry it."""
+    missions = {m.correlation_id: m for m in factory.missions if m.correlation_id.startswith(LINEAR_PREFIX)}
+    found: dict[str, tuple[Mission | None, list[Feature]]] = {corr: (m, []) for corr, m in missions.items()}
     for f in factory.features:
+        mission = _mission_by_prefix(f, missions)
+        if mission is not None:
+            found[mission.correlation_id][1].append(f)
+            continue
         if f.mission is not None:
-            continue  # a mission's part belongs to its mission's attempt
+            continue  # a part of a mission that did not come from Linear
         for tag in sorted(t for t in feature_tags(f) if t.startswith(LINEAR_PREFIX)):
-            mission, features = found.setdefault(tag, (None, []))
-            if mission is None and f not in features:
+            single, features = found.setdefault(tag, (None, []))
+            if single is None and f not in features:
                 features.append(f)
     cut = now - timedelta(days=ATTEMPT_DAYS)
     return {k: v for k, v in sorted(found.items())

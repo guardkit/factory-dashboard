@@ -37,9 +37,11 @@ export FACTORY_DASH_CONFIG_DIR="$CONFIG"
 
 # The Linear door's state volume (each project's Linear link) is mounted only when it exists:
 # compose refuses to start anything when an external volume is missing (docker-compose.linear.yml).
+# The name is the one compose itself resolves (shell, then .env, then the default).
 FILES=(-f docker-compose.yml)
-LINEAR_VOLUME="${FACTORY_LINEAR_DOOR_VOLUME:-forge-estate_linear-door-state}"
-if docker volume inspect "$LINEAR_VOLUME" >/dev/null 2>&1; then
+if ! LINEAR_VOLUME="$(deploy/linear-volume.sh)" || [ -z "$LINEAR_VOLUME" ]; then
+  echo "note: could not read the Linear door's volume name from compose; starting without Linear links"
+elif docker volume inspect "$LINEAR_VOLUME" >/dev/null 2>&1; then
   FILES+=(-f docker-compose.linear.yml)
 else
   echo "note: the Linear door's volume $LINEAR_VOLUME is not there; starting without Linear links"

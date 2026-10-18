@@ -960,11 +960,13 @@ def attempt_spend(book: CostBook, features: Iterable[Feature], mission: Mission 
     if mission is not None:
         tags |= cost.mission_tags(mission)
     slot = book.slot(book.tag_totals(tags), scope="attempt")
-    left = len(chosen) - len(measured)
+    left = [f for f in chosen if f not in measured]
     if left:
-        noun, verb = ("feature", "was") if left == 1 else ("features", "were")
-        note = (f"{left} of its {len(chosen)} {noun} {verb} sent before calls were tagged by feature, "
-                f"so {'it is' if left == 1 else 'they are'} not counted.")
+        noun = "feature" if len(chosen) == 1 else "features"
+        verb = "was" if len(left) == 1 else "were"
+        names = "; ".join(f.label.rstrip(".") for f in left)
+        note = (f"{len(left)} of its {len(chosen)} {noun} {verb} sent before calls were tagged by feature, "
+                f"so {'it is' if len(left) == 1 else 'they are'} not counted: {names}.")
         slot = replace(slot, reason=f"{note} {slot.reason}".strip())
     return slot
 

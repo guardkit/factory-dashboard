@@ -19,12 +19,14 @@ from backend.projector.summary import (
     HEALTH_OF_BAND,
     SUMMARY_FILE,
     build_summary,
+    linear_attempts,
     project_health,
     summary_path,
     write_atomic,
     write_summary,
 )
 from backend.readmodel import dbread
+from backend.readmodel.factory import load_factory
 from backend.readmodel.viewmodels import SpendSlot
 
 from tests import forge_fake
@@ -36,6 +38,8 @@ NOW = T + timedelta(minutes=200)
 ISSUE = "lin-APP-12-1"                          # a single issue's attempt (the door's id shape)
 MISSION = "lin-m-" + "0" * 32 + "-1"            # a mission's attempt
 MERGE = "mission-merge-corr"                    # the mission's own merge build
+PART = MISSION + "-APP-13-a1"                   # Forge's part attempt id: <mission correlation id>-<KEY>-a<n>
+FAILED_PART = MISSION + "-APP-14-a1"            # a part that failed in planning, never built
 
 
 def _cost(prompt: int, completion: int) -> float:
@@ -53,11 +57,13 @@ def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     fake.build("bL", "FEAT-0012", ISSUE)
     fake.merge_decision("bL", 82)
     fake.merged("bL", 85)
-    # A Linear mission: one part joined the mission's branch, then the mission merged.
+    # A Linear mission: one part joined the mission's branch, another failed in planning, then the
+    # mission merged what it had.
     fake.mission("m-2", "Mark notes as done", MISSION, status="MERGED", closed=170)
-    fake.planning("m-2-APP-13-a1", "Add a done flag.", start=100, end=110)
-    fake.build("bP", "FEAT-0013", "m-2-APP-13-a1", queued=110, started=110, completed=150, mission_id="m-2",
+    fake.planning(PART, "Add a done flag.", start=100, end=110)
+    fake.build("bP", "FEAT-0013", PART, queued=110, started=110, completed=150, mission_id="m-2",
                mission_role="feature")
+    fake.planning(FAILED_PART, "Filter by done.", state="FAILED", start=100, end=130, error="The planner gave up.")
     fake.merge_decision("bP", 150)
     fake.merged("bP", 152, mission_branch=True)
     fake.build("bM", "FEAT-0013", MERGE, queued=160, started=160, completed=165, mission_id="m-2",
@@ -73,7 +79,8 @@ def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     spend.add("c1", 30, "c-1", prompt=1_000, completion=100)
     spend.add("l1", 30, ISSUE, prompt=10_000, completion=1_000)
     spend.add("l2", 60, ISSUE, prompt=10_000, completion=1_000)
-    spend.add("p1", 120, "m-2-APP-13-a1", prompt=20_000, completion=2_000)
+    spend.add("p1", 120, PART, prompt=20_000, completion=2_000)
+    spend.add("f1", 115, FAILED_PART, prompt=5_000, completion=500)
     spend.add("mm", 158, MISSION, prompt=3_000, completion=300)
     spend.add("mb", 162, MERGE, prompt=4_000, completion=400)
     path = tmp_path / "readmodel.db"
@@ -104,7 +111,7 @@ def test_project_figures_are_the_project_pages_own(store: Path) -> None:
     assert p["open_issues_words"] == view.open_issues_words
     # A SpendSlot survives the round trip, every field.
     assert SpendSlot(**p["spend_total"]) == view.spend and SpendSlot(**p["spend_week"]) == view.spend_week
-    assert view.spend.state == "measured" and view.spend.calls == 6
+    assert view.spend.state == "measured" and view.spend.calls == 7
 
 
 def test_health_is_the_worst_band_of_in_progress_features(store: Path) -> None:
@@ -154,10 +161,43 @@ def test_linear_attempts_carry_their_merge_cost(store: Path) -> None:
     issue = SpendSlot(**attempts[ISSUE])
     assert issue.state == "measured" and issue.calls == 2 and issue.scope == "attempt"
     assert issue.amount_usd == pytest.approx(2 * _cost(10_000, 1_000))
-    # The mission: its part's calls plus its own correlation and merge build tags, each once.
+    # The mission: every part's calls, built or not (R1), plus its own correlation and merge build
+    # tags, each once. The failed part's attempt is not a single-issue attempt of its own.
     mission = SpendSlot(**attempts[MISSION])
-    assert mission.calls == 3
-    assert mission.amount_usd == pytest.approx(_cost(20_000, 2_000) + _cost(3_000, 300) + _cost(4_000, 400))
+    assert mission.calls == 4 and mission.state == "measured" and "not counted" not in mission.reason
+    assert mission.amount_usd == pytest.approx(_cost(20_000, 2_000) + _cost(5_000, 500) + _cost(3_000, 300)
+                                               + _cost(4_000, 400))
+
+
+def test_a_mission_part_that_never_built_belongs_to_its_mission(store: Path) -> None:
+    conn = dbread.snapshot(store)
+    try:
+        attempts = linear_attempts(load_factory(conn, NOW), NOW)
+    finally:
+        conn.close()
+    mission, parts = attempts[MISSION]
+    assert mission is not None and mission.id == "m-2"
+    assert sorted(f.key for f in parts) == sorted(["FEAT-0013", FAILED_PART])
+    assert FAILED_PART not in attempts and PART not in attempts
+
+
+def test_an_unmeasured_member_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mission begun after tagging with one part sent before it: that part is named, not hidden."""
+    monkeypatch.setattr(forge_fake, "T0", T)
+    fake = ForgeFake(tmp_path / "forge.db")
+    fake.mission("m-3", "Tags", MISSION, status="MERGED", closed=170)
+    fake.planning(PART, "Add tags.", start=100, end=110)
+    fake.planning(FAILED_PART, "Colour the tags.", state="FAILED", start=-3 * 24 * 60, end=-3 * 24 * 60 + 5)
+    path = tmp_path / "readmodel.db"
+    conn = store_from(fake, path, NOW)
+    spend = FakeSpend(T)
+    spend.add("a", 105, PART, prompt=1_000, completion=100)
+    import_once(conn, spend, NOW)
+    conn.close()
+    slot = SpendSlot(**build_summary(path, NOW)["attempts"][MISSION])
+    assert slot.state == "measured" and slot.calls == 1
+    assert slot.reason.startswith("1 of its 2 features was sent before calls were tagged by feature, so it is not "
+                                  "counted: Colour the tags.")
 
 
 def test_an_attempt_with_no_cost_data_says_not_available(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
