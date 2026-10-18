@@ -46,7 +46,7 @@
         {{ report.headline.on_target_count }} on target{% if report.headline.ahead_count %} · {{ report.headline.ahead_count }} ahead{% endif %}{% endif %}
       </p>
     {% endif %}
-    {{ m.spend_slot(report.headline.spend) }}
+    <p>Spend: {{ m.spend_slot(report.headline.spend) }}{% if report.headline.waiting.measured %}; waiting for people and the queue, features merged this week: {{ report.headline.waiting.waiting }}{% endif %}; all model calls: {{ m.spend_slot(report.headline.factory_usage) }}</p>
   </div>
 </section>
 

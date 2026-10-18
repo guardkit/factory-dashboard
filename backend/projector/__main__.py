@@ -1,7 +1,8 @@
 """`python -m backend.projector` — the dashboard's feed.
 
-It applies the store's schema, then runs four loops: the heartbeat (10 s), the copy of Forge's
-record (15 s), the service checks (30 s) and the plan file (on change). It has no bus connection:
+It applies the store's schema, then runs five loops: the heartbeat (10 s), the copy of Forge's
+record (15 s), the copy of LiteLLM's spend log (60 s), the service checks (30 s) and the plan file
+(on change). It has no bus connection:
 the design of 17 October 2026 takes every build, planning, approval and delivery fact from Forge's
 record, which is complete and survives the dashboard being stopped; bus events do not.
 """
@@ -16,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from backend import db
+from backend.projector.cost_import import cost_loop
 from backend.projector.forge_mirror import forge_db_path, mirror_loop, mirror_once
 from backend.projector.health_polls import health_loop
 from backend.projector.plan_mirror import mirror_plans_once, plan_mirror_loop
@@ -46,6 +48,7 @@ async def _run() -> None:
     await asyncio.gather(
         heartbeat_loop(open_rw(db_path)),
         mirror_loop(open_rw(db_path)),
+        cost_loop(open_rw(db_path)),
         health_loop(open_rw(db_path)),
         plan_mirror_loop(open_rw(db_path)),
     )

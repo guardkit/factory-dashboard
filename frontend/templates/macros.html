@@ -37,9 +37,12 @@
 </div>
 {%- endmacro %}
 
-{# Cost is not measured yet: shown as a gap, never as a zero. #}
+{# A cost figure (a SpendSlot), or the reason there is none: never a zero for a gap. #}
 {% macro spend_slot(s) -%}
-<span class="spend-slot" data-state="not-measured">{{ s.text }}</span>
+<span class="spend-slot" data-state="{{ s.state | replace('_', '-') }}"{% if s.price_label %} title="{{ s.price_label }}"{% endif %}>
+  {%- if s.value %}{{ s.value }} <span class="est">nominal</span>{% if s.estimated %} <span class="honest-badge honest-badge--estimated">part estimated</span>{% endif %}
+  {%- elif s.measured %}{{ s.label }}{% else %}<span class="honest-badge honest-badge--not-measured">{{ s.label }}</span>{% endif %}
+  {%- if s.stale %} <span class="spend-slot__stale">({{ s.stale_text }})</span>{% endif %}</span>
 {%- endmacro %}
 
 {% macro lagging_note(a) -%}
@@ -64,7 +67,7 @@
       <td>{{ band_chip(r.band) }}</td>
       <td class="num">{{ r.elapsed }}</td>
       <td class="num" title="{{ r.sent_title }}">{{ r.sent_label }}</td>
-      <td><span class="spend-slot" data-state="not-measured">not measured yet</span></td>
+      <td>{{ spend_slot(r.spend) }}</td>
     </tr>
   {% endfor %}
   </tbody>

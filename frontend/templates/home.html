@@ -1,9 +1,11 @@
 {% extends "base.html" %}
+{% import 'macros.html' as m %}
 {% block title %}Now · Factory dashboard{% endblock %}
 {% block content %}
 <h1 class="page-title visually-hidden">Now</h1>
 {# What needs a person first, then what is in progress, then the machinery. #}
 {% with panel = view.needs_you %}{% include "fragments/needs_you.html" %}{% endwith %}
+<p class="spend-split"><span class="stat-tile"><span class="stat-tile__label">Today, all projects</span> <span class="stat-tile__value">{{ m.spend_slot(view.spend_today) }}</span></span> <span class="stat-tile"><span class="stat-tile__label">This week, all projects</span> <span class="stat-tile__value">{{ m.spend_slot(view.spend_week) }}</span></span></p>
 <div class="home-grid">
   <div class="home-grid__main">
     {% with panel = view.in_flight %}{% include "fragments/in_progress.html" %}{% endwith %}

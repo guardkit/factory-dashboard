@@ -11,5 +11,6 @@
      {%- if not standalone %} hx-swap-oob="true"{% endif %}>
   <span class="read-asof">{{ m.asof_chip(chrome.read_as_of) }}</span>
   {% if chrome.banner %}<div class="banner banner--{{ chrome.banner.kind }}" role="status">{{ chrome.banner.text }}</div>{% endif %}
+  {% if chrome.cost_banner %}<div class="banner banner--{{ chrome.cost_banner.kind }}" role="status">{{ chrome.cost_banner.text }}</div>{% endif %}
 </div>
 {% endif %}

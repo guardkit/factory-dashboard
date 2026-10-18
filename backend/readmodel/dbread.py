@@ -14,12 +14,14 @@ import json
 import re
 import sqlite3
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from backend import db
+from backend.readmodel import costs as cost
 from backend.readmodel import viewmodels as vm
+from backend.readmodel.costs import CostBook, load_cost_book
 from backend.readmodel.factory import (
     STATIONS,
     Build,
@@ -31,6 +33,7 @@ from backend.readmodel.factory import (
 )
 from backend.readmodel.issues import Issue, find_issues, recent
 from backend.readmodel.norms import GAP, OUTCOME_WORDS, Norms, load_norms, on_track
+from backend.readmodel.timing import FeatureTime, feature_time
 from backend.readmodel.viewmodels import (
     ActivityPanel,
     ActivityRow,
@@ -66,8 +69,12 @@ from backend.readmodel.viewmodels import (
     ServingPanel,
     SignalRow,
     SpendSlot,
+    StageCostRow,
+    TimeSegment,
+    TimeSlot,
     WaitRow,
     WeeklyReport,
+    WeekRow,
 )
 
 
@@ -131,7 +138,21 @@ def data_version(conn: sqlite3.Connection, fr: Freshness, now: datetime) -> str:
         row = None
     seq = int(row[0]) if row and row[0] is not None else 0
     state = "fresh" if fr.fresh(now) else "stale"
-    return f"{seq}.{state}.{int(now.timestamp() // VERSION_TICK_SECS)}"
+    cost_state = cost.cost_freshness(conn).state(now)
+    return f"{seq}.{state}.{cost_state}.{int(now.timestamp() // VERSION_TICK_SECS)}"
+
+
+def cost_banner(conn: sqlite3.Connection, now: datetime) -> Banner | None:
+    """The spend log's own line, apart from Forge's: one can be healthy while the other is stale."""
+    cf = cost.cost_freshness(conn)
+    state = cf.state(now)
+    if state == "fresh":
+        return None
+    if state == "never":
+        return Banner(kind="cost_stale", text="Cost data not available: the dashboard has not read LiteLLM's "
+                                               "spend log yet.")
+    return Banner(kind="cost_stale", text=f"Cost data last read at {vm.fmt_wall(cf.read_at, now=now)} — cost "  # type: ignore[arg-type]
+                                           "figures may be incomplete.")
 
 
 def page_chrome(conn: sqlite3.Connection, now: datetime | None = None) -> PageChrome:
@@ -139,8 +160,9 @@ def page_chrome(conn: sqlite3.Connection, now: datetime | None = None) -> PageCh
     fr = freshness(conn)
     chip = _read_chip(fr, now)
     version = data_version(conn, fr, now)
+    cb = cost_banner(conn, now)
     if fr.fresh(now):
-        return PageChrome(feed_state="live", read_as_of=chip, version=version)
+        return PageChrome(feed_state="live", read_as_of=chip, version=version, cost_banner=cb)
     when = vm.fmt_wall(fr.read_at, now=now) if fr.read_at else None
     if not fr.feed_alive(now):
         text = ("The dashboard's data feed is not running. "
@@ -149,7 +171,8 @@ def page_chrome(conn: sqlite3.Connection, now: datetime | None = None) -> PageCh
         text = "The dashboard has not read the factory's record yet."
     else:
         text = f"Factory data last read at {when} — the dashboard cannot reach the factory's record."
-    return PageChrome(feed_state="stale", read_as_of=chip, banner=Banner(kind="stale", text=text), version=version)
+    return PageChrome(feed_state="stale", read_as_of=chip, banner=Banner(kind="stale", text=text), version=version,
+                      cost_banner=cb)
 
 
 def _state(fr: Freshness, now: datetime, rows: int) -> PanelState:
@@ -203,7 +226,7 @@ def elapsed(f: Feature, now: datetime) -> str:
     return vm.fmt_age(secs) + ("" if end else " so far")
 
 
-def feature_row(f: Feature, norms: Norms, now: datetime) -> FeatureRow:
+def feature_row(f: Feature, norms: Norms, now: datetime, book: CostBook | None = None) -> FeatureRow:
     ot = on_track(f, norms, now)
     sent = f.sent_at
     return FeatureRow(
@@ -211,8 +234,49 @@ def feature_row(f: Feature, norms: Norms, now: datetime) -> FeatureRow:
         status_text=f.status_text, journey=journey(f), band=_band(ot.band, ot.words.lower()),
         elapsed=elapsed(f, now),
         sent_label=vm.fmt_wall(sent, now=now) if sent else "—", sent_title=vm.fmt_iso(sent) if sent else "",
-        in_progress=f.in_progress,
+        in_progress=f.in_progress, spend=book.feature_slot(f) if book else SpendSlot(),
+        time=time_slot(feature_time(f, now)),
     )
+
+
+# --- time ---------------------------------------------------------------------------------------------
+
+_SEG = {"planning": "plan", "building": "build", "merge_check": "review", "not_placed": "none"}
+
+
+def time_slot(ft: FeatureTime | None) -> TimeSlot:
+    """A feature's elapsed, machine and waiting time as display data (requirement 6)."""
+    if ft is None:
+        return TimeSlot(reason="The record has no time this was sent.")
+    return _time_from(ft.elapsed, ft.so_far, [(p.key, p.label, p.kind, p.seconds, p.open) for p in ft.parts])
+
+
+def sum_time(times: Iterable[FeatureTime | None]) -> TimeSlot:
+    """Several features' times added together (a project, a week)."""
+    known = [t for t in times if t is not None]
+    if not known:
+        return TimeSlot(reason="No features with a recorded start.")
+    parts: dict[str, list[object]] = {}
+    for t in known:
+        for p in t.parts:
+            row = parts.setdefault(p.key, [p.label, p.kind, 0.0, False])
+            row[2] = float(row[2]) + p.seconds  # type: ignore[arg-type]
+            row[3] = bool(row[3]) or p.open
+    return _time_from(sum(t.elapsed for t in known), any(t.so_far for t in known),
+                      [(k, str(v[0]), str(v[1]), float(v[2]), bool(v[3])) for k, v in parts.items()])  # type: ignore[arg-type]
+
+
+def _time_from(elapsed_secs: float, so_far: bool, parts: list[tuple[str, str, str, float, bool]]) -> TimeSlot:
+    suffix = " so far" if so_far else ""
+    machine = sum(p[3] for p in parts if p[2] == "machine")
+    waiting = sum(p[3] for p in parts if p[2] == "wait")
+    segs = tuple(TimeSegment(key=k, label=label, kind=kind, seg=_SEG.get(k, "wait"), seconds=secs,
+                             text=vm.fmt_age(secs) + (" so far" if is_open else ""),
+                             share=(secs / elapsed_secs) if elapsed_secs else 0.0, open=is_open)
+                 for k, label, kind, secs, is_open in parts)
+    return TimeSlot(state="measured", elapsed=vm.fmt_age(elapsed_secs) + suffix, elapsed_secs=elapsed_secs,
+                    machine=vm.fmt_age(machine), machine_secs=machine, waiting=vm.fmt_age(waiting),
+                    waiting_secs=waiting, so_far=so_far, segments=segs)
 
 
 def issue_row(i: Issue, now: datetime) -> IssueRow:
@@ -298,9 +362,11 @@ def activity_rows(factory: Factory, builds: Iterable[Build], now: datetime, limi
 # --- the Now page panels -------------------------------------------------------------------------
 
 
-def in_flight(conn: sqlite3.Connection, now: datetime, factory: Factory, norms: Norms) -> FeaturesPanel:
+def in_flight(conn: sqlite3.Connection, now: datetime, factory: Factory, norms: Norms,
+              book: CostBook | None = None) -> FeaturesPanel:
     fr = freshness(conn)
-    rows = tuple(feature_row(f, norms, now) for f in factory.features if f.in_progress)
+    book = book or load_cost_book(conn, now)
+    rows = tuple(feature_row(f, norms, now, book) for f in factory.features if f.in_progress)
     return FeaturesPanel(panel_id="p2", title="In progress", state=_state(fr, now, len(rows)),
                          as_of=_read_chip(fr, now), rows=rows, empty_copy="Nothing is in progress.")
 
@@ -460,12 +526,13 @@ def _commit(f: Feature) -> str:
     return ""
 
 
-def delivered_row(f: Feature) -> DeliveredRow:
+def delivered_row(f: Feature, book: CostBook | None = None, now: datetime | None = None) -> DeliveredRow:
     assert f.delivered_at is not None
     return DeliveredRow(
         delivered_date=vm.fmt_day(f.delivered_at), delivered_title=vm.fmt_iso(f.delivered_at), title=f.title,
         code=f.code, link=f.link, project=f.project, project_link=project_link(f.project), commit=_commit(f),
-        spend=SpendSlot(),
+        spend=book.feature_slot(f) if book else SpendSlot(),
+        time=time_slot(feature_time(f, now or _now())),
     )
 
 
@@ -506,7 +573,8 @@ def delivered_panel(
     win_from, win_to = parse_window(window, now)
     lo, hi = _window_bounds(win_from, win_to)
     fr = freshness(conn)
-    rows = tuple(delivered_row(f) for f in delivered_in(factory, lo, hi))
+    book = load_cost_book(conn, now)
+    rows = tuple(delivered_row(f, book, now) for f in delivered_in(factory, lo, hi))
     return DeliveredPanel(
         panel_id="p7", title="Delivered", state=_state(fr, now, len(rows)), as_of=_read_chip(fr, now),
         rows=rows, delivered_count=len(rows), window_from=win_from, window_to=win_to,
@@ -526,6 +594,8 @@ class HomeView:
     planning: PlanningPanel
     serving: ServingPanel
     feed: FeedPanel
+    spend_today: SpendSlot = field(default_factory=SpendSlot)  # every model call today (London), tagged or not
+    spend_week: SpendSlot = field(default_factory=SpendSlot)   # the same, this week (Monday to now)
 
 
 @dataclass(frozen=True)
@@ -552,6 +622,8 @@ class ProjectRow:
     in_progress: int
     delivered: int         # merged and checked, ever
     open_issues: int       # listed open issues plus older unresolved failures
+    spend: SpendSlot = field(default_factory=SpendSlot)  # tagged calls of the project's features (since tagging)
+    time: TimeSlot = field(default_factory=TimeSlot)     # summed over the project's features
 
 
 @dataclass(frozen=True)
@@ -583,13 +655,35 @@ def home_view(db_path: Path, now: datetime | None = None) -> HomeView:
     conn = _open(db_path)
     try:
         factory, norms = load_factory(conn, now), load_norms()
+        book = load_cost_book(conn, now)
         return HomeView(
             chrome=page_chrome(conn, now), needs_you=needs_you(conn, now, factory, norms),
-            in_flight=in_flight(conn, now, factory, norms), activity=recent_activity(conn, now, factory),
+            in_flight=in_flight(conn, now, factory, norms, book), activity=recent_activity(conn, now, factory),
             planning=planning(conn, now, factory), serving=serving(conn, now), feed=feed_panel(conn, now),
+            spend_today=factory_spend(conn, book, cost.day_start(now), now),
+            spend_week=factory_spend(conn, book, cost.week_start(now), now),
         )
     finally:
         conn.close()
+
+
+def factory_spend(conn: sqlite3.Connection, book: CostBook, lo: datetime, now: datetime) -> SpendSlot:
+    """Every model call from `lo` to now, all projects, tagged or not."""
+    return book.slot(cost.window_totals(conn, lo, now + timedelta(seconds=1)), scope="factory")
+
+
+def _stage_rows(conn: sqlite3.Connection, f: Feature, book: CostBook) -> tuple[StageCostRow, ...]:
+    """Cost split into planning, building, and merge and check, for a measured feature."""
+    slot = book.feature_slot(f)
+    if not slot.measured or not slot.calls:
+        return ()
+    split = cost.split_by_stage(f, cost.feature_calls(conn, f))
+    total = sum(t.cost for t in split.values())
+    seg = {"planning": "plan", "build": "build", "review": "review"}
+    return tuple(StageCostRow(key=k, label=label, seg=seg[k], spend=book.slot(split[k], scope="stage"),
+                              share=(split[k].cost / total) if total else 0.0)
+                 for k, label in cost.STAGES)
+
 
 
 FEATURE_WINDOWS: tuple[int | None, ...] = (7, 30, None)
@@ -604,7 +698,8 @@ def features_view(db_path: Path, days: int | None = 7, now: datetime | None = No
         fr = freshness(conn)
         cut = now - timedelta(days=days) if days else None
         chosen = [f for f in factory.features if cut is None or f.in_progress or (f.sent_at and f.sent_at >= cut)]
-        rows = tuple(feature_row(f, norms, now) for f in chosen)
+        book = load_cost_book(conn, now)
+        rows = tuple(feature_row(f, norms, now, book) for f in chosen)
         span = f"sent in the last {days} days, and anything still in progress" if days else "every feature on record"
         panel = FeaturesPanel(panel_id="features", title="Features", state=_state(fr, now, len(rows)),
                               as_of=_read_chip(fr, now), rows=rows, empty_copy="No features in this period.",
@@ -628,6 +723,7 @@ def feature_page(db_path: Path, key: str, now: datetime | None = None) -> tuple[
         if f is None:
             return None
         fr = freshness(conn)
+        book = load_cost_book(conn, now)
         ot = on_track(f, norms, now)
         signals = tuple(SignalRow(s.name, s.value, _band(s.band, "not measured" if s.band == GAP else ""),
                                   s.norm, s.note) for s in ot.signals)
@@ -659,7 +755,8 @@ def feature_page(db_path: Path, key: str, now: datetime | None = None) -> tuple[
             verdict_heading="How it ended" if f.outcome in OUTCOME_WORDS else "On track",
             verdict_reason=ot.reason, signals=signals, norms_line=_norms_line(norms), elapsed=elapsed(f, now),
             attempts=attempts, waits=waits, issues=tuple(issue_row(i, now) for i in own),
-            activity=activity_rows(factory, f.builds, now, limit=20), spend=SpendSlot(),
+            activity=activity_rows(factory, f.builds, now, limit=20), spend=book.feature_slot(f),
+            time=time_slot(feature_time(f, now)), cost_by_stage=_stage_rows(conn, f, book),
         )
         return page_chrome(conn, now), page
     finally:
@@ -696,10 +793,11 @@ def project_view(db_path: Path, project: str, now: datetime | None = None) -> Pr
     try:
         factory, norms = load_factory(conn, now), load_norms()
         fr = freshness(conn)
+        book = load_cost_book(conn, now)
         mine = [f for f in factory.features if f.project == project]
         cut = now - timedelta(days=30)
         shown = [f for f in mine if f.in_progress or (f.sent_at and f.sent_at >= cut)]
-        rows = tuple(feature_row(f, norms, now) for f in shown)
+        rows = tuple(feature_row(f, norms, now, book) for f in shown)
         panel = FeaturesPanel(panel_id="project", title="Features", state=_state(fr, now, len(rows)),
                               as_of=_read_chip(fr, now), rows=rows, empty_copy="No features in the last 30 days.",
                               note=f"Sent in the last 30 days, and anything still in progress ({len(rows)} of "
@@ -712,11 +810,89 @@ def project_view(db_path: Path, project: str, now: datetime | None = None) -> Pr
             chrome=page_chrome(conn, now), project=project, features=panel,
             delivered_7d=sum(1 for f in delivered if f.delivered_at and f.delivered_at >= week),
             delivered_total=len(delivered), in_progress=sum(1 for f in mine if f.in_progress),
-            issues=tuple(issue_row(i, now) for i in open_issues), spend=SpendSlot(),
+            issues=tuple(issue_row(i, now) for i in open_issues), spend=project_spend(book, factory, project),
             open_issues_total=len(open_issues) + hidden, hidden_line=hidden_line(hidden),
+            time=sum_time(feature_time(f, now) for f in mine),
+            weeks=project_weeks(conn, book, factory, project, now),
+            spend_week=project_spend(book, factory, project, lo=cost.week_start(now)),
+            untagged_note=_untagged_note(conn, book, now),
         )
     finally:
         conn.close()
+
+
+def _project_tags(book: CostBook, factory: Factory, project: str) -> set[str]:
+    """Tags of the project's features sent since tagging started, and of its missions."""
+    tags: set[str] = set()
+    for f in factory.features:
+        if f.project == project and not book.before_tagging(f):
+            tags |= cost.feature_tags(f)
+    for m in factory.missions:
+        if m.target_repo == project:
+            tags |= cost.mission_tags(m)
+    return tags
+
+
+def project_spend(book: CostBook, factory: Factory, project: str, *, lo: datetime | None = None,
+                  hi: datetime | None = None) -> SpendSlot:
+    """Tagged calls of one project, optionally only those that started in [lo, hi)."""
+    if hi is not None and hi <= book.tagging_started():
+        return SpendSlot(state="not_measured", label="Not measured", price_label=book.prices.label,
+                         reason=f"Calls before {cost._day(book.tagging_started())} were not tagged by feature.")
+    hours = book.tag_hours(_project_tags(book, factory, project))
+    t = cost._sum(v for h, v in hours.items()
+                  if (lo is None or cost.hour_to_dt(h) >= lo) and (hi is None or cost.hour_to_dt(h) < hi))
+    slot = book.slot(t, scope="project")
+    if slot.state == "measured" and (lo is None or lo < book.tagging_started()):
+        slot = replace(slot, reason=f"Counts calls from {cost._day(book.tagging_started())}, when calls began to be "
+                                    "tagged by feature.")
+    return slot
+
+
+#: How many weeks a project page lists, newest first.
+PROJECT_WEEKS = 8
+
+
+def project_weeks(conn: sqlite3.Connection, book: CostBook, factory: Factory, project: str,
+                  now: datetime) -> tuple[WeekRow, ...]:
+    mine = [f for f in factory.features if f.project == project]
+    this_week = cost.week_start(now)
+    rows = []
+    for n in range(PROJECT_WEEKS):
+        lo = cost.week_start(this_week - timedelta(days=7 * n) + timedelta(hours=12))
+        hi = cost.week_start(lo + timedelta(days=7, hours=12))
+        sent = [f for f in mine if f.sent_at and lo <= f.sent_at < hi]
+        delivered = sum(1 for f in mine if f.delivered_at and lo <= f.delivered_at < hi)
+        all_calls = cost.window_totals(conn, lo, hi)
+        tagged = cost.window_totals(conn, lo, hi, tagged_only=True)
+        untagged = cost.Totals(all_calls.calls - tagged.calls, all_calls.failed - tagged.failed,
+                               all_calls.tokens_in - tagged.tokens_in, all_calls.tokens_out - tagged.tokens_out,
+                               all_calls.cost - tagged.cost, all_calls.estimated - tagged.estimated,
+                               all_calls.unpriced - tagged.unpriced)
+        local = vm.to_london(lo)
+        rows.append(WeekRow(
+            week_from=local.date().isoformat(), week_label=f"{local.day} {local.strftime('%b')}", sent=len(sent),
+            delivered=delivered, spend=project_spend(book, factory, project, lo=lo, hi=hi),
+            time=sum_time(feature_time(f, now) for f in sent),
+            untagged=book.slot(untagged, scope="factory") if book.state != "never" else None,
+        ))
+    return tuple(rows)
+
+
+def _untagged_note(conn: sqlite3.Connection, book: CostBook, now: datetime) -> str:
+    """One sentence on this week's factory-wide calls that carry no feature tag."""
+    if book.state == "never":
+        return ""
+    lo, hi = cost.week_start(now), now + timedelta(seconds=1)
+    every = cost.window_totals(conn, lo, hi)
+    tagged = cost.window_totals(conn, lo, hi, tagged_only=True)
+    n = every.calls - tagged.calls
+    if not every.calls:
+        return "No model calls were recorded this week."
+    noun = "call" if every.calls == 1 else "calls"
+    verb, pronoun = ("was", "it counts") if n == 1 else ("were", "they count")
+    return (f"This week {n} of the factory's {every.calls} model {noun} {verb} not tagged to a feature, so "
+            f"{pronoun} for no project.")
 
 
 def hidden_line(hidden: int) -> str:
@@ -733,6 +909,7 @@ def projects_view(db_path: Path, now: datetime | None = None) -> ProjectsView:
     conn = _open(db_path)
     try:
         factory, norms = load_factory(conn, now), load_norms()
+        book = load_cost_book(conn, now)
         issues = find_issues(factory, norms, now)
         names = sorted({f.project for f in factory.features if f.project}
                        | {m.target_repo for m in factory.missions if m.target_repo})
@@ -744,7 +921,8 @@ def projects_view(db_path: Path, now: datetime | None = None) -> ProjectsView:
                 project=name, link=project_link(name), features=len(mine),
                 in_progress=sum(1 for f in mine if f.in_progress),
                 delivered=sum(1 for f in mine if f.outcome is Outcome.DELIVERED),
-                open_issues=len(open_) + hidden,
+                open_issues=len(open_) + hidden, spend=project_spend(book, factory, name),
+                time=sum_time(feature_time(f, now) for f in mine),
             ))
         return ProjectsView(chrome=page_chrome(conn, now), rows=tuple(rows), as_of=_read_chip(freshness(conn), now))
     finally:
@@ -927,16 +1105,32 @@ def weekly_report(
     now = now or _now()
     (win_from, win_to, lo, hi, projects, factory, norms, delivered, in_progress, stale, since,
      plan_rows, behind, on_target, ahead) = _report_parts(conn, tenant, now, window)
+    book = load_cost_book(conn, now)
+    names = projects or tuple(sorted({f.project for f in factory.features if f.project}
+                                     | {m.target_repo for m in factory.missions if m.target_repo}))
+    tags: set[str] = set()
+    for name in names:
+        tags |= _project_tags(book, factory, name)
+    if hi <= book.tagging_started():
+        spend = project_spend(book, factory, "", hi=hi)
+    else:
+        hours = book.tag_hours(tags)
+        spend = book.slot(cost._sum(v for h, v in hours.items() if lo <= cost.hour_to_dt(h) < hi), scope="project")
+        if lo < book.tagging_started() and spend.measured:
+            spend = replace(spend, reason=f"Counts calls from {cost._day(book.tagging_started())}, when calls "
+                                          "began to be tagged by feature.")
     headline = ReportHeadline(
         delivered_count=len(delivered), in_flight_count=len(in_progress), behind_count=behind,
-        on_target_count=on_target, ahead_count=ahead, spend=SpendSlot(), withheld=stale, withheld_since=since,
+        on_target_count=on_target, ahead_count=ahead, spend=spend, withheld=stale, withheld_since=since,
+        waiting=sum_time(feature_time(f, now) for f in delivered),
+        factory_usage=book.slot(cost.window_totals(conn, lo, min(hi, now + timedelta(seconds=1))), scope="factory"),
     )
     return WeeklyReport(
         chrome=page_chrome(conn, now), tenant_slug=tenant, tenant_display=_tenant_display(conn, tenant),
         window_from=win_from, window_to=win_to, headline=headline,
         plan=PlanVsActual(milestones=tuple(plan_rows), withheld=stale, withheld_since=since),
-        delivered_rows=tuple(delivered_row(f) for f in delivered),
-        in_flight_rows=tuple(feature_row(f, norms, now) for f in in_progress),
+        delivered_rows=tuple(delivered_row(f, book, now) for f in delivered),
+        in_flight_rows=tuple(feature_row(f, norms, now, book) for f in in_progress),
         issues=_report_issues(factory, norms, lo, hi, now, projects), client_tenants=client_tenants,
     )
 
@@ -945,20 +1139,20 @@ def export_report(
     conn: sqlite3.Connection, tenant: str, now: datetime | None = None, *, window: tuple[str, str] | None = None,
 ) -> ExportReport:
     """The client-safe export: delivered features (title, project, date, commit) and the four
-    sanctioned plan fields. No issues, no work in progress, no internals."""
+    sanctioned plan fields. No issues, no work in progress, no internals, and no costs (Rich's
+    approved brief for part B; the design's §8 sentence about adding spend to it is superseded)."""
     now = now or _now()
     (win_from, win_to, _lo, _hi, _projects, _factory, _norms, delivered, _in_progress, stale, since,
      plan_rows, _b, _o, _a) = _report_parts(conn, tenant, now, window)
-    client_spend = SpendSlot(text="Cost reporting is being set up.", plain_language=True)
     return ExportReport(
         tenant_display=_tenant_display(conn, tenant), window_from=win_from, window_to=win_to,
         as_of=_read_chip(freshness(conn), now),
         delivered_rows=tuple(ExportDeliveredRow(feature_id=f.code, title=f.title, project=f.project,
                                                 delivered_date=vm.fmt_day(f.delivered_at) if f.delivered_at else "",
-                                                commit=_commit(f), spend=client_spend) for f in delivered),
+                                                commit=_commit(f)) for f in delivered),
         milestones=tuple(ExportMilestone(m.milestone_id, m.title, m.target_window, m.band)
                          for m in plan_rows if m.deviation != "no_baseline"),
-        spend=client_spend, milestones_withheld=stale, withheld_since=since,
+        milestones_withheld=stale, withheld_since=since,
     )
 
 
@@ -1028,10 +1222,14 @@ def health(db_path: Path, now: datetime | None = None) -> dict[str, object]:
     conn = _open(db_path)
     try:
         fr = freshness(conn)
+        cf = cost.cost_freshness(conn)
         return {
             "factory_record": "fresh" if fr.fresh(now) else ("never read" if fr.read_at is None else "stale"),
             "feed": "running" if fr.feed_alive(now) else "stopped",
             "last_read_at": fr.read_at.isoformat() if fr.read_at else None,
+            # LiteLLM's spend log, apart from Forge's record. No addresses or credentials.
+            "cost_feed": {"never": "never read", "fresh": "fresh", "stale": "stale"}[cf.state(now)],
+            "cost_last_read_at": cf.read_at.isoformat() if cf.read_at else None,
         }
     finally:
         conn.close()

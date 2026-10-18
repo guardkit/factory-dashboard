@@ -105,6 +105,7 @@ def test_export_template_is_clean_of_internal_fields() -> None:
     text = (TEMPLATES / "reports_export.html").read_text(encoding="utf-8").lower()
     for token in _DENY_TOKENS:
         assert token not in text, token
+    assert "spend" not in text and "spend_slot" not in text   # no cost in the client export
 
 
 def test_export_shows_only_deliveries_and_the_four_plan_fields(store: sqlite3.Connection) -> None:
@@ -115,6 +116,7 @@ def test_export_shows_only_deliveries_and_the_four_plan_fields(store: sqlite3.Co
     assert "Clear button." not in html               # work in progress stays internal
     assert "OPERATOR_ONLY_ERROR_TEXT" not in html and "Secret failing request" not in html
     assert "U1" not in html                          # nobody's identity
-    assert "Cost reporting is being set up." in html
+    # No costs at all in the client export (Rich's approved brief for part B).
+    assert "Cost" not in html and "$" not in html and "nominal" not in html.lower()
     assert {m.milestone_id for m in export.milestones} == {"M1", "M2", "M3"}
     assert "behind" in html and "ahead" in html

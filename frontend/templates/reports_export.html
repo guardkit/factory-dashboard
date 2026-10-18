@@ -6,10 +6,10 @@
   <title>Weekly report — {{ report.tenant_display }} (client-safe)</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
-{# The CLIENT-SAFE version. It renders ONLY: delivered features (title, project, date, commit, the
-   cost gap) and the four agreed plan fields (id, title, target window, deviation). A separate,
+{# The CLIENT-SAFE version. It renders ONLY: delivered features (title, project, date, commit) and
+   the four agreed plan fields (id, title, target window, deviation). A separate,
    standalone page with no internal navigation; nothing about work in progress, problems, models,
-   people or other projects. Tests check this template for internal-only tokens. #}
+   people, costs or other projects. Tests check this template for internal-only tokens. #}
 <body class="layout-client">
   {% import 'macros.html' as m %}
   <main class="content content--client report-export">
@@ -27,8 +27,7 @@
       {% if report.delivered_rows %}
         <table class="dense-table">
           <thead>
-            <tr><th scope="col">Delivered</th><th scope="col">Feature</th><th scope="col">Project</th>
-              <th scope="col">Cost</th></tr>
+            <tr><th scope="col">Delivered</th><th scope="col">Feature</th><th scope="col">Project</th></tr>
           </thead>
           <tbody>
           {% for r in report.delivered_rows %}
@@ -36,7 +35,6 @@
               <td class="num">{{ r.delivered_date }}</td>
               <td><span class="feature-title">{{ r.title }}</span> <span class="feature-id">({{ r.feature_id }})</span></td>
               <td>{{ r.project }}</td>
-              <td>{{ m.spend_slot(r.spend) }}</td>
             </tr>
           {% endfor %}
           </tbody>
@@ -63,11 +61,6 @@
       {% else %}
         <p class="true-empty">No milestones agreed yet.</p>
       {% endif %}
-    </section>
-
-    <section class="report-export__section">
-      <h2>Cost</h2>
-      {{ m.spend_slot(report.spend) }}
     </section>
 
     <footer class="report-export__foot">

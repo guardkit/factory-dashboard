@@ -171,7 +171,9 @@ def test_healthz_needs_no_login_and_says_little(world: tuple[TestClient, Path, F
     client.post("/logout")
     assert client.get("/features", follow_redirects=False).status_code == 303  # signed out
     data = client.get("/healthz").json()
-    assert set(data) == {"factory_record", "feed", "last_read_at"} and data["factory_record"] == "fresh"
+    assert set(data) == {"factory_record", "feed", "last_read_at", "cost_feed", "cost_last_read_at"}
+    assert data["factory_record"] == "fresh"
+    assert data["cost_feed"] == "never read" and data["cost_last_read_at"] is None   # its own state, no secrets
 
 
 def test_issues_page_lists_open_and_closed(world: tuple[TestClient, Path, ForgeFake]) -> None:

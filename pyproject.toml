@@ -12,6 +12,7 @@ dependencies = [
     "pyyaml>=6.0",
     "python-multipart>=0.0.18",
     "httpx>=0.28.1",
+    "psycopg[binary]>=3.2",
 ]
 
 [dependency-groups]
@@ -53,6 +54,12 @@ strict = true
 mypy_path = "."
 files = ["backend", "tests"]
 plugins = []
+
+# The spend-log driver is imported only inside the feed's Postgres source (cost_import.py); a
+# checkout whose environment predates it still type-checks.
+[[tool.mypy.overrides]]
+module = ["psycopg", "psycopg.*"]
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["tests.*"]
