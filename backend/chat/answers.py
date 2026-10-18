@@ -178,6 +178,24 @@ def _not_measured(fields: dict[str, object]) -> str:
             "its page, and you can ask me about a feature by name.")
 
 
+#: The clarifying questions, one fixed sentence per kind the model may ask for (grounding.CLARIFY_KINDS).
+CLARIFY_QUESTIONS: dict[str, str] = {
+    "which_feature": "Which feature do you mean, by its name or its code on the Features page?",
+    "which_project": "Which project do you mean?",
+    "which_period": "Which dates do you mean, such as this week, last week or last month?",
+    "rephrase": "Could you ask that another way, naming the feature or the project?",
+}
+_CLARIFY_WITH_OPTIONS = {"which_feature": "Which feature do you mean: ", "which_project": "Which project do you mean: "}
+
+
+def clarify_question(kind: str, option_labels: Sequence[str] = ()) -> str:
+    """The question shown for a clarification: the kind's own sentence or, with options, the
+    options' labels as the records give them."""
+    if option_labels:
+        return _CLARIFY_WITH_OPTIONS[kind] + _join_or(list(option_labels)) + "?"
+    return CLARIFY_QUESTIONS[kind]
+
+
 TEMPLATES: dict[str, Callable[[dict[str, object]], str]] = {
     "feature_status": _feature_status,
     "project_summary": _project_summary,

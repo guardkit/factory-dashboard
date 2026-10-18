@@ -334,6 +334,36 @@ def _resolve_project(query: str, factory: Factory, name: str | None) -> tuple[st
     return found[0], None
 
 
+# --- the options a clarifying question names ----------------------------------------------------------
+
+
+def clarify_options(ctx: Context, kind: str, ids: Iterable[str]) -> tuple[Ref, ...] | None:
+    """The records a clarifying question's options name, as links labelled from the records, in the
+    order given; None when any of them is not on record (the model named one that does not exist)."""
+    ids = tuple(ids)
+
+    def read(_conn: sqlite3.Connection, factory: Factory) -> tuple[Ref, ...] | None:
+        refs: list[Ref] = []
+        known = projects_on_record(factory)
+        for wanted in ids:
+            if kind == "which_feature":
+                f = factory.feature(wanted.upper())
+                if f is None or f.code.upper() != wanted.upper():
+                    return None
+                refs.append(_feature_ref(f))
+            elif kind == "which_project" and wanted in known:
+                refs.append(_project_ref(wanted))
+            else:
+                return None
+        return tuple(refs)
+
+    conn = db.connect_ro(ctx.db_path)
+    try:
+        return read(conn, load_factory(conn, ctx.now))
+    finally:
+        conn.close()
+
+
 # --- the queries ---------------------------------------------------------------------------------------
 
 

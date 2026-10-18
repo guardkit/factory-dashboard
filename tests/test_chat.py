@@ -3,9 +3,11 @@ limits, the LiteLLM call (stubbed) and the route."""
 
 from __future__ import annotations
 
+import http.server
 import json
 import re
 import threading
+import time
 from collections.abc import Callable, Iterator, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,10 +16,11 @@ import httpx
 import pytest
 from backend.app import create_app
 from backend.auth import ResolvedUser
-from backend.chat import answers, grounding, llm, registry, tools
+from backend.chat import answers, grounding, llm, registry, service, tools
 from backend.chat.service import (
     BUSY,
     LIMITED,
+    NO_TIME_LEFT,
     NOT_SET_UP,
     OPERATORS_ONLY,
     QUESTION_SECONDS,
@@ -334,9 +337,10 @@ def test_a_well_formed_choice_and_clarify_pass() -> None:
     assert grounding.parse_reply('```json\n{"query": "open_issues"}\n```', Q) == grounding.Choice("open_issues", {})
     assert grounding.parse_reply('{"query": "open_issues", "args": {"project": null}}', Q) == \
         grounding.Choice("open_issues", {})
-    assert grounding.parse_reply('{"clarify": "Which project do you mean?"}', Q) == \
-        grounding.Clarify("Which project do you mean?")
-    assert isinstance(grounding.parse_reply('{"clarify": "Do you mean the follow-up one?"}', Q), grounding.Clarify)
+    assert grounding.parse_reply('{"clarify": "which_project"}', Q) == grounding.Clarify("which_project")
+    assert grounding.parse_reply('{"clarify": "which_feature", "options": ["FEAT-0006", "feat-0007"]}', Q) == \
+        grounding.Clarify("which_feature", ("FEAT-0006", "feat-0007"))
+    assert grounding.parse_reply('{"clarify": "which_project", "options": []}', Q) == grounding.Clarify("which_project")
 
 
 @pytest.mark.parametrize(("raw", "reason"), [
@@ -347,7 +351,7 @@ def test_a_well_formed_choice_and_clarify_pass() -> None:
     ("{not json", "reply is not JSON"),
     ('{"query": "delivered", "answer": "3 features were delivered"}', "reply has the wrong keys ['answer', 'query']"),
     ('{"answer": "FEAT-0001 is delivered"}', "reply has the wrong keys ['answer']"),
-    ('{"query": "delivered", "clarify": "Which week?"}', "reply has the wrong keys ['clarify', 'query']"),
+    ('{"query": "delivered", "clarify": "which_period"}', "reply has the wrong keys ['clarify', 'query']"),
     ('{"query": "deploy_now"}', "unknown query 'deploy_now'"),
     # Arguments another query would take must not carry an unknown query through.
     ('{"query": "deploy_now", "args": {"feature": "x"}}', "unknown query 'deploy_now'"),
@@ -364,65 +368,80 @@ def test_replies_outside_the_schema_are_refused(raw: str, reason: str) -> None:
     assert grounding.parse_reply(raw, Q) == grounding.Rejection(reason), raw
 
 
-@pytest.mark.parametrize(("question", "reason"), [
-    ("Do you mean the one from 16 October?", "the numeral '1'"),
-    ("Do you mean Ⅸ or Ⅹ?", "the numeral 'Ⅸ'"),
-    ("Do you mean the one half done, ½ of it?", "the numeral '½'"),
-    ("Do you mean the one that cost £40?", "the numeral '4'"),
-    ("Do you mean the one that cost £ forty?", "the currency symbol '£'"),
-    ("Do you mean the $ one?", "the currency symbol '$'"),
-    ("Do you mean the € one?", "the currency symbol '€'"),
-    ("Do you mean FEAT-0001?", "a feature code"),
-    ("Do you mean feat-2555?", "a feature code"),
-    ("Do you mean feat-abcd?", "a feature code"),
-    ("Do you mean one of the ninety-nine features James signed off?", "the number word 'ninety'"),
-    ("Do you mean the one numbered ninety nine?", "the number word 'ninety'"),
-    ("Do you mean the twelve features?", "the number word 'twelve'"),
-    ("Do you mean the hundred or so features?", "the number word 'hundred'"),
-    ("Do you mean the dozen tagged ones?", "the number word 'dozen'"),
-    ("Do you mean the one half finished?", "the number word 'half'"),
-    ("Do you mean the ten percent?", "the number word 'ten'"),
-    ("Do you mean the one using a lot of percent?", "the number word 'percent'"),
-    ("Do you mean the twenty-first?", "the number word 'twenty'"),
-    ("Do you mean the search feature that cost about forty pounds?", "the number word 'forty'"),
-    ("Do you mean the search feature that cost a lot?", "the money word 'cost'"),
-    ("Do you mean the one worth pounds?", "the money word 'pounds'"),
-    ("Do you mean the one we spent most on?", "the money word 'spent'"),
-    ("Do you mean the dollars one?", "the money word 'dollars'"),
-    ("Did the build fail, or do you mean the plan?", "the status word 'fail'"),
-    ("Was it the one that crashed and was abandoned?", "the status word 'crashed'"),
-    ("Was it the abandoned one?", "the status word 'abandoned'"),
-    ("Do you mean the feature deployed yesterday?", "the status word 'deployed'"),
-    ("Do you mean the one released on Friday?", "the status word 'released'"),
-    ("Do you mean the one that errored?", "the status word 'errored'"),
-    ("Do you mean the one that stopped?", "the status word 'stopped'"),
-    ("Do you mean the one James signed-off?", "the status word 'signed off'"),
-    ("Do you mean the one that was delivered?", "the status word 'delivered'"),
-    ("Do you mean the feature that failed?", "the status word 'failed'"),
-    ("Do you mean the one that is on track?", "the status word 'on track'"),
-    ("Is it the one still in progress?", "the status word 'in progress'"),
-    ("Which project? Which week?", "not one question"),
-    ("Tell me which project", "not one question"),
-    ("Which <b>project</b>?", "markup"),
-    ("", "empty"),
-])
-def test_clarifying_questions_cannot_state_facts(question: str, reason: str) -> None:
-    reply = grounding.parse_reply(json.dumps({"clarify": question}), Q)
-    assert isinstance(reply, grounding.Rejection), question
-    assert reply.reason.endswith(reason), (question, reply.reason)
+_KINDS = "clarify kind is not one of which_feature, which_project, which_period, rephrase"
 
 
-@pytest.mark.parametrize("question", [
-    "Do you mean the tags feature or the search feature?",
-    "Which project do you mean?",
-    "Do you mean acme/notes or other/notes?",
-    "Which week do you mean?",
-    "Do you mean the follow-up one?",
-    "Do you mean the export feature or the import feature?",
-    "Which one do you mean, the search box or the clear button?",
+@pytest.mark.parametrize(("reply", "reason"), [
+    # Codex's two examples: the model can no longer write the question, so a sentence is refused.
+    ({"clarify": "There is one issue. Which project do you mean?"}, _KINDS),
+    ({"clarify": "The factory is offline. Which project do you mean?"}, _KINDS),
+    ({"clarify": "Which project do you mean?"}, _KINDS),
+    ({"clarify": "which_week"}, _KINDS),
+    ({"clarify": "WHICH_PROJECT"}, _KINDS),
+    ({"clarify": ""}, _KINDS),
+    ({"clarify": 3}, _KINDS),
+    ({"clarify": ["which_project"]}, _KINDS),
+    ({"clarify": "which_project", "question": "Which one? There are two."},
+     "reply has the wrong keys ['clarify', 'question']"),
+    ({"clarify": "which_project", "options": ["acme/notes"], "args": {}},
+     "reply has the wrong keys ['args', 'clarify', 'options']"),
+    ({"clarify": "which_period", "options": ["this week"]}, "clarify kind which_period takes no options"),
+    ({"clarify": "rephrase", "options": ["FEAT-0001"]}, "clarify kind rephrase takes no options"),
+    ({"clarify": "which_feature", "options": "FEAT-0001"}, "clarify options are not a list of text"),
+    ({"clarify": "which_feature", "options": [1]}, "clarify options are not a list of text"),
+    ({"clarify": "which_feature", "options": ["FEAT-0001", "FEAT-0001"]}, "clarify options are too many or repeated"),
+    ({"clarify": "which_feature", "options": [f"FEAT-000{i}" for i in range(6)]},
+     "clarify options are too many or repeated"),
+    ({"clarify": "which_feature", "options": ["the search box"]},
+     "clarify option 'the search box' is not a feature id"),
+    ({"clarify": "which_feature", "options": ["FEAT-0001 is delivered"]},
+     "clarify option 'FEAT-0001 is delivered' is not a feature id"),
+    ({"clarify": "which_project", "options": ["There is one issue in acme/notes"]},
+     "clarify option 'There is one issue in acme/notes' is not a project id"),
 ])
-def test_plain_clarifying_questions_still_pass(question: str) -> None:
-    assert grounding.parse_reply(json.dumps({"clarify": question}), Q) == grounding.Clarify(question)
+def test_clarifications_outside_the_schema_are_refused(reply: dict[str, object], reason: str) -> None:
+    assert grounding.parse_reply(json.dumps(reply), Q) == grounding.Rejection(reason)
+
+
+@pytest.mark.parametrize("kind", ["which_feature", "which_project", "which_period", "rephrase"])
+def test_each_clarify_kind_shows_the_servers_own_sentence(store: Path, kind: str) -> None:
+    a = _chat(store, FakeModel(json.dumps({"clarify": kind}))).ask("How is it going?", OPERATOR)
+    assert a.kind == "clarify"
+    assert a.text == answers.CLARIFY_QUESTIONS[kind] == {
+        "which_feature": "Which feature do you mean, by its name or its code on the Features page?",
+        "which_project": "Which project do you mean?",
+        "which_period": "Which dates do you mean, such as this week, last week or last month?",
+        "rephrase": "Could you ask that another way, naming the feature or the project?",
+    }[kind]
+    assert _sentences(a.text) == 1 and a.text.endswith("?")
+    assert a.follow_up == FollowUp("How is it going?", a.text)
+
+
+def test_clarify_options_are_labelled_from_the_records(store: Path) -> None:
+    feature = _chat(store, FakeModel('{"clarify": "which_feature", "options": ["feat-0006", "FEAT-0007"]}'))
+    a = feature.ask("How is the export going?", OPERATOR)
+    assert a.kind == "clarify"
+    assert a.text == ("Which feature do you mean: Export notes as a file (FEAT-0006); "
+                      "or Export notes as a file (FEAT-0007)?")
+    assert [r.href for r in a.refs] == ["/features/FEAT-0006", "/features/FEAT-0007"]
+    project = _chat(store, FakeModel('{"clarify": "which_project", "options": ["other/notes", "acme/notes"]}'))
+    b = project.ask("How is notes doing?", OPERATOR)
+    assert b.text == "Which project do you mean: other/notes; or acme/notes?"
+    assert [r.href for r in b.refs] == ["/projects/other/notes", "/projects/acme/notes"]
+
+
+@pytest.mark.parametrize("reply", [
+    '{"clarify": "which_feature", "options": ["FEAT-0001", "FEAT-9999"]}',   # no such feature
+    '{"clarify": "which_feature", "options": ["FEAT-c2"]}',                  # a request id, not a code
+    '{"clarify": "which_project", "options": ["acme/notes", "nobody/nothing"]}',
+    '{"clarify": "which_project", "options": ["acme/NOTES"]}',
+])
+def test_clarify_options_not_on_record_are_refused(store: Path, reply: str,
+                                                   caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("INFO", logger="factory_dashboard.chat"):
+        a = _chat(store, FakeModel(reply)).ask("Which one?", OPERATOR)
+    assert (a.kind, a.text, a.refs) == ("refused", answers.CANT_ANSWER, REFUSAL_REFS)
+    assert "a clarify option is not on record" in caplog.text
 
 
 def test_queries_for_a_client_tenant_are_none() -> None:
@@ -504,10 +523,47 @@ def test_a_question_outside_the_records_is_refused(store: Path) -> None:
     assert (a.kind, a.text) == ("refused", answers.CANT_ANSWER)
 
 
+def _sentences(text: str) -> int:
+    """How many sentences: full stops, question and exclamation marks that end one."""
+    return len(re.findall(r"[.?!](?:\s|$)", text))
+
+
+_FAILURE_WORDING = {
+    "TIMED_OUT": (llm.TIMED_OUT, "The factory's model took too long to answer, so I stopped and you can try again "
+                                 "in a minute."),
+    "UNREACHABLE": (llm.UNREACHABLE, "I couldn't reach the factory's model just now, but the pages still show "
+                                     "everything."),
+    "REFUSED": (llm.REFUSED, "The factory's model turned down the chat's request, but the pages still show "
+                             "everything."),
+    "UNREADABLE": (llm.UNREADABLE, "The factory's model sent a reply too large to read, but the pages still show "
+                                   "everything."),
+    "NO_TIME_LEFT": (NO_TIME_LEFT, "That took too long, so I stopped and you can try again in a minute."),
+    "BUSY": (BUSY, "Another question is being answered just now, so please try again in a moment."),
+    "LIMITED": (LIMITED, "The chat has reached its limit of questions for this hour, which keeps the factory's "
+                         "model free for building, so please try again later."),
+    "STILL_UNCLEAR": (STILL_UNCLEAR, "I still can't tell what you mean, so try naming the feature or the project "
+                                     "as the Features page shows it."),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_FAILURE_WORDING))
+def test_each_failure_is_one_plain_sentence(name: str) -> None:
+    constant, wording = _FAILURE_WORDING[name]
+    assert constant == wording
+    assert _sentences(constant) == 1 and constant.endswith(".")
+
+
+def test_every_message_instead_of_an_answer_is_one_sentence() -> None:
+    for text in (service.NOT_SET_UP, service.OPERATORS_ONLY, service.EMPTY, service.TOO_LONG, service.READ_FAILED,
+                 answers.CANT_ANSWER, *(w for w, _ in _FAILURE_WORDING.values())):
+        assert _sentences(text) == 1, text
+
+
 def test_model_failures_say_why_in_one_sentence(store: Path) -> None:
-    for err in (llm.TIMED_OUT, llm.UNREACHABLE, llm.REFUSED):
+    for err in (llm.TIMED_OUT, llm.UNREACHABLE, llm.REFUSED, llm.UNREADABLE):
         a = _chat(store, FakeModel(llm.ModelError(err))).ask("What was delivered?", OPERATOR)
         assert (a.kind, a.text) == ("unavailable", err)
+        assert _sentences(a.text) == 1
 
 
 def test_not_switched_on_without_a_key(store: Path) -> None:
@@ -525,7 +581,7 @@ def test_a_client_tenant_gets_no_chat(store: Path) -> None:
 
 
 def test_clarify_then_answer_in_at_most_two_calls(store: Path) -> None:
-    model = FakeModel('{"clarify": "Which project do you mean?"}',
+    model = FakeModel('{"clarify": "which_project"}',
                       '{"query": "project_summary", "args": {"project": "acme/notes"}}')
     chat = _chat(store, model)
     first = chat.ask("How is the project doing?", OPERATOR)
@@ -536,11 +592,11 @@ def test_clarify_then_answer_in_at_most_two_calls(store: Path) -> None:
     assert len(model.calls) == 2
     turns = model.calls[1][0]
     assert [m["role"] for m in turns] == ["system", "user", "assistant", "user"]
-    assert json.loads(turns[2]["content"]) == {"clarify": "Which project do you mean?"}
+    assert turns[2]["content"] == "Which project do you mean?"     # the server's question, as shown
 
 
 def test_a_second_clarifying_question_ends_the_question(store: Path) -> None:
-    model = FakeModel('{"clarify": "Which project do you mean?"}', '{"clarify": "Which week do you mean?"}')
+    model = FakeModel('{"clarify": "which_project"}', '{"clarify": "which_period"}')
     chat = _chat(store, model)
     first = chat.ask("How is it going?", OPERATOR)
     second = chat.ask("that one", OPERATOR, follow_up=first.follow_up)
@@ -657,6 +713,100 @@ def test_call_failures_become_one_sentence(handler: Callable[[httpx.Request], ht
     with pytest.raises(llm.ModelError) as err:
         _litellm(handler).complete([], timeout=5)
     assert err.value.sentence == sentence
+    assert _sentences(err.value.sentence) == 1
+
+
+class _Trickle(httpx.SyncByteStream):
+    """A reply that arrives a few bytes at a time, each chunk `step` seconds of a fake clock apart."""
+
+    def __init__(self, clock: list[float], step: float, chunks: int = 100, size: int = 8) -> None:
+        self.clock, self.step, self.chunks, self.size = clock, step, chunks, size
+        self.sent = 0
+
+    def __iter__(self) -> Iterator[bytes]:
+        for _ in range(self.chunks):
+            self.clock[0] += self.step
+            self.sent += 1
+            yield b" " * self.size
+
+
+def test_a_reply_trickling_past_the_deadline_is_stopped() -> None:
+    clock = [0.0]
+    stream = _Trickle(clock, step=10.0)       # each chunk well inside any per-read timeout
+    model = llm.LiteLLMChat("http://litellm.test", "test-key-not-real", clock=lambda: clock[0],
+                            transport=httpx.MockTransport(lambda r: httpx.Response(200, stream=stream)))
+    with pytest.raises(llm.ModelError) as err:
+        model.complete([], timeout=60)
+    assert err.value.sentence == llm.TIMED_OUT
+    assert stream.sent == 7                   # stopped at the first chunk past 60 seconds, not at the end
+    assert clock[0] == 70.0
+
+
+def test_a_reply_larger_than_the_cap_is_stopped() -> None:
+    stream = _Trickle([0.0], step=0.0, chunks=1000, size=1024)
+    model = _litellm(lambda r: httpx.Response(200, stream=stream))
+    with pytest.raises(llm.ModelError) as err:
+        model.complete([], timeout=60)
+    assert err.value.sentence == llm.UNREADABLE
+    assert stream.sent == llm.MAX_REPLY_BYTES // 1024 + 1
+
+
+class _SlowServer:
+    """A real HTTP server on loopback that sends its reply one byte every `gap` seconds for up to
+    `lasts` seconds and then hangs up: each byte arrives well inside the per-read timeout, and the
+    whole takes far longer than the chat's limit (the hang-up only stops a broken client waiting
+    forever)."""
+
+    def __init__(self, gap: float, lasts: float = 6.0) -> None:
+        stop = self.stop = threading.Event()
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", "100000")
+                self.end_headers()
+                until = time.monotonic() + lasts
+                try:
+                    while not stop.wait(gap) and time.monotonic() < until:
+                        self.wfile.write(b" ")
+                        self.wfile.flush()
+                except OSError:
+                    pass    # the client hung up, as it should
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def __enter__(self) -> _SlowServer:
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.stop.set()
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def test_a_slow_real_server_cannot_hold_the_chat_past_its_deadline(store: Path,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(service, "QUESTION_SECONDS", 1.0)
+    with _SlowServer(gap=0.1) as server:
+        model = llm.LiteLLMChat(server.url, "test-key-not-real")
+        chat = Chat(store, model, now=lambda: NOW)
+        started = time.monotonic()
+        a = chat.ask("What was delivered?", OPERATOR)
+        took = time.monotonic() - started
+        assert (a.kind, a.text) == ("unavailable", llm.TIMED_OUT)
+        assert 0.9 < took < 2.5, took          # the one-second limit, not the never-ending reply
+        # The one-at-a-time slot was given back: the next question is asked, not refused as busy.
+        again = chat.ask("And now?", OPERATOR)
+        assert again.text != BUSY and again.kind == "unavailable"
 
 
 def test_a_malformed_body_is_an_empty_reply_and_then_refused(store: Path) -> None:
@@ -716,7 +866,7 @@ def test_post_chat_without_scripts_returns_the_page(chat_client: tuple[TestClien
 
 def test_a_clarifying_answer_carries_a_reply_form(chat_client: tuple[TestClient, FakeModel]) -> None:
     client, model = chat_client
-    model.replies += ['{"clarify": "Which project do you mean?"}',
+    model.replies += ['{"clarify": "which_project"}',
                       '{"query": "project_summary", "args": {"project": "acme/notes"}}']
     r = client.post("/chat", data={"question": "How is the project?"}, headers=HX)
     assert 'name="prior_question" value="How is the project?"' in r.text
