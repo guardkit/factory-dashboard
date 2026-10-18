@@ -647,8 +647,41 @@ def test_every_voice_failure_is_one_sentence() -> None:
     for sentence in sentences:
         assert len(re.findall(r"[.!?](\s|$)", sentence)) == 1, sentence
     mic = (Path(__file__).resolve().parent.parent / "frontend" / "static" / "mic.js").read_text(encoding="utf-8")
-    words = re.findall(r'(?:error|offline|signin|failed): "([^"]+)"', mic)
+    words = re.findall(r'(?:error|offline|signin|failed|recorder): "([^"]+)"', mic)
     words += re.findall(r'set\("idle", "([^"]+)"\)', mic)
-    assert len(words) == 5
+    assert len(words) == 6
     for sentence in words:
         assert len(re.findall(r"[.!?](\s|$)", sentence)) == 1, sentence
+
+
+# --- Codex round 1 ------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("audio", "label"), [
+    (wav(60), "audio/webm"), (wav(60), "audio/mp4"), (wav(60), "audio/ogg"),
+    (ogg(45), "audio/webm;codecs=opus"), (ogg(45), "audio/mp4"), (ogg(45), "audio/wav"),
+], ids=["wav60-as-webm", "wav60-as-mp4", "wav60-as-ogg", "ogg45-as-webm", "ogg45-as-mp4", "ogg45-as-wav"])
+def test_a_mislabelled_long_recording_is_refused(world: tuple[TestClient, FakeModel, FakeSpeech],
+                                                 audio: bytes, label: str) -> None:
+    """The format comes from the bytes: a 60-second WAV (under 1 MB) or a 45-second Ogg labelled as
+    another family is refused, so the label cannot skip the length check."""
+    client, _, speech = world
+    assert len(audio) < voice.MAX_COMPRESSED_BYTES
+    r = _ask(client, audio, label)
+    assert r.status_code == 415 and r.json() == {"message": voice.NOT_AUDIO}
+    assert speech.requests == []
+
+
+def test_the_format_is_read_from_the_bytes() -> None:
+    mp4 = b"\x00\x00\x00\x18ftypM4A " + b"\x00" * 100
+    assert [voice.sniff(b) for b in (wav(1), ogg(1), WEBM, mp4, b"ID3\x04mp3", b"", b"RIFF")] == \
+        ["wav", "ogg", "webm", "m4a", None, None, None]
+    # unknown bytes under an accepted label, and a family mismatch, are both refused
+    assert voice.check_recording(b"ID3\x04" + b"\x00" * 100, "audio/webm") == (415, voice.NOT_AUDIO)
+    assert voice.check_recording(WEBM, "audio/ogg") == (415, voice.NOT_AUDIO)
+    assert voice.check_recording(mp4, "audio/webm") == (415, voice.NOT_AUDIO)
+    # within a family any of its labels will do; genuine short recordings pass
+    for audio, label in ((WEBM, "audio/webm;codecs=opus"), (mp4, "audio/mp4"), (mp4, "audio/x-m4a"),
+                         (wav(29), "audio/wav"), (wav(29), "audio/x-wav"), (ogg(29), "audio/ogg"),
+                         (ogg(29), "audio/opus")):
+        assert voice.check_recording(audio, label) is None, label

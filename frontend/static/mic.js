@@ -15,6 +15,7 @@
     error: "The microphone isn't working here, so allow it for this site and try again, or type your question.",
     offline: "Voice isn't available right now, so please type your question.",
     signin: "Please sign in again, then try the microphone.",
+    recorder: "This browser couldn't start recording, so please type your question instead.",
     failed: "Something went wrong sending your question, so please try again or type it."
   };
 
@@ -46,18 +47,23 @@
           return s.getTracks().forEach(function (t) { t.stop(); }); // let go first, or superseded
         }
         stream = s;
-        var type = TYPES.filter(function (t) { return w.MediaRecorder.isTypeSupported(t); })[0];
-        rec = new w.MediaRecorder(s, type ? { mimeType: type } : {});
-        chunks = [];
-        rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
-        rec.onstop = send;
-        rec.start();
-        timer = w.setTimeout(stop, MAX_MS);
+        try {
+          var type = TYPES.filter(function (t) { return w.MediaRecorder.isTypeSupported(t); })[0];
+          rec = new w.MediaRecorder(s, type ? { mimeType: type } : {});
+          chunks = [];
+          rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+          rec.onstop = send;
+          rec.start();
+          timer = w.setTimeout(stop, MAX_MS);
+        } catch (err) { // the recorder would not start: let the microphone go
+          w.clearTimeout(timer); timer = null; rec = null; close();
+          set("error", WORDS.recorder);
+        }
       }, function () { if (mine === asked) set("error"); });
     }
     function stop() {
       pressedAt = 0;
-      if (!rec) return set("idle");
+      if (!rec) { close(); return set("idle"); }
       if (rec.state === "recording") rec.stop();
     }
     function send() {

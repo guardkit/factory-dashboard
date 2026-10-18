@@ -38,6 +38,7 @@ def test_the_microphone_states_and_where_it_hides() -> None:
     assert results["question.ogg"] == "audio/ogg;codecs=opus" and results["question.mp4"] == "audio/mp4"
     assert results["signed_out"] == results["forbidden"] == results["bad_gateway"] == "error"
     assert results["overlapping_prompts"] == "one recording, both microphones closed"
-    assert len(results) == 20
+    assert results["recorder_throws"] == results["start_throws"] == "error, microphone released"
+    assert len(results) == 22
 
 

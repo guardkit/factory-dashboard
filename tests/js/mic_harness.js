@@ -40,14 +40,17 @@ function page() {
 function browser(opts = {}) {
   const w = { isSecureContext: opts.secure !== false, calls: [], timers: [], processed: 0, audios: [] };
   const supportedTypes = opts.types || ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"];
-  const stream = { stopped: 0, getTracks: () => [{ stop() { stream.stopped++; } }] };
+  const tracks = opts.tracks || 1;  // a stream's tracks, each counting its stop() into stream.stopped
+  const stream = { stopped: 0, getTracks: () => Array.from({ length: tracks }, () => ({ stop() { stream.stopped++; } })) };
   w.stream = stream;
   if (opts.recorder !== false) {
     w.MediaRecorder = class {
       static isTypeSupported(t) { return supportedTypes.includes(t); }
-      constructor(s, o) { this.mimeType = (o && o.mimeType) || ""; this.state = "inactive"; w.recorder = this;
+      constructor(s, o) {
+        if (opts.ctorThrows) throw new Error("NotSupportedError");
+        this.mimeType = (o && o.mimeType) || ""; this.state = "inactive"; w.recorder = this;
         w.recorders = (w.recorders || 0) + 1; }
-      start() { this.state = "recording"; }
+      start() { if (opts.startThrows) throw new Error("InvalidStateError"); this.state = "recording"; }
       stop() { this.state = "inactive"; this.ondataavailable({ data: new Blob(["sound"]) }); this.onstop(); }
     };
   }
@@ -252,6 +255,23 @@ const results = {};
     p.btn.fire("pointerdown"); await tick();
     assert.equal(state(p), "speaking"); assert.equal(streams[1].stopped, 1); assert.equal(w.calls.length, 1);
     results.overlapping_prompts = "one recording, both microphones closed";
+  }
+  // The recorder will not be made, or will not start, after the microphone opened: every track is
+  // stopped, the error state says so in one sentence, no 30-second timer is left, and it can try again.
+  for (const [opt, name] of [["ctorThrows", "recorder_throws"], ["startThrows", "start_throws"]]) {
+    const p = page(), w = browser({ [opt]: true, tracks: 2 });
+    mic.attach(w, p.panel);
+    p.btn.fire("pointerdown"); await tick();
+    assert.equal(state(p), "error", name);
+    assert.match(p.words.textContent, /couldn't start recording/, name);
+    assert.equal(w.stream.stopped, 2, name);           // both tracks
+    assert.equal(w.timers.length, 0, name);
+    clock += 1000; p.btn.fire("pointerup"); await tick();
+    assert.equal(state(p), "error", name);
+    p.btn.fire("pointerdown"); await tick();            // trying again asks for the microphone again
+    assert.equal(state(p), "error", name); assert.equal(w.stream.stopped, 4, name);
+    assert.equal(w.calls.length, 0, name);
+    results[name] = "error, microphone released";
   }
   // Let go before the microphone opened: nothing is recorded and the microphone is released.
   {

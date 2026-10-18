@@ -246,24 +246,45 @@ def base_type(content_type: str) -> str:
     return (content_type or "").split(";")[0].strip().lower()
 
 
+def sniff(audio: bytes) -> str | None:
+    """The recording's format from its own first bytes, never from its label: "wav" (RIFF....WAVE),
+    "ogg" (OggS), "webm" (the EBML header 1A 45 DF A3, as WebM and Matroska start) or "m4a" ("ftyp" at
+    offset 4, as MP4 starts). None for anything else."""
+    if audio[:4] == b"RIFF" and audio[8:12] == b"WAVE":
+        return "wav"
+    if audio[:4] == b"OggS":
+        return "ogg"
+    if audio[:4] == b"\x1a\x45\xdf\xa3":
+        return "webm"
+    if audio[4:8] == b"ftyp":
+        return "m4a"
+    return None
+
+
 def check_recording(audio: bytes, content_type: str) -> tuple[int, str] | None:  # noqa: PLR0911 (one per refusal)
-    """(status, sentence) when the recording is refused, else None. A WAV or Ogg recording must say its
-    length, and one that cannot be read is refused (415). Chrome's webm and Safari's mp4 do not say, so for
-    those the browser's 30-second stop and the 1 MB limit (about a minute even at 128 kbps) bound it."""
+    """(status, sentence) when the recording is refused, else None.
+
+    The format is worked out from the bytes (`sniff`), and must be one the dashboard accepts and the same
+    family as the label (webm, ogg/opus, mp4/m4a, wav), or the recording is refused (415). Both rules,
+    because the label then decides nothing: the size limit and the length check follow the bytes, and the
+    speech-to-text model is sent a file name that matches what it will decode. A browser's own recordings
+    always agree with their labels, so a disagreement is a mistake or a way round the length check.
+    A WAV or Ogg recording must say its length, and one that cannot be read is refused (415). Chrome's
+    webm and Safari's mp4 do not say, so for those the browser's 30-second stop and the 1 MB limit (about a
+    minute even at 128 kbps) bound it."""
     kind = base_type(content_type)
     if kind not in ACCEPTED_TYPES:
         return 415, NOT_AUDIO
     if not audio:
         return 400, NO_RECORDING
-    is_wav = ACCEPTED_TYPES[kind].endswith(".wav")
-    if len(audio) > (MAX_WAV_BYTES if is_wav else MAX_COMPRESSED_BYTES):
+    found = sniff(audio)
+    if found is None or not ACCEPTED_TYPES[kind].endswith("." + found):
+        return 415, NOT_AUDIO
+    if len(audio) > (MAX_WAV_BYTES if found == "wav" else MAX_COMPRESSED_BYTES):
         return 413, TOO_BIG
-    if is_wav:
-        seconds = wav_seconds(audio)
-    elif kind in ("audio/ogg", "audio/opus"):
-        seconds = ogg_seconds(audio)
-    else:
+    if found in ("webm", "m4a"):
         return None
+    seconds = wav_seconds(audio) if found == "wav" else ogg_seconds(audio)
     if seconds is None:
         return 415, NOT_AUDIO
     if seconds > MAX_SECONDS + 0.5:
