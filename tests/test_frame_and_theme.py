@@ -209,11 +209,18 @@ def test_no_temporary_chat_style_block_left() -> None:
     assert "chat (Part D)" not in css
 
 
-def test_chat_heights_subtract_the_banners_that_are_showing() -> None:
+def test_chat_fits_the_screen_whatever_banners_show() -> None:
     """ai-transition-c8's Part E browser test: with the stale banner showing, the drawer's microphone
-    fell 30px below the fold. Every chat height now subtracts the visible banners."""
+    fell below the fold. The drawer (1600px and wider, one-line banners) subtracts the banners that
+    show; the /chat page computes no height at all: it is one screen tall and the panel takes the rest
+    (Codex review of the fix: a wrapped banner on a narrow phone, and a minimum height on short screens)."""
     css = (Path(__file__).resolve().parent.parent / "frontend" / "static" / "style.css").read_text(encoding="utf-8")
-    assert '--banner-stack: calc(var(--banner-a, 0px) + var(--banner-b, 0px) + var(--banner-c, 0px))' in css
+    assert "--banner-stack: calc(var(--banner-a, 0px) + var(--banner-b, 0px) + var(--banner-c, 0px))" in css
     assert 'body:has(.banner-slot .banner--stale:not([data-feed="cost"])) { --banner-a: var(--banner-line); }' in css
     heights = re.findall(r"height: calc\(100d?vh - [^;]*var\(--readline-height\)[^;]*\);", css)
-    assert len(heights) == 6 and all("var(--banner-stack, 0px)" in h for h in heights), heights
+    assert len(heights) == 2 and all("var(--banner-stack, 0px)" in h for h in heights), heights  # the drawer only
+    page = css[css.index("/* The /chat page:"):]
+    page = page[: page.index("/* One question and its answer")]
+    assert "body:has(.content > .chat) { height: 100vh; height: 100dvh;" in page
+    assert "calc(" not in page and "min-height: 420px" not in page
+    assert ".content > .chat > .chat__form, .content > .chat .chat-voice { flex: none; }" in page
