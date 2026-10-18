@@ -173,3 +173,21 @@ def test_waiting_for_a_person_is_purple_in_the_journey() -> None:
         r"([^{}]*)\{[^}]*background: var\(--status-wait-tint\); border-color: var\(--status-wait\)", STYLE)
     assert purple is not None
     assert ".journey-station--waiting .journey-station__glyph" in purple.group(1)
+
+
+# --- Codex round 1, R2: old data is marked, never faded below readable contrast -----------------
+
+
+def test_stale_cards_keep_their_text_at_full_contrast() -> None:
+    """Opacity on a stale card took dim text to about 2.5:1. Staleness is the lagging note and an
+    amber bar; text is never faded. The only opacity below 1 left is on disabled buttons (exempt
+    from contrast rules) and the chat's animated dots (decoration, not text)."""
+    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", STYLE)
+    for selector, body in rules:
+        found = re.search(r"opacity:\s*([\d.]+)", body)
+        if not found or float(found.group(1)) >= 1:
+            continue
+        sel = selector.strip()
+        assert "state-lagging" not in sel and "--closed" not in sel, sel
+        assert re.fullmatch(r"[\d%,\s]+|from|to", sel) or "[disabled]" in sel, sel
+    assert any("state-lagging" in sel and "var(--status-risk)" in body for sel, body in rules)

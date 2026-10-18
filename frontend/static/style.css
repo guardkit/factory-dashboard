@@ -522,8 +522,13 @@ a.feature-title:hover { text-decoration: underline; }
   .panel-card { transition: background-color 0.6s ease-out; }
 }
 
-/* A card whose data is old: the content dims, the lagging note stays readable. */
-.state-lagging .panel-card__body > :not(.lagging-note) { opacity: 0.6; }
+/* A card whose data is old: the lagging note (the amber badge) says so, and an amber bar runs down
+   the card's left edge. The content keeps its full contrast: fading it with opacity took dim text
+   below 4.5:1. The bar overlays the edge, so a flush table does not move. */
+.panel-card.state-lagging::before, .state-lagging > .panel-card::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; z-index: 1;
+  width: var(--accent-bar); background: var(--status-risk);
+}
 
 /* ==== layout grids ==== */
 
