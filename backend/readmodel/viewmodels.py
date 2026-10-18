@@ -103,6 +103,19 @@ class SpendSlot:
         return self.label
 
     @property
+    def calls_text(self) -> str:
+        """Model calls for a table cell: "312", or "—" when the cost is not measured."""
+        return str(self.calls) if self.measured and self.calls is not None else "—"
+
+    @property
+    def tokens_in_text(self) -> str:
+        return fmt_tokens(self.tokens_in) if self.measured and self.tokens_in is not None else "—"
+
+    @property
+    def tokens_out_text(self) -> str:
+        return fmt_tokens(self.tokens_out) if self.measured and self.tokens_out is not None else "—"
+
+    @property
     def detail(self) -> str:
         """Calls and tokens: "312 model calls, 13.4 M tokens in, 183 k tokens out"."""
         if self.calls is None or not self.measured:
@@ -434,6 +447,7 @@ class ProjectView:
     weeks: tuple[WeekRow, ...] = ()                          # newest first
     spend_week: SpendSlot = field(default_factory=SpendSlot)  # this week's tagged calls
     untagged_note: str = ""      # how much factory-wide usage had no feature tag this week
+    features_total: int = 0      # every feature of the project on record
 
 
 # --- weekly report ------------------------------------------------------------------------------
@@ -466,7 +480,9 @@ class ReportHeadline:
     withheld: bool = False
     withheld_since: str = ""
     waiting: TimeSlot = field(default_factory=TimeSlot)       # time of the features delivered in the window
-    factory_usage: SpendSlot = field(default_factory=SpendSlot)  # every call in the window, tagged or not
+    # Every call in the window, tagged or not: only on the operator's whole-factory report (None on a
+    # client-scoped report, which shows nothing outside its own projects).
+    factory_usage: SpendSlot | None = None
 
 
 @dataclass(frozen=True)

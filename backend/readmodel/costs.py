@@ -92,11 +92,12 @@ class Totals:
     cost: float = 0.0           # nominal USD, priced calls only
     estimated: int = 0          # calls priced here from tokens (LiteLLM recorded no spend)
     unpriced: int = 0           # calls with tokens on a model that has no price
+    priced: int = 0             # calls with a cost: LiteLLM's spend or estimated (failed or not)
 
     def __add__(self, other: Totals) -> Totals:
         return Totals(self.calls + other.calls, self.failed + other.failed, self.tokens_in + other.tokens_in,
                       self.tokens_out + other.tokens_out, self.cost + other.cost,
-                      self.estimated + other.estimated, self.unpriced + other.unpriced)
+                      self.estimated + other.estimated, self.unpriced + other.unpriced, self.priced + other.priced)
 
 
 def _sum(items: Iterable[Totals]) -> Totals:
@@ -107,7 +108,8 @@ def _sum(items: Iterable[Totals]) -> Totals:
 
 
 _AGG = ("COUNT(*), SUM(status = 'failure'), SUM(prompt_tokens), SUM(completion_tokens), "
-        "SUM(COALESCE(cost_usd, 0)), SUM(cost_basis = 'estimated'), SUM(cost_basis = 'not priced')")
+        "SUM(COALESCE(cost_usd, 0)), SUM(cost_basis = 'estimated'), SUM(cost_basis = 'not priced'), "
+        "SUM(cost_basis IN ('litellm', 'estimated'))")
 
 
 def _totals(row: tuple[object, ...]) -> Totals:
@@ -116,7 +118,7 @@ def _totals(row: tuple[object, ...]) -> Totals:
 
     c = row[4]
     return Totals(i(row[0]), i(row[1]), i(row[2]), i(row[3]), float(c) if isinstance(c, int | float) else 0.0,
-                  i(row[5]), i(row[6]))
+                  i(row[5]), i(row[6]), i(row[7]))
 
 
 def window_totals(conn: sqlite3.Connection, lo: datetime, hi: datetime, *, tagged_only: bool = False) -> Totals:
@@ -183,15 +185,21 @@ class CostBook:
                       estimated_calls=t.estimated, unpriced_calls=t.unpriced, scope=scope)
         if t.calls == 0:
             return vm.SpendSlot(state="measured", label="No model calls recorded", amount_usd=0.0, **common)  # type: ignore[arg-type]
-        if t.unpriced and t.unpriced == t.calls - t.failed:
-            return vm.SpendSlot(state="not_measured", label="Not measured",
-                                reason="These calls were made on a model with no price in the list.", **common)  # type: ignore[arg-type]
-        reason = ""
+        # Availability comes from pricing coverage, whether or not a call failed: a figure when any
+        # call has a cost, "not measured" when calls used tokens and none of them has a price, and
+        # unpriced calls are always disclosed. Calls that used no tokens cost nothing.
+        unpriced = ""
         if t.unpriced:
             verb, rest = ("was", "it is") if t.unpriced == 1 else ("were", "they are")
-            reason = f"{t.unpriced} of these calls {verb} on a model with no price, so {rest} not counted."
+            unpriced = f"{t.unpriced} of these calls {verb} on a model with no price, so {rest} not counted."
+        if t.priced == 0 and t.unpriced:
+            return vm.SpendSlot(state="not_measured", label="Not measured",
+                                reason=f"None of these calls has a price. {unpriced}", **common)  # type: ignore[arg-type]
+        if t.priced == 0:
+            return vm.SpendSlot(state="measured", value=vm.fmt_usd(0.0), label="nominal", amount_usd=0.0,
+                                reason="None of these calls used any tokens.", **common)  # type: ignore[arg-type]
         return vm.SpendSlot(state="measured", value=vm.fmt_usd(t.cost), label="nominal", amount_usd=t.cost,
-                            estimated=t.estimated > 0, reason=reason, **common)  # type: ignore[arg-type]
+                            estimated=t.estimated > 0, reason=unpriced, **common)  # type: ignore[arg-type]
 
     def tagging_started(self) -> datetime:
         return self.prices.tagging_started_at
@@ -258,7 +266,8 @@ def feature_calls(conn: sqlite3.Connection, f: Feature) -> list[Call]:
     marks = ", ".join("?" * len(tags))
     rows = conn.execute(
         f"SELECT feature_tag, started_at, 1, status = 'failure', prompt_tokens, completion_tokens, "
-        f"COALESCE(cost_usd, 0), cost_basis = 'estimated', cost_basis = 'not priced' "
+        f"COALESCE(cost_usd, 0), cost_basis = 'estimated', cost_basis = 'not priced', "
+        f"cost_basis IN ('litellm', 'estimated') "
         f"FROM spend_calls WHERE feature_tag IN ({marks}) ORDER BY started_at", tags).fetchall()
     return [Call(str(r[0]), _parse_stamp(str(r[1])), _totals(r[2:])) for r in rows]
 

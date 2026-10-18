@@ -77,9 +77,10 @@
 {%- else %}{{ icon('slash') }}{{ s.label if s.label is defined and s.label else 'Not measured' }}{% endif %}
 {%- endmacro %}
 
-{# A spend tile's sub line: nominal and its price source, the reason, the stale label. #}
+{# A spend tile's sub line: the dated price source ("Nominal: OpenRouter price for … on 17 Oct
+   2026"), the estimate, the reason, the stale label. #}
 {% macro spend_sub(s) -%}
-{%- if s.value %}Nominal{% if s.estimated %}, part estimated from tokens{% endif %}. {% endif %}
+{%- if s.value %}{{ s.price_label if s.price_label else 'Nominal' }}{% if s.estimated %}; part estimated from tokens{% endif %}. {% endif %}
 {%- if s.reason %}{{ s.reason }} {% endif %}
 {%- if s.stale %}({{ s.stale_text }}){% endif %}
 {%- endmacro %}
@@ -131,7 +132,7 @@
     <span class="build-row__band">{{ band_chip(r.band) }}</span>
     <span class="num build-row__elapsed">{{ r.elapsed }}</span>
     <span class="num build-row__cost">{{ spend_slot(r.spend, compact=True) }}</span>
-    <span class="build-row__phone-line">{{ r.elapsed }} · {% if r.spend.value %}{{ r.spend.value }} nominal{% elif r.spend.measured %}no model calls{% else %}cost {{ r.spend.label | lower }}{% endif %}</span>
+    <span class="build-row__phone-line">{{ r.elapsed }} · {{ spend_slot(r.spend) }}</span>
   </a></li>
   {% endfor %}
 </ul>

@@ -101,6 +101,18 @@
       <header class="panel-card__header"><h2 class="panel-card__title" id="cost-title">Cost</h2></header>
       <div class="panel-card__body">{{ m.spend_slot(page.spend) }}
         {% if page.spend.detail %}<p class="stat-tile__sub">{{ page.spend.detail }}. {{ page.spend.price_label }}.</p>{% endif %}
+        {% if page.cost_by_stage %}
+        <table class="dense-table">
+          <thead><tr><th scope="col">Stage</th><th scope="col" class="num">Model calls</th><th scope="col" class="num">Tokens in</th>
+            <th scope="col" class="num">Tokens out</th><th scope="col" class="num">Nominal cost</th></tr></thead>
+          <tbody>
+          {% for st in page.cost_by_stage %}
+            <tr><th scope="row">{{ st.label }}</th><td class="num">{{ st.spend.calls_text }}</td><td class="num">{{ st.spend.tokens_in_text }}</td>
+              <td class="num">{{ st.spend.tokens_out_text }}</td><td class="num">{{ m.spend_slot(st.spend) }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
         {% if page.time.measured %}<p class="stat-tile__sub">Elapsed {{ page.time.elapsed }}: machine {{ page.time.machine }}, waiting {{ page.time.waiting }}{% for w in page.time.waiting_parts %}{{ ' (' if loop.first else ', ' }}{{ w.label | lower }} {{ w.text }}{{ ')' if loop.last }}{% endfor %}.</p>{% elif page.time.reason %}<p class="stat-tile__sub"><span class="honest-badge honest-badge--not-measured">{{ m.icon('slash') }}Time not measured</span> {{ page.time.reason }}</p>{% endif %}
       </div>
     </section>

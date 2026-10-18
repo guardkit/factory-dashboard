@@ -862,7 +862,7 @@ def project_view(db_path: Path, project: str, now: datetime | None = None, *,
             time=sum_time(feature_time(f, now) for f in mine),
             weeks=project_weeks(conn, book, factory, project, now),
             spend_week=project_spend(book, factory, project, lo=cost.week_start(now)),
-            untagged_note=_untagged_note(conn, book, now),
+            untagged_note=_untagged_note(conn, book, now), features_total=len(mine),
         )
     finally:
         if owned:
@@ -951,7 +951,7 @@ def project_weeks(conn: sqlite3.Connection, book: CostBook, factory: Factory, pr
         untagged = cost.Totals(all_calls.calls - tagged.calls, all_calls.failed - tagged.failed,
                                all_calls.tokens_in - tagged.tokens_in, all_calls.tokens_out - tagged.tokens_out,
                                all_calls.cost - tagged.cost, all_calls.estimated - tagged.estimated,
-                               all_calls.unpriced - tagged.unpriced)
+                               all_calls.unpriced - tagged.unpriced, all_calls.priced - tagged.priced)
         local = vm.to_london(lo)
         rows.append(WeekRow(
             week_from=local.date().isoformat(), week_label=f"{local.day} {local.strftime('%b')}", sent=len(sent),
@@ -1228,7 +1228,8 @@ def weekly_report(
         delivered_count=len(delivered), in_flight_count=len(in_progress), behind_count=behind,
         on_target_count=on_target, ahead_count=ahead, spend=spend, withheld=stale, withheld_since=since,
         waiting=sum_time(feature_time(f, now) for f in delivered),
-        factory_usage=book.slot(cost.window_totals(conn, lo, min(hi, now + timedelta(seconds=1))), scope="factory"),
+        factory_usage=(book.slot(cost.window_totals(conn, lo, min(hi, now + timedelta(seconds=1))), scope="factory")
+                       if projects is None else None),
     )
     return WeeklyReport(
         chrome=page_chrome(conn, now), tenant_slug=tenant, tenant_display=_tenant_display(conn, tenant),

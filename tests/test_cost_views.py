@@ -187,7 +187,7 @@ def test_the_weekly_report_has_real_spend_and_time(store: Path) -> None:
         conn.close()
     h = report.headline
     assert h.spend.calls == 7 and h.spend.amount_usd == pytest.approx(C1 + MA)
-    assert h.factory_usage.calls == 8
+    assert h.factory_usage is not None and h.factory_usage.calls == 8   # the operator's whole-factory report
     assert h.waiting.measured and h.waiting.waiting_secs == pytest.approx(120)  # the delivered feature's 2 min
     assert report.delivered_rows[0].spend.amount_usd == pytest.approx(C1)
     assert report.delivered_rows[0].time.elapsed == "1 h 30 min"
@@ -442,7 +442,7 @@ def test_the_chat_summaries_read_on_the_answers_snapshot(store: Path) -> None:
         conn.execute("SELECT 1").fetchone()          # still open: a view given conn never closes it
     finally:
         conn.close()
-    assert (c.calls, c.cost_usd) == (5, pytest.approx(C1)) and t.elapsed_secs == 5400
+    assert c.calls == 5 and c.cost_usd == pytest.approx(C1) and t.elapsed_secs == 5400
 
 
 def test_a_clients_report_counts_only_its_own_projects(store: Path) -> None:
