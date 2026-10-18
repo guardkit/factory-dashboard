@@ -1,7 +1,12 @@
 """The chat's queries (design 2026-10-17, requirement 9): typed, read-only, over the pages' own read layer.
 
 Each query reads through `backend/readmodel/dbread.py`, the functions the pages render, so a page
-and an answer cannot disagree. Each returns a `Result`: plain fields (every figure already worked
+and an answer cannot disagree. Each answer reads ONE snapshot of the store (`_with_store`, which
+opens `dbread.snapshot` and hands its `conn` to every view the answer uses), so a feed pass that
+commits halfway through cannot mix two moments in one answer. A new query follows the same
+pattern: `return _with_store(ctx, read)`, and every dbread view inside `read` gets `conn=conn`.
+
+Each returns a `Result`: plain fields (every figure already worked
 out and formatted as the page shows it) and references to the records (feature, project, issue,
 period) as links to the pages. The answer text is written from these fields by a fixed template
 (`backend/chat/answers.py`); the model never writes a figure, a status or a name.
@@ -25,7 +30,6 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
-from backend import db
 from backend.readmodel import dbread
 from backend.readmodel import viewmodels as vm
 from backend.readmodel.factory import STATIONS, Factory, Feature, load_factory
@@ -291,17 +295,21 @@ def _bad_period(query: str, text: str | None) -> Result:
 # --- shared helpers -------------------------------------------------------------------------------------
 
 
-def _with_store(ctx: Context, read: Callable[[sqlite3.Connection, Factory], Result]) -> Result:
-    conn = db.connect_ro(ctx.db_path)
+def _with_store[T](ctx: Context, read: Callable[[sqlite3.Connection, Factory], T]) -> T:
+    """Run one answer's reads on ONE read snapshot of the store (`dbread.snapshot`): the names it
+    resolves, its rows, its counts and its freshness note all see the store as it was at the same
+    moment, even if a feed pass commits halfway through. Every page view the answer uses must be
+    given this `conn`, never open its own (a view without `conn` reads a newer snapshot)."""
+    conn = dbread.snapshot(ctx.db_path)
     try:
         return read(conn, load_factory(conn, ctx.now))
     finally:
         conn.close()
 
 
-def _stale_note(ctx: Context) -> str:
+def _stale_note(ctx: Context, conn: sqlite3.Connection) -> str:
     """The page's own stale-data banner, word for word, or "" when the record is fresh."""
-    chrome = dbread.chrome_view(ctx.db_path, ctx.now)
+    chrome = dbread.chrome_view(ctx.db_path, ctx.now, conn=conn)
     return chrome.banner.text if chrome.banner else ""
 
 
@@ -342,7 +350,7 @@ def clarify_options(ctx: Context, kind: str, ids: Iterable[str]) -> tuple[Ref, .
     order given; None when any of them is not on record (the model named one that does not exist)."""
     ids = tuple(ids)
 
-    def read(_conn: sqlite3.Connection, factory: Factory) -> tuple[Ref, ...] | None:
+    def read(conn: sqlite3.Connection, factory: Factory) -> tuple[Ref, ...] | None:
         refs: list[Ref] = []
         known = projects_on_record(factory)
         for wanted in ids:
@@ -357,11 +365,7 @@ def clarify_options(ctx: Context, kind: str, ids: Iterable[str]) -> tuple[Ref, .
                 return None
         return tuple(refs)
 
-    conn = db.connect_ro(ctx.db_path)
-    try:
-        return read(conn, load_factory(conn, ctx.now))
-    finally:
-        conn.close()
+    return _with_store(ctx, read)
 
 
 # --- the queries ---------------------------------------------------------------------------------------
@@ -370,7 +374,7 @@ def clarify_options(ctx: Context, kind: str, ids: Iterable[str]) -> tuple[Ref, .
 def feature_status(ctx: Context, feature: str) -> Result:
     """Where one feature stands, as its page shows it."""
 
-    def read(_conn: sqlite3.Connection, factory: Factory) -> Result:
+    def read(conn: sqlite3.Connection, factory: Factory) -> Result:
         found = find_features(factory, feature)
         if not found:
             close = suggest_features(factory, feature)
@@ -383,7 +387,7 @@ def feature_status(ctx: Context, feature: str) -> Result:
             return _ambiguous("feature_status", "feature", feature,
                               (Ref("feature", f"{_label(f)}, sent {_sent(f, ctx.now)}", f.link) for f in found))
         f = found[0]
-        page = dbread.feature_page(ctx.db_path, f.key, ctx.now)
+        page = dbread.feature_page(ctx.db_path, f.key, ctx.now, conn=conn)
         assert page is not None
         _chrome, fp = page
         open_issues = [i for i in fp.issues if not i.closed_label]
@@ -396,7 +400,7 @@ def feature_status(ctx: Context, feature: str) -> Result:
             "delivered_on": dbread.delivered_row(f).delivered_date if f.delivered_at else "",
             "mission_line": fp.mission_line,
             "open_issues": [f"{i.kind}: {i.detail}" if i.detail else i.kind for i in open_issues],
-            "cost": fp.spend.text, "stale_note": _stale_note(ctx),
+            "cost": fp.spend.text, "stale_note": _stale_note(ctx, conn),
         }
         refs = [_feature_ref(f)]
         if fp.project:
@@ -430,7 +434,7 @@ def project_summary(ctx: Context, project: str, period: str | None = None) -> Re
         name, problem = _resolve_project("project_summary", factory, project)
         if problem is not None or name is None:
             return problem or Result("project_summary", "not_found", {"kind": "project", "name": project})
-        view = dbread.project_view(ctx.db_path, name, ctx.now)
+        view = dbread.project_view(ctx.db_path, name, ctx.now, conn=conn)
         fields: dict[str, object] = {
             "project": name, "in_progress": str(view.in_progress), "delivered_7d": str(view.delivered_7d),
             # The project page's own total: the listed open issues and the older unresolved failures
@@ -438,7 +442,7 @@ def project_summary(ctx: Context, project: str, period: str | None = None) -> Re
             "delivered_total": str(view.delivered_total), "open_issue_count": str(view.open_issues_total),
             "open_issues": [f"{i.kind}: {i.subject}" for i in view.issues[:MAX_LISTED]],
             "more_issues": str(max(0, len(view.issues) - MAX_LISTED)), "hidden_line": view.hidden_line,
-            "cost": view.spend.text, "period_label": "", "period_delivered": "", "stale_note": _stale_note(ctx),
+            "cost": view.spend.text, "period_label": "", "period_delivered": "", "stale_note": _stale_note(ctx, conn),
         }
         refs = [_project_ref(name)]
         if view.hidden_line:
@@ -456,25 +460,25 @@ def project_summary(ctx: Context, project: str, period: str | None = None) -> Re
 def open_issues(ctx: Context, project: str | None = None) -> Result:
     """The open issues, as the Issues page lists them, optionally for one project."""
 
-    def read(_conn: sqlite3.Connection, factory: Factory) -> Result:
+    def read(conn: sqlite3.Connection, factory: Factory) -> Result:
         name, problem = _resolve_project("open_issues", factory, project)
         if problem is not None:
             return problem
-        view = dbread.issues_view(ctx.db_path, ctx.now)
+        view = dbread.issues_view(ctx.db_path, ctx.now, conn=conn)
         rows = [r for r in view.open_rows if name is None or r.project == name]
         # The total counts the older unresolved failures the 14-day cut-off leaves out of the list,
         # as the pages do: the Issues page's count for every project, the project page's for one.
         if name is None:
             total, hidden = len(rows) + view.hidden_count, view.hidden_line
         else:
-            pv = dbread.project_view(ctx.db_path, name, ctx.now)
+            pv = dbread.project_view(ctx.db_path, name, ctx.now, conn=conn)
             total, hidden = pv.open_issues_total, pv.hidden_line
         shown = rows[:MAX_LISTED]
         fields: dict[str, object] = {
             "project": name or "", "count": str(total), "more": str(len(rows) - len(shown)),
             "rows": [{"kind": r.kind, "subject": r.subject, "detail": r.detail, "age": r.age,
                       "how_serious": r.band.label} for r in shown],
-            "hidden_line": hidden, "stale_note": _stale_note(ctx),
+            "hidden_line": hidden, "stale_note": _stale_note(ctx, conn),
         }
         refs = [Ref("issue", f"{r.kind}: {r.subject}" if r.subject else r.kind, r.link) for r in shown]
         refs.append(_project_ref(name) if name else PAGES["issues"])
@@ -491,11 +495,11 @@ def delivered(ctx: Context, period: str | None = None, project: str | None = Non
     if p is None:
         return _bad_period("delivered", period)
 
-    def read(_conn: sqlite3.Connection, factory: Factory) -> Result:
+    def read(conn: sqlite3.Connection, factory: Factory) -> Result:
         name, problem = _resolve_project("delivered", factory, project)
         if problem is not None:
             return problem
-        panel = dbread.delivered_view(ctx.db_path, p.window, ctx.now).panel
+        panel = dbread.delivered_view(ctx.db_path, p.window, ctx.now, conn=conn).panel
         rows = [r for r in panel.rows if name is None or r.project == name]
         shown = rows[:MAX_LISTED * 2]
         fields: dict[str, object] = {
@@ -505,7 +509,7 @@ def delivered(ctx: Context, period: str | None = None, project: str | None = Non
                      for r in shown],
             # Factory-wide, so only when no project was asked for.
             "other_endings": "" if name else panel.other_endings,
-            "stale_note": _stale_note(ctx),
+            "stale_note": _stale_note(ctx, conn),
         }
         refs = [Ref("feature", title_with_code(r.title, r.code), r.link) for r in shown]
         refs.append(_period_ref(p, "delivered"))
@@ -525,11 +529,11 @@ def weekly_report(ctx: Context, period: str | None = None, project: str | None =
     if p is None:
         return _bad_period("weekly_report", period)
 
-    def read(_conn: sqlite3.Connection, factory: Factory) -> Result:
+    def read(conn: sqlite3.Connection, factory: Factory) -> Result:
         name, problem = _resolve_project("weekly_report", factory, project)
         if problem is not None:
             return problem
-        report = dbread.weekly_report_view(ctx.db_path, "operator", p.window, ctx.now)
+        report = dbread.weekly_report_view(ctx.db_path, "operator", p.window, ctx.now, conn=conn)
         h = report.headline
         delivered_rows = [r for r in report.delivered_rows if name is None or r.project == name]
         in_flight_rows = [r for r in report.in_flight_rows if name is None or r.project == name]

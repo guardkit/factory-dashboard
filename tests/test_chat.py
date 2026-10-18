@@ -32,7 +32,10 @@ from backend.chat.service import (
     FollowUp,
     HourlyLimit,
 )
+from backend.projector.forge_mirror import mirror_once
+from backend.projector.store import open_rw
 from backend.readmodel import dbread
+from backend.readmodel.factory import Factory, Feature
 from starlette.testclient import TestClient
 
 from tests import forge_fake
@@ -335,6 +338,85 @@ def test_periods() -> None:
     assert tools.resolve_period("2026-10-03 to 2026-10-01", NOW) is None
     assert tools.resolve_period("2026-13-40", NOW) is None
     assert tools.resolve_period("whenever", NOW) is None
+
+
+# --- one read snapshot per answer (Codex round 3, R5) ------------------------------------------------
+
+
+def _two_failures(tmp_path: Path) -> tuple[Path, ForgeFake]:
+    """acme/notes has two failed builds and nothing else: two open issues."""
+    fake = ForgeFake(tmp_path / "forge.db")
+    fake.planning("a1", "Trim the titles.")
+    fake.build("ba1", "FEAT-00A1", "a1", status="FAILED", error="Tests failed.")
+    fake.planning("a2", "Sort the tags.")
+    fake.build("ba2", "FEAT-00A2", "a2", status="FAILED", error="Tests failed.")
+    store = tmp_path / "readmodel.db"
+    store_from(fake, store, now=NOW).close()
+    return store, fake
+
+
+def _feed_pass(store: Path, fake: ForgeFake, passes: list[bool]) -> None:
+    """The feed copying Forge's record into the store, committing now (as in tests/test_snapshot.py)."""
+    writer = open_rw(store)
+    try:
+        passes.append(mirror_once(writer, fake.path, NOW + timedelta(seconds=5)))
+    finally:
+        writer.close()
+
+
+def test_a_retry_starting_mid_answer_does_not_mix_two_moments(tmp_path: Path,
+                                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    store, fake = _two_failures(tmp_path)
+    ctx = tools.Context(store, NOW)
+    before = answers.render(tools.feature_status(ctx, "FEAT-00A1"))
+    assert "It stopped at the building step." in before
+    # Forge starts a retry of FEAT-00A1; the feed commits it after the answer has found the
+    # feature and before it reads the feature's page.
+    fake.build("ba1b", "FEAT-00A1", "a1", status="RUNNING", queued=235, started=235, completed=None)
+    passes: list[bool] = []
+    real_find = tools.find_features
+
+    def find_then_a_pass_commits(factory: Factory, name: str) -> list[Feature]:
+        found = real_find(factory, name)
+        if not passes:
+            _feed_pass(store, fake, passes)
+        return found
+
+    monkeypatch.setattr(tools, "find_features", find_then_a_pass_commits)
+    r = tools.feature_status(ctx, "FEAT-00A1")
+    assert passes == [True]
+    assert answers.render(r) == before                    # all from before the pass
+    assert r.fields["stopped"] == "yes" and r.fields["attempts"] == "1"
+    monkeypatch.setattr(tools, "find_features", real_find)
+    after = answers.render(tools.feature_status(ctx, "FEAT-00A1"))
+    assert "How far: building." in after and "stopped" not in after   # the pass did change the answer
+
+
+def test_an_issue_closing_mid_answer_keeps_count_and_rows_together(tmp_path: Path,
+                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    store, fake = _two_failures(tmp_path)
+    ctx = tools.Context(store, NOW)
+    assert tools.open_issues(ctx, "acme/notes").fields["count"] == "2"
+    # A retry of FEAT-00A1 closes its failure; the feed commits it after the Issues page's rows
+    # were read and before the project's total is.
+    fake.build("ba1b", "FEAT-00A1", "a1", status="RUNNING", queued=235, started=235, completed=None)
+    passes: list[bool] = []
+    real_issues = dbread.issues_view
+
+    def issues_then_a_pass_commits(*args: object, **kwargs: object) -> dbread.IssuesView:
+        view = real_issues(*args, **kwargs)  # type: ignore[arg-type]
+        if not passes:
+            _feed_pass(store, fake, passes)
+        return view
+
+    monkeypatch.setattr(dbread, "issues_view", issues_then_a_pass_commits)
+    r = tools.open_issues(ctx, "acme/notes")
+    assert passes == [True]
+    assert r.fields["count"] == "2" and len(_rows(r)) == 2
+    assert answers.render(r).startswith("There are 2 open issues in acme/notes: ")
+    monkeypatch.setattr(dbread, "issues_view", real_issues)
+    now_ = tools.open_issues(ctx, "acme/notes")
+    assert now_.fields["count"] == "1" and len(_rows(now_)) == 1          # the pass did close one
 
 
 # --- every template answer: no figure that is not a field ----------------------------------------------
