@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% import 'macros.html' as m %}
+{% block title %}Projects · Factory dashboard{% endblock %}
+{% block content %}
+<h1 class="page-title">Projects</h1>
+<section class="panel-card projects">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">Every project on record</h2>
+    {{ m.asof_chip(view.as_of, source='factory') }}
+  </header>
+  <div class="panel-card__body">
+    {% if view.rows %}
+    <table class="dense-table projects__table">
+      <thead>
+        <tr><th scope="col">Project</th><th scope="col">Features</th><th scope="col">In progress</th>
+          <th scope="col">Merged and checked</th><th scope="col">Open issues</th></tr>
+      </thead>
+      <tbody>
+      {% for r in view.rows %}
+        <tr class="project-row">
+          <td><a href="{{ r.link }}">{{ r.project }}</a></td>
+          <td class="num">{{ r.features }}</td>
+          <td class="num">{{ r.in_progress }}</td>
+          <td class="num">{{ r.delivered }}</td>
+          <td class="num">{{ r.open_issues }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="true-empty">No projects on record yet.</p>{% endif %}
+  </div>
+</section>
+{% endblock %}

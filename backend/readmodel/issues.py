@@ -8,9 +8,12 @@ Nothing here is written anywhere.
 Kinds (design requirement 7):
 - planning failed (with Forge's own sentence);
 - build failed, build cancelled;
-- merge check failed;
+- merge check failed, for a feature or for a mission's own merge into main (a mission's merge is
+  never a feature, an attempt or a delivery, but its failure is an issue of the mission);
 - waiting for a person (open waits, and closed waits that went past the green threshold);
-- stalled planning runs (no activity while running, past the green threshold).
+- stalled: a feature still in progress with nothing recorded for longer than its threshold (a
+  working planning run against the planning stall threshold; anything else against the longer
+  "nothing recorded" one). A stall never ends a feature; it stays in progress.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from backend.readmodel.factory import Build, Factory, Feature, Mission, Outcome, Wait, build_waits, first_sentence
-from backend.readmodel.norms import AMBER, GREEN, RED, Norms
+from backend.readmodel.norms import AMBER, GREEN, RED, Norms, quiet_spell
 
 #: Waiting kinds in plain words.
 WAIT_WORDS = {
@@ -80,6 +83,8 @@ def _wait_issues(waits: tuple[Wait, ...] | list[Wait], norms: Norms, now: dateti
 
 def _hours(seconds: float) -> str:
     m = int(seconds // 60)
+    if m >= 48 * 60:
+        return f"{m // 1440} days {m % 1440 // 60} h"
     return f"{m // 60} h {m % 60:02d} min" if m >= 60 else f"{m} min"
 
 
@@ -148,35 +153,59 @@ def find_issues(factory: Factory, norms: Norms, now: datetime) -> list[Issue]:
         stall = _stall_issue(f, norms, now)
         if stall is not None:
             issues.append(stall)
+    merges: dict[str, list[Build]] = {}
+    for b in reversed(factory.builds):  # oldest first
+        if b.is_mission_merge and b.mission_id:
+            merges.setdefault(b.mission_id, []).append(b)
     for m in factory.missions:
         if m.merge_build is not None:
             issues.extend(_wait_issues(build_waits(m.merge_build, is_latest=True), norms, now, mission=m))
+        issues.extend(_mission_merge_failures(m, merges.get(m.id, [])))
     issues.sort(key=lambda i: i.opened_at, reverse=True)
     return issues
 
 
+def _mission_merge_failures(m: Mission, merges: list[Build]) -> list[Issue]:
+    """A failed check of a mission's own merge into main, with Forge's recorded reason. It closes
+    when the merge is tried again (a later merge step, or a later merge build for the mission) or
+    the mission's merge passes. These rows stay out of every feature, attempt and delivery count."""
+    out: list[Issue] = []
+    for i, b in enumerate(merges):
+        nxt = merges[i + 1].queued_at if i + 1 < len(merges) else None
+        steps = [s for s in b.stages if s.stage_label == "merge-deploy"]
+        failed = [(j, s) for j, s in enumerate(steps) if s.status == "FAILED"]
+        for j, s in failed:
+            closed = steps[j + 1].at if j + 1 < len(steps) else nxt
+            text = s.details.get("detail") or s.details.get("failed_step") or ""
+            detail = first_sentence(str(text)) if text else "the merge step did not pass"
+            out.append(Issue("Merge check failed", RED, s.at, closed, detail, mission=m))
+        if not failed and b.status == "FAILED":
+            when = b.completed_at or b.queued_at or m.created_at or _EPOCH
+            detail = first_sentence(b.error) if b.error else "no reason recorded"
+            out.append(Issue("Merge check failed", RED, when, nxt, detail, mission=m))
+    return out
+
+
 def _stall_issue(f: Feature, norms: Norms, now: datetime) -> Issue | None:
-    if not f.in_progress or f.builds or f.open_wait() is not None or f.planning is None:
+    q = quiet_spell(f, norms, now)
+    if q is None or q.band == GREEN:
         return None
-    last = f.last_activity_at()
-    if last is None:
-        return None
-    quiet = (now - last).total_seconds() / 60
-    band = norms.stall_minutes.band(quiet)
-    if band == GREEN:
-        return None
-    return Issue("Stalled", band, last, None, f"no planning activity for {_hours(quiet * 60)}", feature=f)
+    what = "no planning activity" if q.planning else "nothing recorded"
+    return Issue("Stalled", q.band, q.since, None, f"{what} for {_hours(q.seconds)}", feature=f)
 
 
 def recent(
     issues: list[Issue], now: datetime, *, open_days: int = 14, closed_days: int = 7,
-) -> tuple[list[Issue], list[Issue]]:
-    """(open, recently closed). Open failures older than `open_days` with no later attempt are left
-    out (the page says so); waits and stalls that are open now are always listed."""
+) -> tuple[list[Issue], list[Issue], int]:
+    """(open, recently closed, how many old open failures were left out).
+
+    Open failures older than `open_days` with no later attempt are left out, and counted so the page
+    can say how many; waits and stalls that are open now are always listed, however old."""
     open_cut, closed_cut = now - timedelta(days=open_days), now - timedelta(days=closed_days)
     live_kinds = set(WAIT_WORDS.values()) | {"Stalled"}
     still_open = [i for i in issues if i.is_open and (i.kind in live_kinds or i.opened_at >= open_cut)]
+    hidden = sum(1 for i in issues if i.is_open and i.kind not in live_kinds and i.opened_at < open_cut)
     closed = [i for i in issues if i.closed_at is not None and i.closed_at >= closed_cut]
     still_open.sort(key=lambda i: ({RED: 0, AMBER: 1}.get(i.band, 2), -i.opened_at.timestamp()))
     closed.sort(key=lambda i: i.closed_at or now, reverse=True)
-    return still_open, closed
+    return still_open, closed, hidden

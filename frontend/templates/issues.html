@@ -4,6 +4,7 @@
 {% block content %}
 <h1 class="page-title">Issues</h1>
 <p class="page-lead">{{ view.note }}</p>
+{% if view.hidden_line %}<p class="page-lead issues-hidden">{{ view.hidden_line }}</p>{% endif %}
 
 {% macro issue_table(rows, closed=False) -%}
 <table class="dense-table issues__table">
@@ -29,7 +30,7 @@
 <section class="panel-card issues-open">
   <header class="panel-card__header">
     <h2 class="panel-card__title">Open ({{ view.open_rows | length }})</h2>
-    {{ m.asof_chip(view.chrome.read_as_of) }}
+    {{ m.asof_chip(view.chrome.read_as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
     {% if view.open_rows %}{{ issue_table(view.open_rows) }}{% else %}<p class="true-empty">No open issues.</p>{% endif %}

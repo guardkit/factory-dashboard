@@ -24,9 +24,9 @@ from typing import Any
 import yaml
 
 from backend.readmodel.factory import (
-    FAILURES,
     Factory,
     Feature,
+    Outcome,
     build_seconds,
     load_factory,
     planning_seconds,
@@ -67,6 +67,7 @@ class Norms:
     build_minutes: Band
     stall_minutes: Band
     waiting_hours: Band
+    quiet_hours: Band
 
     @property
     def source_line(self) -> str:
@@ -88,7 +89,7 @@ def load_norms(path: Path = NORMS_PATH) -> Norms:
         derived_on=str(raw["derived_on"]), window_days=int(raw["window_days"]),
         attempts=_band(raw, "attempts"), planning_minutes=_band(raw, "planning_minutes"),
         build_minutes=_band(raw, "build_minutes"), stall_minutes=_band(raw, "stall_minutes"),
-        waiting_hours=_band(raw, "waiting_hours"),
+        waiting_hours=_band(raw, "waiting_hours"), quiet_hours=_band(raw, "quiet_hours"),
     )
 
 
@@ -106,8 +107,8 @@ class Signal:
 
 @dataclass(frozen=True)
 class OnTrack:
-    band: str           # the worst measured band, or R when the factory itself failed
-    words: str          # "On track", "At risk", "Off track", "Not measured yet"
+    band: str           # the worst measured band; R for the factory's own failures; — otherwise
+    words: str          # "On track", "At risk", "Off track", "Not measured yet", or how it ended
     signals: tuple[Signal, ...]
     reason: str = ""    # one line: what drove the colour
 
@@ -117,6 +118,8 @@ _WORDS = {GREEN: "On track", AMBER: "At risk", RED: "Off track", GAP: "Not measu
 
 def _mins(seconds: float) -> str:
     m = round(seconds / 60)
+    if m >= 48 * 60:
+        return f"{m // 1440} days {m % 1440 // 60} h"
     return f"{m // 60} h {m % 60:02d} min" if m >= 60 else f"{m} min"
 
 
@@ -131,8 +134,10 @@ def on_track(f: Feature, norms: Norms, now: datetime) -> OnTrack:
 
     p = planning_seconds(f, now)
     if p is None:
-        signals.append(Signal("Planning time", "—", GAP, norms.planning_minutes.describe(),
-                              "no planning run: it was sent already planned"))
+        why = ("no planning run: it was sent already planned" if f.builds
+               else "planning never started" if f.planning is None
+               else "planning has not started yet")
+        signals.append(Signal("Planning time", "—", GAP, norms.planning_minutes.describe(), why))
     else:
         so_far = " so far" if f.planning and f.planning.active else ""
         signals.append(Signal("Planning time", _mins(p) + so_far, norms.planning_minutes.band(p / 60),
@@ -151,22 +156,76 @@ def on_track(f: Feature, norms: Norms, now: datetime) -> OnTrack:
 
     longest = max((w.seconds(now) for w in f.waits), default=None)
     if longest is None:
-        signals.append(Signal("Waiting for a person", "none", GREEN, norms.waiting_hours.describe(),
-                              "no approval wait recorded"))
+        # Never reached a gate: there was nothing to wait for, which is not the same as "no wait".
+        signals.append(Signal("Waiting for a person", "—", GAP, norms.waiting_hours.describe(),
+                              "never reached an approval gate"))
     else:
         current = f.open_wait()
         note = "waiting now" if current is not None else "the longest single wait"
         signals.append(Signal("Waiting for a person", _mins(longest), norms.waiting_hours.band(longest / 3600),
                               norms.waiting_hours.describe(), note))
 
+    sigs = tuple(signals)
+    # A feature that finished without being delivered is not "on track" or otherwise: say how it ended.
+    if f.outcome in OUTCOME_WORDS:
+        band, words = OUTCOME_WORDS[f.outcome]
+        return OnTrack(band, words, sigs, f.status_text)
     measured = [s for s in signals if s.band != GAP]
-    worst = max((s.band for s in measured), key=lambda b: _RANK[b], default=GAP)
+    if not measured:
+        return OnTrack(GAP, _WORDS[GAP], sigs, "nothing has been measured for this feature yet")
+    worst = max((s.band for s in measured), key=lambda b: _RANK[b])
     reason = ""
-    if f.outcome in FAILURES:
-        worst, reason = RED, f.status_text
-    elif worst in (AMBER, RED):
+    if worst in (AMBER, RED):
         reason = "; ".join(f"{s.name.lower()} {s.value}" for s in measured if s.band == worst)
-    return OnTrack(worst, _WORDS[worst], tuple(signals), reason)
+    return OnTrack(worst, _WORDS[worst], sigs, reason)
+
+
+#: Finished without being delivered: the outcome is shown in place of an on-track colour. The
+#: factory's own failures stay red; the rest (a person's decision, a cancellation, a clean-up) are
+#: shown without a colour, because they say nothing about whether the factory was on track.
+OUTCOME_WORDS: dict[Outcome, tuple[str, str]] = {
+    Outcome.BUILD_FAILED: (RED, "Build failed"),
+    Outcome.MERGE_FAILED: (RED, "Merge check failed"),
+    Outcome.PLANNING_FAILED: (RED, "Planning failed"),
+    Outcome.CANCELLED: (GAP, "Cancelled"),
+    Outcome.PLANNING_STOPPED: (GAP, "Planning stopped"),
+    Outcome.NOT_MERGED: (GAP, "Built, not merged"),
+    Outcome.MISSION_NOT_MERGED: (GAP, "Mission not merged"),
+    Outcome.BUILT_NO_MERGE: (GAP, "Built, no merge recorded"),
+    Outcome.STOPPED_IN_QUEUE: (GAP, "Stopped in the queue"),
+    Outcome.RETIRED: (GAP, "Retired"),
+    Outcome.NOTHING_TO_BUILD: (GAP, "Already done"),
+    Outcome.HANDED_OFF: (GAP, "Handed over"),
+}
+
+
+@dataclass(frozen=True)
+class Quiet:
+    """How long an unfinished feature has gone with nothing recorded, against its threshold."""
+
+    since: datetime
+    seconds: float
+    band: str
+    norm: Band
+    planning: bool      # True: a working planning run, measured against the planning stall threshold
+
+
+def quiet_spell(f: Feature, norms: Norms, now: datetime) -> Quiet | None:
+    """The silence since the last thing Forge recorded for a feature that is still in progress and
+    is not waiting for a person. A working planning run is measured against the planning stall
+    threshold; anything else (in the queue, waiting for its build, building, merging) against the
+    longer "nothing recorded" threshold, because Forge records nothing inside a build. A long
+    silence never ends a feature: it stays in progress, shown as stalled."""
+    if f.outcome is not Outcome.IN_PROGRESS or f.open_wait() is not None:
+        return None
+    last = f.last_activity_at()
+    if last is None:
+        return None
+    secs = max(0.0, (now - last).total_seconds())
+    run = f.planning
+    if not f.builds and run is not None and run.active and run.state != "QUEUED":
+        return Quiet(last, secs, norms.stall_minutes.band(secs / 60), norms.stall_minutes, True)
+    return Quiet(last, secs, norms.quiet_hours.band(secs / 3600), norms.quiet_hours, False)
 
 
 def _stall(f: Feature, norms: Norms, now: datetime) -> Signal:
@@ -175,15 +234,18 @@ def _stall(f: Feature, norms: Norms, now: datetime) -> Signal:
         return Signal(name, "—", GAP, norm, "finished")
     if f.open_wait() is not None:
         return Signal(name, "—", GAP, norm, "waiting for a person, not running")
+    q = quiet_spell(f, norms, now)
+    if q is not None and q.planning:
+        return Signal(name, _mins(q.seconds), q.band, q.norm.describe(), "since the last planning step")
+    if q is not None and q.band != GREEN:
+        return Signal(name, _mins(q.seconds), q.band, q.norm.describe(),
+                      "nothing at all recorded for this feature since then; it is still in progress in "
+                      "the factory's record")
     if f.builds:
         return Signal(name, "—", GAP, norm,
-                      "not measured during a build: Forge records nothing between a build's start and finish, "
+                      "not measured during a build: the factory records nothing between a build's start and finish, "
                       "so build time is the signal for a long build")
-    last = f.last_activity_at()
-    if last is None:
-        return Signal(name, "—", GAP, norm, "no activity recorded")
-    quiet = max(0.0, (now - last).total_seconds())
-    return Signal(name, _mins(quiet), norms.stall_minutes.band(quiet / 60), norm, "since the last planning step")
+    return Signal(name, "—", GAP, norm, "not running yet: waiting in the queue, for planning or for its build")
 
 
 # --- re-deriving the thresholds -----------------------------------------------------------------
@@ -260,6 +322,14 @@ def derive(factory: Factory, now: datetime, days: int = 14) -> dict[str, Any]:
             "green_max": 1, "amber_max": 4, "unit": "h",
             "how": "Kept from the July design (under 1 h normal, over 4 h needs chasing); waiting is a person's "
                    "time, not the factory's, so recent builds do not change it.",
+        },
+        "quiet_hours": {
+            "green_max": 4, "amber_max": 24, "unit": "h",
+            "how": f"For a feature still in progress that is not planning and not waiting for a person: how long "
+                   f"nothing at all has been recorded for it. Forge records nothing inside a build, and the "
+                   f"95th percentile build in the {days} days to {date} took {r(_pct(builds, 0.95))} min, so up "
+                   f"to 4 h of silence is normal and over a day the record has stopped moving. The feature "
+                   f"stays in progress, shown as stalled, until Forge records how it ended.",
         },
     }
 

@@ -91,7 +91,10 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
 /* ---- banner slot (§3 / §5.6) ------------------------------------------- */
 .banner-slot:empty { display: none; }
 .banner { padding: 8px 16px; font-weight: 600; }
-.banner--projector_stalled { background: #fbe9e9; color: var(--bad); border-bottom: 2px solid var(--bad); }
+/* The freshness element: the read time, and the stale banner when the record is not being read. */
+.freshness .read-asof { display: block; text-align: right; padding: 2px 16px; }
+/* Never two banners: the stale banner wins over "updates paused" whichever arrived first. */
+.banner-slot:has(.banner--stale) .banner--sse_paused { display: none; }
 .banner--sse_paused { background: #fdf5e3; color: var(--warn); border-bottom: 2px solid var(--warn); }
 
 /* ---- frame (content + chat drawer grid) -------------------------------- */
@@ -157,6 +160,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
 .journey-station--passed .journey-station__glyph { color: var(--ok); }
 .journey-station--current .journey-station__glyph { color: var(--accent); font-weight: 700; }
 .journey-station--future .journey-station__glyph { color: var(--muted); }
+.journey-station--waiting .journey-station__glyph { color: var(--warn); font-weight: 700; }
 .journey-station--pending .journey-station__glyph { color: var(--pending); }
 .journey-bar--mini .journey-station__glyph { font-size: 12px; }
 .journey-bar__meta { display: flex; gap: 10px; margin-top: 4px; font-size: 12px; }
