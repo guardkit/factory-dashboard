@@ -647,7 +647,22 @@ class FleetView:
 
 
 def _open(db_path: Path) -> sqlite3.Connection:
-    return db.connect_ro(db_path)
+    """A read-only connection holding ONE read snapshot for a whole page or fragment.
+
+    Every view builds its content, its read time and its data version on this connection, and a
+    feed pass can commit at any moment (the store is in WAL mode, so it does not wait for readers).
+    Without one read transaction those reads could straddle a pass: old features under the new
+    version and read time, which later polls would then accept as current. So the transaction is
+    opened here and the snapshot is fixed at once, by reading the version's change count first;
+    every later read sees the store as it was then. The view's `conn.close()` ends it. The live
+    update stream keeps its own connection outside this, so it always sees new changes."""
+    conn = db.connect_ro(db_path)
+    conn.execute("BEGIN")
+    try:
+        conn.execute("SELECT seq FROM sqlite_sequence WHERE name='change_log'").fetchone()
+    except sqlite3.Error:
+        conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()  # any read fixes the snapshot
+    return conn
 
 
 def home_view(db_path: Path, now: datetime | None = None) -> HomeView:

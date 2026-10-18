@@ -33,7 +33,7 @@
 <section class="panel-card report-headline state-{{ 'lagging' if report.headline.withheld else 'live' }}">
   <header class="panel-card__header">
     <h2 class="panel-card__title">This week</h2>
-    {{ m.asof_chip(report.chrome.read_as_of) }}
+    {{ m.asof_chip(report.chrome.read_as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
     {% if report.headline.withheld %}

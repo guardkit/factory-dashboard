@@ -1,9 +1,18 @@
-"""A real browser on an open page: content and its read time stay together (Codex review R2).
+"""A real browser on an open page: content and its read times stay together (Codex review R2).
 
-The board runs on loopback (uvicorn, in a thread) on a store filled from a fake Forge record, and
-a headless Chromium driven by Playwright keeps the Features page and the weekly report open while
-this test changes the store underneath them: an idle pass, a finished build, an outage, recovery.
-Nothing is reloaded by hand; the pages must follow on their own.
+The board runs on loopback (uvicorn, in a thread) on a store that a stand-in feed keeps reading
+from a fake Forge record, and a headless Chromium driven by Playwright keeps the Features page and
+the weekly report open while this test changes things underneath them: more than two minutes of
+healthy, unchanged reads, a finished build, an outage, and recovery. Nothing is reloaded by hand;
+the pages must follow on their own, with the read time at the top and on every card agreeing.
+
+Time is scaled to a tenth by default (poll 3 s, reads every 1.5 s, cards amber after 6 s and red
+after 12 s, a 16 s idle spell, a 12 s outage), so the test takes about a minute. Every interval
+and threshold the pages use is scaled by the same factor, so the order of events is the same as
+at full scale; the only fixed time is freshness.js's own 5-second tick, which is coarser relative
+to the scaled thresholds, so the scaled run is the harder one. FACTORY_DASH_BROWSER_REAL_TIME=1
+runs it at the real thresholds (about six minutes). The five-minute version tick is switched off
+here, so it cannot rescue the cards: they must be kept level by the unchanged polls alone.
 
 It uses what is already on this machine: Node's playwright-core (FACTORY_DASH_PLAYWRIGHT_CORE, or
 the npx cache) and a Chromium build (FACTORY_DASH_BROWSER, or Playwright's browser folder, or
@@ -28,7 +37,9 @@ import pytest
 import uvicorn
 from backend.app import create_app
 from backend.projector.forge_mirror import mirror_once
-from backend.projector.store import iso, open_rw, write_heartbeat
+from backend.projector.store import open_rw, write_heartbeat
+from backend.readmodel import dbread
+from backend.readmodel import viewmodels as vm
 
 from tests import forge_fake
 from tests.conftest import TEST_PASSWORD, TEST_USER
@@ -69,16 +80,51 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
+REAL_TIME = os.environ.get("FACTORY_DASH_BROWSER_REAL_TIME") == "1"
+SCALE = 1.0 if REAL_TIME else 0.1
+
+
+def secs(real: float) -> float:
+    return real * SCALE
+
+
+class Feed:
+    """A stand-in for the dashboard's feed: a heartbeat and a read of Forge's record every 15 s
+    (scaled). `path` can be pointed at a missing file to make the reads fail."""
+
+    def __init__(self, store: Path, path: Path) -> None:
+        self.store, self.path = store, path
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        conn = open_rw(self.store)
+        try:
+            while not self.stop.is_set():
+                now = datetime.now(UTC)
+                write_heartbeat(conn, now)
+                mirror_once(conn, self.path, now)
+                self.stop.wait(secs(15))
+        finally:
+            conn.close()
+
+
 @pytest.fixture
-def board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, Path, ForgeFake]]:
+def board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, Feed, ForgeFake]]:
     monkeypatch.setattr(forge_fake, "T0", datetime.now(UTC) - timedelta(hours=3))
+    monkeypatch.setattr(vm, "MIRROR_FRESH_SECS", round(secs(60)))
+    monkeypatch.setattr(vm, "STALE_AFTER_SECS", round(secs(120)))
+    monkeypatch.setattr(vm, "PROJECTOR_STALE_SECS", round(secs(60)))
+    monkeypatch.setattr(dbread, "VERSION_TICK_SECS", 10**9)
     fake = ForgeFake(tmp_path / "forge.db")
     delivered_feature(fake, 1, text="Search box that filters notes by title.")
     fake.planning("c3", "Count the notes.")
     fake.build("b3", "FEAT-0003", "c3", status="RUNNING", queued=100, started=100, completed=None)
     store = tmp_path / "readmodel.db"
     store_from(fake, store).close()
-    app = create_app(db_path=store, tenants_path=TENANTS_TEST, freshness_poll_secs=1)
+    feed = Feed(store, fake.path)
+    feed.thread.start()
+    app = create_app(db_path=store, tenants_path=TENANTS_TEST, freshness_poll_secs=round(secs(30)))
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
@@ -88,16 +134,18 @@ def board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str
         assert time.monotonic() < deadline, "the board did not start"
         time.sleep(0.05)
     try:
-        yield f"http://127.0.0.1:{port}", store, fake
+        yield f"http://127.0.0.1:{port}", feed, fake
     finally:
         server.should_exit = True
+        feed.stop.set()
         thread.join(timeout=10)
+        feed.thread.join(timeout=10)
 
 
 # The browser side: sign in, open Features and the weekly report, then report what each page shows
 # after each change this test makes (one JSON line per step; the test answers "go" on stdin).
 SCRIPT = r"""
-const [core, exe, base, user, password] = process.argv.slice(1);
+const [core, exe, base, user, password, idleMs, timeoutMs] = process.argv.slice(1);
 const { chromium } = require(core);
 const lines = []; let waiter = null;
 require('readline').createInterface({ input: process.stdin }).on('line', l => {
@@ -105,7 +153,7 @@ require('readline').createInterface({ input: process.stdin }).on('line', l => {
 });
 const next = () => new Promise(r => lines.length ? r(lines.shift()) : (waiter = r));
 const say = o => console.log(JSON.stringify(o));
-const T = { timeout: 20000 };
+const T = { timeout: Number(timeoutMs) };
 (async () => {
   const browser = await chromium.launch({ executablePath: exe });
   try {
@@ -120,10 +168,17 @@ const T = { timeout: 20000 };
     await report.goto(base + '/reports');
     const look = p => p.evaluate(() => {
       const row = [...document.querySelectorAll('#main tr')].find(t => t.textContent.includes('Count the notes'));
-      const chip = document.querySelector('#freshness .asof-chip');
+      const top = document.querySelector('#freshness .asof-chip');
+      const state = c => ['live', 'lagging', 'stale'].find(s => c.classList.contains('asof-chip--' + s)) || '';
+      const cards = [...document.querySelectorAll('#main .asof-chip[data-source="factory"]')];
       return {
         row: row ? row.textContent.replace(/\s+/g, ' ').trim() : '',
-        asof: chip ? parseFloat(chip.dataset.asof) : null,
+        asof: top ? parseFloat(top.dataset.asof) : null,
+        top: top ? state(top) : '',
+        cards: cards.map(state),
+        cardAsof: cards.map(c => parseFloat(c.dataset.asof)),
+        cardLabels: cards.map(c => c.querySelector('.asof-chip__label').textContent.trim()),
+        topLabel: top ? top.querySelector('.asof-chip__label').textContent.trim() : '',
         version: document.getElementById('freshness').dataset.version,
         banner: document.querySelectorAll('.banner--stale').length,
         lagging: document.querySelectorAll('#main .state-lagging').length,
@@ -132,19 +187,17 @@ const T = { timeout: 20000 };
         drawerMark: (document.querySelector('.chat-drawer') || {dataset: {}}).dataset.mark || '',
       };
     });
-    const asofAbove = (p, a) => p.waitForFunction(
-      a => parseFloat(document.querySelector('#freshness .asof-chip').dataset.asof) > a, a, T);
     for (const p of [page, report]) {
       await p.evaluate(() => {
         document.getElementById('main').dataset.mark = 'first';
         document.querySelector('.chat-drawer').dataset.mark = 'kept';
       });
     }
-    const opened = await look(page);
-    say({ step: 'opened', features: opened, report: await look(report) }); await next();
+    say({ step: 'opened', features: await look(page), report: await look(report) }); await next();
 
-    await asofAbove(page, opened.asof);                        // an idle pass: only the time moves on
-    say({ step: 'idle', features: await look(page) }); await next();
+    // More than two minutes (scaled) of healthy, unchanged reads.
+    await page.waitForTimeout(Number(idleMs));
+    say({ step: 'idle', features: await look(page), report: await look(report) }); await next();
 
     await page.waitForFunction(() => [...document.querySelectorAll('#main tr')]
       .some(t => t.textContent.includes('Count the notes') && t.textContent.includes('Waiting for the merge decision')),
@@ -169,15 +222,24 @@ const T = { timeout: 20000 };
 """
 
 
+def _level(view: dict[str, object]) -> None:
+    """The cards show the factory record's read time of the top: live, and the same time."""
+    cards = view["cards"]
+    assert isinstance(cards, list) and cards, view
+    assert view["top"] == "live" and set(cards) == {"live"}, view
+    assert set(view["cardLabels"]) == {view["topLabel"]}, view  # type: ignore[arg-type]
+
+
 def test_an_open_page_follows_the_record_through_change_outage_and_recovery(  # noqa: PLR0915 (one story)
-    board: tuple[str, Path, ForgeFake],
+    board: tuple[str, Feed, ForgeFake],
 ) -> None:
     node, core, browser = _tools()
-    base, store, fake = board
-    conn = open_rw(store)
-    proc = subprocess.Popen([node, "-e", SCRIPT, core, browser, base, TEST_USER, TEST_PASSWORD],
-                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    watchdog = threading.Timer(180, proc.kill)
+    base, feed, fake = board
+    idle_ms, timeout_ms = round(secs(160) * 1000), round((secs(200) + 10) * 1000)
+    proc = subprocess.Popen(
+        [node, "-e", SCRIPT, core, browser, base, TEST_USER, TEST_PASSWORD, str(idle_ms), str(timeout_ms)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    watchdog = threading.Timer(secs(900) + 120, proc.kill)
     watchdog.start()
     assert proc.stdin is not None and proc.stdout is not None
 
@@ -197,43 +259,43 @@ def test_an_open_page_follows_the_record_through_change_outage_and_recovery(  # 
         features, report = opened["features"], opened["report"]
         assert "Building" in str(features["row"]) and features["banner"] == 0 and features["lagging"] == 0
         assert report["withheld"] == 0
-
-        # Healthy and idle: a pass that finds nothing new. The read time moves on; the content is
-        # not fetched again (same data version), so it is the same element as before.
-        write_heartbeat(conn, datetime.now(UTC))
-        assert mirror_once(conn, fake.path) is False
         go()
-        idle = step("idle")["features"]
-        assert float(str(idle["asof"])) > float(str(features["asof"])) and idle["banner"] == 0
-        if idle["version"] == features["version"]:   # (unless the five-minute tick fell in between)
-            assert idle["mainMark"] == "first"
 
-        # The build finishes while the page is open: the row and the read time change together.
+        # Healthy and idle for more than twice the card threshold: nothing changed, so the content
+        # is not fetched again (same element), yet the top time and every card time moved on together
+        # and every card is still live.
+        idle = step("idle")
+        for name in ("features", "report"):
+            view = idle[name]
+            _level(view)                     # top and cards live, showing the same read time
+            assert view["mainMark"] == "first" and view["version"] == opened[name]["version"], name
+            assert float(str(view["asof"])) > float(str(opened[name]["asof"])) + secs(60), name
+            assert min(view["cardAsof"]) > float(str(opened[name]["asof"])) + secs(60), name  # type: ignore[call-overload]
+            assert view["banner"] == 0
+
+        # The build finishes while the page is open: the row and the read times change together.
         fake.conn.execute("UPDATE builds SET status='COMPLETE', completed_at=? WHERE build_id='b3'",
                           (forge_fake.at(150),))
         fake.merge_offer("b3", 151)
-        write_heartbeat(conn, datetime.now(UTC))
-        assert mirror_once(conn, fake.path) is True
         go()
         changed = step("changed")["features"]
         assert "Waiting for the merge decision" in str(changed["row"])
-        assert float(str(changed["asof"])) > float(str(idle["asof"]))
-        assert changed["version"] != idle["version"] and changed["mainMark"] == ""   # content fetched again
-        assert changed["drawerMark"] == "kept"                                       # the chat drawer was not
+        assert float(str(changed["asof"])) > float(str(idle["features"]["asof"]))
+        assert changed["version"] != idle["features"]["version"] and changed["mainMark"] == ""  # fetched again
+        assert changed["drawerMark"] == "kept"                                                # the chat drawer not
+        _level(changed)
 
-        # An outage: the feed runs but cannot read the record. Banner, lagging cards and the
-        # withheld report figures all appear on the open pages.
-        write_heartbeat(conn, datetime.now(UTC))
-        conn.execute("UPDATE mirror_status SET last_success_at=? WHERE source='forge'",
-                     (iso(datetime.now(UTC) - timedelta(minutes=10)),))
+        # An outage: the feed runs but cannot read the record. Banner, lagging cards, honest card
+        # times (they stop moving and age) and the withheld report figures appear on the open pages.
+        feed.path = fake.path.parent / "gone.db"
         go()
         outage = step("outage")
         assert outage["features"]["banner"] == 1 and int(str(outage["features"]["lagging"])) >= 1
         assert int(str(outage["report"]["withheld"])) >= 1
+        assert "live" not in set(outage["features"]["cards"])  # type: ignore[arg-type]
 
-        # Recovery: the next good pass. Banner gone, cards live, report figures back, no reload.
-        write_heartbeat(conn, datetime.now(UTC))
-        mirror_once(conn, fake.path)
+        # Recovery: reads work again. Banner gone, cards live, report figures back, no reload.
+        feed.path = fake.path
         go()
         recovered = step("recovered")
         features, report = recovered["features"], recovered["report"]
@@ -241,9 +303,10 @@ def test_an_open_page_follows_the_record_through_change_outage_and_recovery(  # 
         assert "Waiting for the merge decision" in str(features["row"])
         assert float(str(features["asof"])) > float(str(outage["features"]["asof"]))
         assert features["drawerMark"] == "kept" and report["drawerMark"] == "kept"
+        _level(features)
+        _level(report)
     finally:
         watchdog.cancel()
         if proc.poll() is None:
             proc.kill()
         proc.wait(timeout=10)
-        conn.close()

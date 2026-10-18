@@ -6,10 +6,10 @@
    base.html includes it once; /fragments/freshness renders it alone (standalone) for the poll. #}
 {% if chrome is defined and chrome %}
 {% import 'macros.html' as m %}
-<div class="freshness" id="freshness" data-version="{{ chrome.version }}"
+<div class="freshness" id="freshness" data-version="{{ chrome.version }}"{% if chrome.read_as_of.asof_epoch is not none %} data-read-at="{{ chrome.read_as_of.asof_epoch }}"{% endif %}
      hx-get="/fragments/freshness" hx-trigger="every {{ freshness_poll_secs | default(30) }}s" hx-swap="outerHTML"
      {%- if not standalone %} hx-swap-oob="true"{% endif %}>
-  <span class="read-asof">{{ m.asof_chip(chrome.read_as_of) }}</span>
+  <span class="read-asof">{{ m.asof_chip(chrome.read_as_of, source='factory') }}</span>
   {% if chrome.banner %}<div class="banner banner--{{ chrome.banner.kind }}" role="status">{{ chrome.banner.text }}</div>{% endif %}
   {% if chrome.cost_banner %}<div class="banner banner--{{ chrome.cost_banner.kind }}" role="status">{{ chrome.cost_banner.text }}</div>{% endif %}
 </div>

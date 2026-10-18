@@ -11,7 +11,7 @@
   <div class="feature-header__meta">
     <span title="{{ page.sent_title }}">sent {{ page.sent_label }}</span>
     <span>elapsed {{ page.elapsed }}</span>
-    {{ m.asof_chip(page.as_of) }}
+    {{ m.asof_chip(page.as_of, source='factory') }}
   </div>
   {% if page.request_text and page.request_text != page.title %}
   <details class="feature-request"><summary>The request as sent</summary><p>{{ page.request_text }}</p></details>

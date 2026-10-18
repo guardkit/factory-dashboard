@@ -3,7 +3,7 @@
 <section class="panel-card needs-you state-{{ panel.state.value }}" id="panel-p4" data-panel="p4">
   <header class="panel-card__header">
     <h2 class="panel-card__title">{{ panel.title }} ({{ panel.items | length }})</h2>
-    {{ m.asof_chip(panel.as_of) }}
+    {{ m.asof_chip(panel.as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
     {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
