@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from backend.projector.forge_mirror import mirror_once
+from backend.projector.store import open_rw
 from starlette.testclient import TestClient
 
 from tests.forge_fake import ForgeFake
@@ -93,3 +95,85 @@ def test_the_project_page_shows_counts_and_a_spend_gap(world: World) -> None:  #
     assert tiles.count('<div class="stat-tile') == 4
     assert "Spend to date" in tiles and "Not measured" in tiles and "£" not in tiles
     assert "of 10" not in body and "On plan" not in body
+
+
+# --- coach round 1 (stage 2a): hostile words stay inert everywhere these pages show them ---------
+
+HOSTILE = "<script>alert(1)</script>"
+HOSTILE_ESCAPED = "&lt;script&gt;alert(1)&lt;/script&gt;"
+
+
+def test_hostile_titles_render_inert_on_now_its_sections_and_the_project(world: World) -> None:  # noqa: F811
+    client, store, fake = world
+    # A waiting feature with a hostile title, so the Needs-you subject is covered too (the building
+    # feature FEAT-0003 already carries one, for In progress, activity and planning).
+    fake.planning("c9", f"Archive a note {HOSTILE}.")
+    fake.build("b9", "FEAT-0009", "c9")
+    fake.merge_offer("b9", 95)
+    mirror_once(open_rw(store), fake.path)
+    for path in ("/", "/fragments/p2", "/fragments/p3", "/fragments/p4", "/fragments/p5", "/projects/acme/notes"):
+        body = client.get(path).text
+        assert HOSTILE not in body, path
+        assert HOSTILE_ESCAPED in body, path
+    needs = client.get("/fragments/p4").text
+    assert f"Archive a note {HOSTILE_ESCAPED}." in needs
+
+
+# --- coach round 1 (stage 2a): every colour keeps its word ----------------------------------------
+
+
+def _blocks(body: str, start: str, end: str) -> list[str]:
+    """Each piece of `body` from an occurrence of `start` up to the next `end` after it."""
+    out, i = [], body.find(start)
+    while i != -1:
+        j = body.find(end, i + len(start))
+        out.append(body[i:j if j != -1 else len(body)])
+        i = body.find(start, i + len(start))
+    return out
+
+
+def test_band_chips_keep_their_words_on_now(world: World) -> None:  # noqa: F811
+    client, _, _ = world
+    body = client.get("/").text
+    items = _blocks(body, '<li class="needs-you__item', "</li>")
+    rows = _blocks(body, '<a class="build-row"', "</a>")
+    assert items and rows
+    for piece in items + rows:
+        assert 'class="band-chip__word">' in piece, piece[:120]
+        word = re.search(r'class="band-chip__word">([^<]+)<', piece)
+        assert word is not None and word.group(1).strip(), piece[:120]
+
+
+def test_waiting_pills_say_waiting(world: World) -> None:  # noqa: F811
+    client, _, _ = world
+    body = client.get("/features/FEAT-0004").text           # waiting for the merge decision
+    pills = _blocks(body, '<span class="status-pill status-pill--wait">', "</span>")
+    words = [re.sub(r"<[^>]+>", "", p).split(" ·")[0].strip() for p in pills]
+    assert "Waiting" in words                                # the open issue
+    assert "waiting now" in words                            # the open wait's row
+    assert "Waiting for the merge decision" in words         # the head
+
+
+def _not_wrapped(body: str, words: str) -> None:
+    i = body.index(words)
+    for opening, closing in (("<a ", "</a>"), ("<a>", "</a>"), ("<button", "</button>")):
+        assert body.rfind(opening, 0, i) <= body.rfind(closing, 0, i), (opening, words)
+
+
+def test_decide_in_slack_is_never_a_link_or_a_button(world: World) -> None:  # noqa: F811
+    client, _, _ = world
+    for path in ("/", "/features/FEAT-0004"):
+        body = client.get(path).text
+        lines = _blocks(body, '<p class="observes-only">', "</p>")
+        assert lines and all("Decide in Slack" in line for line in lines), path
+        for line in lines:
+            assert "<a" not in line and "<button" not in line, path
+        _not_wrapped(body, "Decide in Slack")
+
+
+def test_waiting_is_purple_in_the_stylesheet() -> None:
+    css = (Path(__file__).resolve().parents[1] / "frontend" / "static" / "style.css").read_text(encoding="utf-8")
+    for selector in (".journey-station--waiting .journey-station__glyph", ".wait-row--open td"):
+        rules = [r for r in re.findall(r"([^{}]+)\{([^}]*)\}", css) if selector in r[0]]
+        assert rules, selector
+        assert any("--status-wait" in body for _, body in rules), selector

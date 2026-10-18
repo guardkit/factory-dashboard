@@ -909,7 +909,8 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
 .panel-card--flush > .panel-card__body > .true-empty { margin: var(--space-16); }
 .panel-card--flush > .panel-card__body > .build-list { margin: 0; }
 .panel-card--flush > .panel-card__foot { border-top: 1px solid var(--line); margin: 0; }
-/* sse.js marks the refreshed section; the card inside it takes the short tint. */
+/* sse.js marks the refreshed section; only the card inside it takes the short tint, not its title. */
+.now-section.panel-card--updated { background-color: transparent; }
 .now-section.panel-card--updated > .panel-card { background-color: var(--tint-green); }
 @media (prefers-reduced-motion: no-preference) {
   .now-section > .panel-card { transition: background-color 0.6s ease-out; }
@@ -1006,7 +1007,6 @@ a.build-row:hover .feature-title { text-decoration: underline; }
 /* Times and short results do not break mid-word. */
 .activity__table td.num, .planning__table td.num, .feature-attempts td.num, .feature-waits td.num,
 .feature-history td.num, .activity__result { white-space: nowrap; }
-.planning__table td:nth-child(2) { min-width: 9em; }
 /* Words wrap between words, not inside them (a long table scrolls inside its card instead). */
 .activity__table td, .planning__table td, .feature-attempts td, .feature-waits td, .feature-history td { overflow-wrap: break-word; }
 /* With a freshness line between the top bar and the dark band, the line takes the top bar's ground. */
@@ -1076,6 +1076,40 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
   .feature-stats .stat-tile__value { font-size: 22px; line-height: 28px; }
   .feature-stats .stat-tile--empty .stat-tile__value, .project-summary .stat-tile--empty .stat-tile__value { font-size: 16px; line-height: 28px; }
   .project-summary .stat-tile__label { min-height: 32px; }
+
+  /* Tables on phones: the columns that matter stay and fit; the rest are hidden on purpose. */
+  .planning__table th:nth-child(2), .planning__table td:nth-child(2) { display: none; }   /* project */
+  .planning__table td:nth-child(3) { overflow-wrap: anywhere; }   /* long error text with file paths */
+  .feature-attempts th:nth-child(2), .feature-attempts td:nth-child(2) { display: none; } /* started by */
+  .feature-attempts .feature-id { white-space: normal; overflow-wrap: anywhere; }
+  .feature-waits th:nth-child(2), .feature-waits td:nth-child(2) { display: none; }       /* from */
+  .feature-waits td.num, .feature-waits .status-pill { white-space: normal; }
+  /* The project's feature table keeps Feature, Where it stands and On track. */
+  .project-features .feature-list th:nth-child(2), .project-features .feature-list td:nth-child(2),
+  .project-features .feature-list th:nth-child(n+5), .project-features .feature-list td:nth-child(n+5) { display: none; }
+  .project-features .feature-list td:first-child { min-width: 0; }
+  .project-features .feature-list .band-chip { white-space: normal; }
+}
+@media (min-width: 721px) {
+  .planning__table td:nth-child(2) { min-width: 9em; }
+}
+
+/* Print: the band becomes a plain light section (no full-width shadow, no dark ground). */
+@media print {
+  .panel-card--hero {
+    margin: 0; padding: 0; box-shadow: none; clip-path: none; background: none;
+    color-scheme: light;
+    --kicker: #FFFFFF; --surface: #FFFFFF; --surface-sunken: #EEF3EF; --heading: #1C2D24; --text: #22312A;
+    --text-dim: #5E6E64; --line: #E4E7E4; --line-strong: #7A8C81; --luminous: #2F7A34; --accent-text: #2F7A34;
+    --tint-green: #EAF4EC; --tint-neutral: #EEF3EF; --bright-green: #3F8C43;
+    --status-done: #16A34A; --status-done-text: #166534;
+    --status-risk: #B45309; --status-risk-text: #92400E; --status-risk-tint: #FBEFD5;
+    --status-fail: #DC2626; --status-fail-text: #B91C1C; --status-fail-tint: #FDE8E8;
+    --status-wait: #6D28D9; --status-wait-text: #6D28D9; --status-wait-tint: #EDE7FB;
+  }
+  .needs-you__item { box-shadow: none; }
+  body:has(.panel-card--hero) .freshness .read-asof { background: none; }
+  body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: #5E6E64; }
 }
 
 /* ==== stage 2b: Reports, export, Fleet, Login, Client ==== */
