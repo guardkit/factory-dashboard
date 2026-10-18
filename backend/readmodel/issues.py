@@ -158,6 +158,8 @@ def find_issues(factory: Factory, norms: Norms, now: datetime) -> list[Issue]:
 def _stall_issue(f: Feature, norms: Norms, now: datetime) -> Issue | None:
     if not f.in_progress or f.builds or f.open_wait() is not None or f.planning is None:
         return None
+    if not f.planning.active or f.planning.state == "QUEUED":  # waiting to be planned is not a stall
+        return None
     last = f.last_activity_at()
     if last is None:
         return None
@@ -170,13 +172,16 @@ def _stall_issue(f: Feature, norms: Norms, now: datetime) -> Issue | None:
 
 def recent(
     issues: list[Issue], now: datetime, *, open_days: int = 14, closed_days: int = 7,
-) -> tuple[list[Issue], list[Issue]]:
-    """(open, recently closed). Open failures older than `open_days` with no later attempt are left
-    out (the page says so); waits and stalls that are open now are always listed."""
+) -> tuple[list[Issue], list[Issue], int]:
+    """(open, recently closed, how many old open failures were left out).
+
+    Open failures older than `open_days` with no later attempt are left out, and counted so the page
+    can say how many; waits and stalls that are open now are always listed, however old."""
     open_cut, closed_cut = now - timedelta(days=open_days), now - timedelta(days=closed_days)
     live_kinds = set(WAIT_WORDS.values()) | {"Stalled"}
     still_open = [i for i in issues if i.is_open and (i.kind in live_kinds or i.opened_at >= open_cut)]
+    hidden = sum(1 for i in issues if i.is_open and i.kind not in live_kinds and i.opened_at < open_cut)
     closed = [i for i in issues if i.closed_at is not None and i.closed_at >= closed_cut]
     still_open.sort(key=lambda i: ({RED: 0, AMBER: 1}.get(i.band, 2), -i.opened_at.timestamp()))
     closed.sort(key=lambda i: i.closed_at or now, reverse=True)
-    return still_open, closed
+    return still_open, closed, hidden

@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import html
+import json
 import re
+import shutil
+import subprocess
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from backend.app import create_app
+from backend.projector.forge_mirror import mirror_once
 from backend.projector.store import iso, open_rw, write_heartbeat
 from starlette.testclient import TestClient
 
@@ -192,5 +196,43 @@ def test_the_delivered_window_survives_a_live_update(world: tuple[TestClient, Pa
     client, _, _ = world
     body = client.get("/fragments/p7?from=2026-01-01&to=2026-01-31").text
     assert "0 features merged and checked from 2026-01-01 to 2026-01-31." in body
-    assert "window.location.search" in (Path(__file__).resolve().parent.parent / "frontend" / "static"
-                                        / "sse.js").read_text(encoding="utf-8")
+
+
+SSE_JS = Path(__file__).resolve().parent.parent / "frontend" / "static" / "sse.js"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_refetch_address_carries_the_pages_window() -> None:
+    """Runs sse.js's own URL builder (under node, no browser) with the page's query in place."""
+    script = (
+        "global.window = {location: {search: '?from=2026-10-01&to=2026-10-18'}};"
+        f"const m = require({json.dumps(str(SSE_JS))});"
+        "console.log(JSON.stringify([m.fragmentUrl('p7'), m.fragmentUrl('p2', '')]));"
+    )
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True, timeout=30)
+    assert json.loads(out.stdout) == ["/fragments/p7?from=2026-10-01&to=2026-10-18", "/fragments/p2"]
+    assert "fragmentUrl(panel)" in SSE_JS.read_text(encoding="utf-8")  # the refetch uses it
+
+
+def test_a_cancelled_feature_is_not_called_on_track(world: tuple[TestClient, Path, ForgeFake]) -> None:
+    client, _, _ = world
+    body = client.get("/features/FEAT-0002").text
+    assert "How it ended" in body and "built, not merged" in body
+    row = client.get("/features").text
+    declined = row[row.index("Show a Clear button."):]
+    declined = declined[:declined.index("</tr>")]
+    assert "on track" not in declined and "built, not merged" in declined
+
+
+def test_the_issues_page_says_how_many_old_failures_are_left_out(
+    world: tuple[TestClient, Path, ForgeFake], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, store, fake = world
+    old = forge_fake.T0 - timedelta(days=30)
+    monkeypatch.setattr(forge_fake, "T0", old)
+    fake.planning("old-1", "An old failure.", state="FAILED", error="x")
+    fake.planning("old-2", "Another old failure.", state="FAILED", error="y")
+    mirror_once(open_rw(store), fake.path)
+    body = client.get("/issues").text
+    assert "2 older failures with no later attempt are not listed (opened more than 14 days ago)." in body
+    assert "An old failure." not in body

@@ -30,7 +30,7 @@ from backend.readmodel.factory import (
     parse_dt,
 )
 from backend.readmodel.issues import Issue, find_issues, recent
-from backend.readmodel.norms import GAP, Norms, load_norms, on_track
+from backend.readmodel.norms import GAP, OUTCOME_WORDS, Norms, load_norms, on_track
 from backend.readmodel.viewmodels import (
     ActivityPanel,
     ActivityRow,
@@ -188,7 +188,8 @@ def feature_row(f: Feature, norms: Norms, now: datetime) -> FeatureRow:
     sent = f.sent_at
     return FeatureRow(
         title=f.title, code=f.code, link=f.link, project=f.project, project_link=project_link(f.project),
-        status_text=f.status_text, journey=journey(f), band=_band(ot.band), elapsed=elapsed(f, now),
+        status_text=f.status_text, journey=journey(f), band=_band(ot.band, ot.words.lower()),
+        elapsed=elapsed(f, now),
         sent_label=vm.fmt_wall(sent, now=now) if sent else "—", sent_title=vm.fmt_iso(sent) if sent else "",
         in_progress=f.in_progress,
     )
@@ -520,6 +521,7 @@ class IssuesView:
     open_rows: tuple[IssueRow, ...]
     closed_rows: tuple[IssueRow, ...]
     note: str
+    hidden_line: str = ""    # how many old open failures the 14-day cut-off leaves out
 
 
 @dataclass(frozen=True)
@@ -617,6 +619,7 @@ def feature_page(db_path: Path, key: str, now: datetime | None = None) -> tuple[
             request_text=f.request_text, sent_label=vm.fmt_wall(sent, now=now) if sent else "—",
             sent_title=vm.fmt_iso(sent) if sent else "", status_text=f.status_text, mission_line=mission_line,
             journey=journey(f), as_of=_read_chip(fr, now), verdict=_band(ot.band, ot.words.lower()),
+            verdict_heading="How it ended" if f.outcome in OUTCOME_WORDS else "On track",
             verdict_reason=ot.reason, signals=signals, norms_line=_norms_line(norms), elapsed=elapsed(f, now),
             attempts=attempts, waits=waits, issues=tuple(issue_row(i, now) for i in own),
             activity=activity_rows(factory, f.builds, now, limit=20), spend=SpendSlot(),
@@ -666,7 +669,8 @@ def project_view(db_path: Path, project: str, now: datetime | None = None) -> Pr
                                    f"{len(mine)} on record).")
         delivered = [f for f in mine if f.outcome is Outcome.DELIVERED]
         week = now - timedelta(days=7)
-        open_issues, _closed = recent([i for i in find_issues(factory, norms, now) if i.project == project], now)
+        open_issues, _closed, _hidden = recent(
+            [i for i in find_issues(factory, norms, now) if i.project == project], now)
         return ProjectView(
             chrome=page_chrome(conn, now), project=project, features=panel,
             delivered_7d=sum(1 for f in delivered if f.delivered_at and f.delivered_at >= week),
@@ -682,11 +686,18 @@ def issues_view(db_path: Path, now: datetime | None = None) -> IssuesView:
     conn = _open(db_path)
     try:
         factory, norms = load_factory(conn, now), load_norms()
-        open_, closed = recent(find_issues(factory, norms, now), now)
+        open_, closed, hidden = recent(find_issues(factory, norms, now), now)
         note = ("Open: anything waiting for a person or stalled now, and failures from the last 14 days with no "
                 "later attempt. Closed: issues that closed in the last 7 days.")
+        hidden_line = ""
+        if hidden:
+            noun = "failure" if hidden == 1 else "failures"
+            verb = "is" if hidden == 1 else "are"
+            hidden_line = (f"{hidden} older {noun} with no later attempt {verb} not listed "
+                           f"(opened more than 14 days ago).")
         return IssuesView(chrome=page_chrome(conn, now), open_rows=tuple(issue_row(i, now) for i in open_),
-                          closed_rows=tuple(issue_row(i, now) for i in closed), note=note)
+                          closed_rows=tuple(issue_row(i, now) for i in closed), note=note,
+                          hidden_line=hidden_line)
     finally:
         conn.close()
 

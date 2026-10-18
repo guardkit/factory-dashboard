@@ -33,6 +33,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from zoneinfo import ZoneInfo
 
 # --- the journey ----------------------------------------------------------------------------
 
@@ -69,6 +70,7 @@ class Outcome(StrEnum):
     HANDED_OFF = "handed_off"
     STOPPED_IN_QUEUE = "stopped_in_queue"
     RECORD_STOPPED = "record_stopped"
+    RETIRED = "retired"
 
 
 #: Outcomes that are the factory's own failures (they make a feature red and raise an issue).
@@ -186,7 +188,13 @@ class Build:
 
     def merge_offer_retired(self) -> bool:
         """The owner retired the open merge offer (Forge's 9 October clean-up of old offers)."""
-        return any("merge_retirement" in s.details for s in self.stages)
+        return self.merge_retired_at() is not None
+
+    def merge_retired_at(self) -> datetime | None:
+        for s in self.stages:
+            if "merge_retirement" in s.details:
+                return s.at
+        return None
 
     def merge_check_failed_at(self) -> datetime | None:
         """The last merge-deploy row, if it FAILED and nothing passed after it."""
@@ -221,6 +229,13 @@ class PlanningRun:
             if e.stage_label == "feature-spec-digest-review" and e.status in ("approved", "skipped"):
                 return True
         return self.state in ("BUILD_QUEUED", "PLANNED_HANDOFF")
+
+    def retired_at(self) -> datetime | None:
+        """When the owner retired this planning run's handover (Forge's administrative clean-up)."""
+        for e in self.events:
+            if e.stage_label == "planning-handoff-retirement-administrative":
+                return e.at
+        return None
 
     def nothing_to_build(self) -> bool:
         return any(e.stage_label == "nothing-to-build" for e in self.events)
@@ -639,6 +654,12 @@ def _assemble(
 RECORD_STOPPED_AFTER = timedelta(days=7)
 
 
+def _day(dt: datetime) -> str:
+    """'9 October', in London time."""
+    local = dt.astimezone(ZoneInfo("Europe/London"))
+    return f"{local.day} {local.strftime('%B')}"
+
+
 def _last_activity(run: PlanningRun | None, item: QueueItem | None, builds: tuple[Build, ...]) -> datetime | None:
     times: list[datetime] = []
     if run is not None:
@@ -685,6 +706,11 @@ def _where_planning(  # noqa: PLR0911 (one return per planning state)
     run: PlanningRun, open_wait: Wait | None,
 ) -> tuple[int, Outcome, str, datetime | None]:
     reached = PLAN_APPROVED if run.state == "BUILD_QUEUED" else (SPEC_APPROVED if run.spec_approved() else PLANNING)
+    retired = run.retired_at()
+    if retired is not None:
+        # The owner's administrative clean-up retired this run's handover: nothing more will happen.
+        return (PLAN_APPROVED if reached >= PLAN_APPROVED else reached, Outcome.RETIRED,
+                f"Retired in the clean-up of {_day(retired)}", retired)
     if run.state == "QUEUED":
         return IN_QUEUE, Outcome.IN_PROGRESS, "Waiting for planning to start", None
     if run.active:
@@ -722,7 +748,10 @@ def _where_build(  # noqa: PLR0911 (one return per build state)
     if merge_failed is not None:
         return MERGED, Outcome.MERGE_FAILED, "Merge check failed", merge_failed
     if retired and b.status == "COMPLETE":
-        return MERGE_DECISION, Outcome.NOT_MERGED, "Built, not merged (the merge offer was withdrawn)", b.completed_at
+        when = b.merge_retired_at() or b.completed_at
+        text = f"Built, not merged: the merge offer was retired in the clean-up of {_day(when)}" if when else (
+            "Built, not merged: the merge offer was retired")
+        return MERGE_DECISION, Outcome.NOT_MERGED, text, when
     if approved and landed is None and b.status not in ("FAILED", "CANCELLED", "INTERRUPTED"):
         # The merge word was given; the merge and its checks have not finished yet.
         return MERGED, Outcome.IN_PROGRESS, "Merging and checking", None

@@ -4,6 +4,7 @@
 {% block content %}
 <h1 class="page-title">Issues</h1>
 <p class="page-lead">{{ view.note }}</p>
+{% if view.hidden_line %}<p class="page-lead issues-hidden">{{ view.hidden_line }}</p>{% endif %}
 
 {% macro issue_table(rows, closed=False) -%}
 <table class="dense-table issues__table">

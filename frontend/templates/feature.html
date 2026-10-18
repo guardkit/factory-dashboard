@@ -28,7 +28,7 @@
 
 <section class="panel-card feature-q2">
   <header class="panel-card__header">
-    <h2 class="panel-card__title">On track: {{ m.band_chip(page.verdict) }}</h2>
+    <h2 class="panel-card__title">{{ page.verdict_heading }}: {{ m.band_chip(page.verdict) }}</h2>
   </header>
   <div class="panel-card__body">
     {% if page.verdict_reason %}<p class="feature-verdict-reason">{{ page.verdict_reason }}</p>{% endif %}

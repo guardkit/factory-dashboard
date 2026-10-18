@@ -279,6 +279,7 @@ class FeaturePage:
     journey: JourneyBar
     as_of: AsOf
     verdict: BandChip
+    verdict_heading: str     # "On track", or "How it ended" for a feature finished without delivery
     verdict_reason: str
     signals: tuple[SignalRow, ...]
     norms_line: str

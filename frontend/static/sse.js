@@ -45,6 +45,14 @@
     }
   }
 
+  // The address a page section is refetched from. It keeps the page's own query (for example the
+  // Delivered page's date window): without it the refetch fell back to the default week and
+  // replaced what the page was asked to show (the 17 October "window is ignored" fault).
+  function fragmentUrl(panel, search) {
+    if (search === undefined) search = window.location.search;
+    return "/fragments/" + encodeURIComponent(panel) + (search || "");
+  }
+
   var lastFetch = {}; // panel -> epoch ms of last refetch (coalescing)
   var pending = {};
 
@@ -60,9 +68,7 @@
       return;
     }
     lastFetch[panel] = now;
-    // Keep the page's own query (for example the Delivered page's date window): without it the
-    // refetch fell back to the default week and replaced what the page was asked to show.
-    var url = "/fragments/" + panel + window.location.search;
+    var url = fragmentUrl(panel);
     if (window.htmx) {
       window.htmx.ajax("GET", url, { target: target, swap: "outerHTML" }).then(function () {
         highlight(document.querySelector('[data-panel="' + panel + '"]'));
@@ -109,5 +115,7 @@
     });
   }
 
-  document.addEventListener("DOMContentLoaded", start);
+  if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded", start);
+  // For tests (tests/test_pages.py runs this file under node): expose the pure URL builder.
+  if (typeof module !== "undefined" && module.exports) module.exports = { fragmentUrl: fragmentUrl };
 })();
