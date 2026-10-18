@@ -325,31 +325,43 @@ def _boxes(b: bytes, start: int, end: int) -> Iterator[tuple[bytes, int, int]]:
         pos += size
 
 
+def _stated(b: bytes, body: int, end: int, name: str) -> float | None:
+    """The length an mvhd or mdhd states (the same layout for both: version 0 has a 32-bit timescale and
+    duration after two 32-bit times, version 1 has 64-bit times and duration). None when the duration is
+    zero or "unknown" (all ones). Malformed for another version, a short box, or a timescale of zero."""
+    version = _u(b, body, 1)
+    if version == 0:
+        scale, duration, unknown, last = _u(b, body + 12, 4), _u(b, body + 16, 4), 0xFFFFFFFF, body + 20
+    elif version == 1:
+        scale, duration, unknown, last = _u(b, body + 20, 4), _u(b, body + 24, 8), 0xFFFFFFFFFFFFFFFF, body + 32
+    else:
+        raise Malformed(f"{name} version")
+    if last > end or not scale:
+        raise Malformed(name)
+    return None if duration in (0, unknown) else duration / scale
+
+
 def mp4_seconds(b: bytes) -> float | None:
-    """The length an MP4 states in moov/mvhd (version 0: 32-bit timescale and duration after two 32-bit
-    times; version 1: 64-bit times and duration). None when there is no mvhd or its duration is zero or
-    "unknown" (all ones), as in a fragmented recording. Malformed for a box that does not fit; the top-level
-    boxes are all walked first, so they must fill the file exactly."""
+    """The longest length an MP4 states: in moov/mvhd, and in every moov/trak/mdia/mdhd. None only when
+    none of them states a usable length (as in a fragmented recording, whose durations are zero).
+    Malformed for a box that does not fit; the top-level boxes are all walked first, so they must fill
+    the file exactly, and every trak and mdia walked must be well formed too."""
+    stated: list[float] = []
     for kind, body, end in list(_boxes(b, 0, len(b))):
         if kind != b"moov":
             continue
         for child, cbody, cend in _boxes(b, body, end):
-            if child != b"mvhd":
-                continue
-            version = _u(b, cbody, 1)
-            if version == 0:
-                scale, duration, unknown = _u(b, cbody + 12, 4), _u(b, cbody + 16, 4), 0xFFFFFFFF
-                last = cbody + 20
-            elif version == 1:
-                scale, duration, unknown = _u(b, cbody + 20, 4), _u(b, cbody + 24, 8), 0xFFFFFFFFFFFFFFFF
-                last = cbody + 32
-            else:
-                raise Malformed("mvhd version")
-            if last > cend or not scale:
-                raise Malformed("mvhd")
-            return None if duration in (0, unknown) else duration / scale
-        return None
-    return None
+            if child == b"mvhd":
+                stated.append(_stated(b, cbody, cend, "mvhd") or 0.0)
+            elif child == b"trak":
+                for part, pbody, pend in _boxes(b, cbody, cend):
+                    if part != b"mdia":
+                        continue
+                    for media, mbody, mend in _boxes(b, pbody, pend):
+                        if media == b"mdhd":
+                            stated.append(_stated(b, mbody, mend, "mdhd") or 0.0)
+    longest = max(stated, default=0.0)
+    return longest or None
 
 
 _EBML, _SEGMENT, _INFO, _TIMECODE_SCALE, _DURATION = 0x1A45DFA3, 0x18538067, 0x1549A966, 0x2AD7B1, 0x4489

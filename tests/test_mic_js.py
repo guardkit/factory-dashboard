@@ -41,5 +41,3 @@ def test_the_microphone_states_and_where_it_hides() -> None:
     assert results["overlapping_prompts"] == "one recording, both microphones closed"
     assert results["recorder_throws"] == results["start_throws"] == "error, microphone released"
     assert len(results) == 23
-
-

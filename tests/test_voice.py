@@ -54,17 +54,32 @@ def box(kind: bytes, body: bytes) -> bytes:
     return (8 + len(body)).to_bytes(4, "big") + kind + body
 
 
+def full_header(version: int, scale: int, duration: int) -> bytes:
+    """The body of an mvhd or mdhd: version 0 (32-bit fields) or 1 (64-bit), then padding."""
+    if version == 0:
+        return b"\x00\x00\x00\x00" + b"\x00" * 8 + scale.to_bytes(4, "big") + duration.to_bytes(4, "big") + b"\x00" * 4
+    return b"\x01\x00\x00\x00" + b"\x00" * 16 + scale.to_bytes(4, "big") + duration.to_bytes(8, "big") + b"\x00" * 4
+
+
+def trak(version: int, scale: int, duration: int) -> bytes:
+    """A track: tkhd, then mdia holding hdlr and mdhd (the track's own timescale and duration)."""
+    mdia = box(b"mdia", box(b"hdlr", b"\x00" * 24) + box(b"mdhd", full_header(version, scale, duration)))
+    return box(b"trak", box(b"tkhd", b"\x00" * 84) + mdia)
+
+
 def mp4(seconds: float | None = None, *, version: int = 0, scale: int = 1000, fragmented: bool = False,
-        duration: int | None = None) -> bytes:
-    """An MP4: ftyp, then moov holding mvhd (version 0 with 32-bit fields, or 1 with 64-bit) and a trak,
-    then the media (moof + mdat when fragmented, as Safari records, with a duration of zero)."""
+        duration: int | None = None, tracks: tuple[bytes, ...] | None = None) -> bytes:
+    """An MP4: ftyp, then moov holding mvhd (version 0 with 32-bit fields, or 1 with 64-bit) and its tracks
+    (by default one opaque trak), then the media (moof + mdat when fragmented, as Safari records, with a
+    duration of zero)."""
     d = duration if duration is not None else 0 if seconds is None else int(seconds * scale)
     if version == 0:
         mvhd = b"\x00\x00\x00\x00" + b"\x00" * 8 + scale.to_bytes(4, "big") + d.to_bytes(4, "big") + b"\x00" * 80
     else:
         mvhd = b"\x01\x00\x00\x00" + b"\x00" * 16 + scale.to_bytes(4, "big") + d.to_bytes(8, "big") + b"\x00" * 80
     media = box(b"moof", b"\x00" * 40) + box(b"mdat", b"\x00" * 400) if fragmented else box(b"mdat", b"\x00" * 400)
-    moov = box(b"moov", box(b"mvhd", mvhd) + box(b"trak", b"\x00" * 40))
+    traks = b"".join(tracks) if tracks is not None else box(b"trak", b"\x00" * 40)
+    moov = box(b"moov", box(b"mvhd", mvhd) + traks)
     return box(b"ftyp", b"M4A \x00\x00\x00\x00isomM4A ") + moov + media
 
 
@@ -813,3 +828,47 @@ def test_malformed_sizes_are_refused(world: tuple[TestClient, FakeModel, FakeSpe
 def test_an_mp4_without_a_movie_header_passes() -> None:
     assert voice.mp4_seconds(_mp4_without_mvhd()) is None
     assert voice.check_recording(_mp4_without_mvhd(), "audio/mp4") is None
+
+
+# --- Codex round 5: each track's own length ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("audio", [
+    mp4(fragmented=True, tracks=(trak(0, 48000, 2_880_000),)),                        # mvhd zero, mdhd 60 s
+    mp4(duration=0xFFFFFFFF, tracks=(trak(1, 48000, 2_880_000),)),                     # mvhd unknown, v1 mdhd
+    mp4(fragmented=True, tracks=(trak(0, 48000, 480_000), trak(0, 44100, 44100 * 45))),  # second track 45 s
+    mp4(10, tracks=(trak(0, 48000, 2_880_000),)),                                      # mvhd short, track long
+], ids=["zero-mvhd-60s-track", "unknown-mvhd-60s-track-v1", "second-track-45s", "short-mvhd-60s-track"])
+def test_a_track_stating_over_30s_is_refused(world: tuple[TestClient, FakeModel, FakeSpeech], audio: bytes) -> None:
+    client, _, speech = world
+    assert len(audio) < voice.MAX_COMPRESSED_BYTES
+    r = _ask(client, audio, "audio/mp4")
+    assert r.status_code == 413 and r.json() == {"message": voice.TOO_LONG}
+    assert speech.requests == []
+
+
+@pytest.mark.parametrize(("audio", "seconds"), [
+    (mp4(fragmented=True, tracks=(trak(0, 48000, 480_000),)), 10.0),
+    (mp4(duration=0xFFFFFFFF, tracks=(trak(1, 44100, 44100 * 29),)), 29.0),
+    (mp4(fragmented=True, tracks=(trak(0, 48000, 0),)), None),                 # Safari: nothing stated
+    (mp4(fragmented=True, tracks=(trak(0, 48000, 0xFFFFFFFF), trak(1, 48000, 2**64 - 1))), None),
+], ids=["zero-mvhd-10s-track", "unknown-mvhd-29s-track", "fragmented-nothing-stated", "all-unknown"])
+def test_a_short_or_unstated_track_passes(world: tuple[TestClient, FakeModel, FakeSpeech], audio: bytes,
+                                          seconds: float | None) -> None:
+    client, _, _ = world
+    read = voice.mp4_seconds(audio)
+    assert read == pytest.approx(seconds) if seconds is not None else read is None
+    assert _ask(client, audio, "audio/mp4").status_code == 200
+
+
+@pytest.mark.parametrize("audio", [
+    mp4(fragmented=True, tracks=(box(b"trak", (500).to_bytes(4, "big") + b"mdia" + b"\x00" * 20),)),
+    mp4(fragmented=True, tracks=(box(b"trak", box(b"mdia", box(b"mdhd", b"\x00" * 10))),)),
+    mp4(fragmented=True, tracks=(box(b"trak", box(b"mdia", box(b"mdhd", b"\x02" + b"\x00" * 40))),)),
+    mp4(fragmented=True, tracks=(trak(0, 0, 480_000),)),
+], ids=["trak-child-past-end", "mdhd-too-short", "mdhd-version-2", "mdhd-timescale-zero"])
+def test_a_malformed_track_is_refused(world: tuple[TestClient, FakeModel, FakeSpeech], audio: bytes) -> None:
+    client, _, speech = world
+    r = _ask(client, audio, "audio/mp4")
+    assert r.status_code == 415 and r.json() == {"message": voice.NOT_AUDIO}
+    assert speech.requests == []
