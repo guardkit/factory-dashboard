@@ -187,9 +187,12 @@ class FormSizeLimit:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http" and scope["method"] == "POST" and scope["path"] not in _OWN_BODY_LIMITS:
-            length = next((bytes(v).decode("latin-1").strip() for k, v in scope.get("headers", ())
-                           if k == b"content-length"), "")
-            refusal = ((411, NO_FORM_LENGTH) if not (length.isascii() and length.isdigit())
+            headers = scope.get("headers", ())
+            length = next((bytes(v).decode("latin-1").strip() for k, v in headers if k == b"content-length"), "")
+            # A Transfer-Encoding body is framed by the body itself, whatever Content-Length says (and the
+            # h11 server would read it), so it is refused like a missing length.
+            chunked = any(k == b"transfer-encoding" for k, _ in headers)
+            refusal = ((411, NO_FORM_LENGTH) if chunked or not (length.isascii() and length.isdigit())
                        else (413, FORM_TOO_BIG) if int(length) > MAX_FORM_BYTES else None)
             if refusal:
                 await PlainTextResponse(refusal[1], status_code=refusal[0])(scope, receive, send)

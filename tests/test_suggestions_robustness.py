@@ -175,6 +175,16 @@ def test_a_signed_out_oversize_form_is_refused_before_reading(data: Path, path: 
     assert (status, reads) == (411, 0) and body.decode() == app_module.NO_FORM_LENGTH
 
 
+@pytest.mark.parametrize("path", SIZE_GUARDED)
+def test_a_transfer_encoding_is_refused_even_with_a_length(data: Path, path: str) -> None:
+    """If the server ever reads chunked bodies itself (h11), a small Content-Length beside a
+    Transfer-Encoding must not let a large chunked body through."""
+    app = create_app(db_path=data / "readmodel.db", tenants_path=TENANTS_TEST)
+    status, reads, body = _raw_post(app, path, [(b"content-type", b"application/x-www-form-urlencoded"),
+                                                (b"content-length", b"6"), (b"transfer-encoding", b"chunked")])
+    assert (status, reads) == (411, 0) and body.decode() == app_module.NO_FORM_LENGTH
+
+
 def test_a_form_at_the_limit_goes_on_to_the_sign_in_check(data: Path) -> None:
     app = create_app(db_path=data / "readmodel.db", tenants_path=TENANTS_TEST)
     status, reads, _ = _raw_post(app, "/suggest", [(b"content-type", b"application/x-www-form-urlencoded"),
@@ -192,7 +202,7 @@ def test_the_largest_real_suggestion_fits_the_limit(data: Path) -> None:
 # --- 3. suggestion ids --------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("ident", ["%C2%B2", "99999999999999999999999", "1234567890123456789", "-1", "1.0", "%D9%A3"])
+@pytest.mark.parametrize("ident", ["%C2%B2", "99999999999999999999999", "9999999999999999999", "-1", "1.0", "%D9%A3"])
 def test_odd_suggestion_ids_are_refused_with_a_sentence(data: Path, ident: str) -> None:
     with _board(data) as client:
         login(client)

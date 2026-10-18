@@ -12,6 +12,7 @@ import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -237,6 +238,26 @@ def test_an_unknown_suggestion_or_status_changes_nothing(board: tuple[TestClient
     r = client.post(f"/suggestions/{ident}/status", data={"status": status}, headers=ORIGIN, follow_redirects=False)
     assert r.status_code == 400 and suggestions.UNKNOWN in r.text
     assert suggestions.list_all(path)[0].status == "new"
+
+
+def test_the_database_wait_is_three_seconds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The shipped wait for a busy file (the robustness tests shorten it); every connection uses it."""
+    assert suggestions._BUSY_TIMEOUT_SECS == 3.0
+    seen: list[object] = []
+    real = sqlite3.connect
+
+    def spy(*args: Any, **kw: Any) -> sqlite3.Connection:
+        seen.append(kw.get("timeout"))
+        conn: sqlite3.Connection = real(*args, **kw)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", spy)
+    path = tmp_path / suggestions.DB_NAME
+    suggestions.init_db(path)
+    suggestions.add(path, JAMES, "x", "/")
+    suggestions.set_status(path, 1, "done", JAMES)
+    suggestions.list_all(path)
+    assert seen == [3.0, 3.0, 3.0, 3.0]
 
 
 def test_the_database_refuses_an_unknown_status_itself(tmp_path: Path) -> None:
