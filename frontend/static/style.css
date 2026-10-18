@@ -950,9 +950,10 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
   .journey-bar:not(.journey-bar--mini) .journey-station__name { font-size: 15px; line-height: 20px; }
 
   .dense-table th, .dense-table td { padding-left: 8px; padding-right: 8px; }
-  /* On a phone a figure may wrap between its words ("17 Oct" over "10:41"), and free text keeps
-     8em, still wider than any ordinary word. Each page hides its less important columns. */
-  .dense-table td.num { white-space: normal; }
+  /* On a phone a figure may wrap between its words ("17 Oct" over "10:41", "3 h 40 min" over
+     "so far"), keeping 6em so it breaks in two, not into single words; free text keeps 8em, still
+     wider than any ordinary word. Each page hides its less important columns. */
+  .dense-table td.num { white-space: normal; min-width: 6em; }
   .dense-table .dense-table__text, .dense-table .issue-row__detail { min-width: 8em; }
   .signal-list > .signal-row { grid-template-columns: minmax(0, 1fr); }
   .signal-list > .signal-row > .band-chip, .signal-list > .signal-row > .status-pill,
