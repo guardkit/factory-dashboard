@@ -19,12 +19,14 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
 import re
 import socket
+import struct
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -264,13 +266,16 @@ def check_recording(audio: bytes, content_type: str) -> tuple[int, str] | None: 
 
     The format is worked out from the bytes (`sniff`), and must be one the dashboard accepts and the same
     family as the label (webm, mp4/m4a, wav), or the recording is refused (415); Ogg is refused whatever its
-    label. Both rules,
-    because the label then decides nothing: the size limit and the length check follow the bytes, and the
-    speech-to-text model is sent a file name that matches what it will decode. A browser's own recordings
-    always agree with their labels, so a disagreement is a mistake or a way round the length check.
-    A WAV must say its length truthfully, and one that cannot be read is refused (415). Chrome's webm and
-    Safari's mp4 do not say, so for those the browser's 30-second stop and the 1 MB limit (about a minute
-    even at 128 kbps) bound it."""
+    label. Both rules, because the label then decides nothing: the size limit and the length check follow
+    the bytes, and the speech-to-text model is sent a file name that matches what it will decode. A
+    browser's own recordings always agree with their labels, so a disagreement is a mistake or a way round
+    the length check.
+
+    The 30 seconds are checked wherever the file states its length: a WAV always (and one whose length
+    cannot be read is refused, 415); an MP4 in its movie header (mvhd); a WebM in its Info/Duration. A
+    malformed MP4 box or WebM element is refused (415). Chrome's live WebM and Safari's fragmented MP4 may
+    state no length at all; for those, the browser's 30-second stop and the 1 MB limit (about a minute even
+    at 128 kbps) bound it."""
     kind = base_type(content_type)
     if kind not in ACCEPTED_TYPES:
         return 415, NOT_AUDIO
@@ -281,14 +286,143 @@ def check_recording(audio: bytes, content_type: str) -> tuple[int, str] | None: 
         return 415, NOT_AUDIO
     if len(audio) > (MAX_WAV_BYTES if found == "wav" else MAX_COMPRESSED_BYTES):
         return 413, TOO_BIG
-    if found != "wav":
-        return None
-    seconds = wav_seconds(audio)
-    if seconds is None:
+    try:
+        seconds = {"wav": wav_seconds, "m4a": mp4_seconds, "webm": webm_seconds}[found](audio)
+    except Malformed:
         return 415, NOT_AUDIO
+    if seconds is None:
+        return (415, NOT_AUDIO) if found == "wav" else None
     if seconds > MAX_SECONDS + 0.5:
         return 413, TOO_LONG
     return None
+
+
+class Malformed(ValueError):
+    """An MP4 box or WebM element whose size or contents do not fit the file."""
+
+
+def _u(b: bytes, start: int, n: int) -> int:
+    """An n-byte big-endian number at `start`; Malformed if it runs past the end."""
+    if start < 0 or start + n > len(b):
+        raise Malformed("read past the end")
+    return int.from_bytes(b[start:start + n], "big")
+
+
+def _boxes(b: bytes, start: int, end: int) -> Iterator[tuple[bytes, int, int]]:
+    """(type, body start, body end) for each MP4 box in b[start:end]; the boxes must fill it exactly."""
+    pos = start
+    while pos < end:
+        if end - pos < 8:
+            raise Malformed("box header")
+        size, kind, body = _u(b, pos, 4), b[pos + 4:pos + 8], pos + 8
+        if size == 1:
+            size, body = _u(b, pos + 8, 8), pos + 16
+        elif size == 0:
+            size = end - pos
+        if size < body - pos or pos + size > end:
+            raise Malformed("box size")
+        yield kind, body, pos + size
+        pos += size
+
+
+def mp4_seconds(b: bytes) -> float | None:
+    """The length an MP4 states in moov/mvhd (version 0: 32-bit timescale and duration after two 32-bit
+    times; version 1: 64-bit times and duration). None when there is no mvhd or its duration is zero or
+    "unknown" (all ones), as in a fragmented recording. Malformed for a box that does not fit; the top-level
+    boxes are all walked first, so they must fill the file exactly."""
+    for kind, body, end in list(_boxes(b, 0, len(b))):
+        if kind != b"moov":
+            continue
+        for child, cbody, cend in _boxes(b, body, end):
+            if child != b"mvhd":
+                continue
+            version = _u(b, cbody, 1)
+            if version == 0:
+                scale, duration, unknown = _u(b, cbody + 12, 4), _u(b, cbody + 16, 4), 0xFFFFFFFF
+                last = cbody + 20
+            elif version == 1:
+                scale, duration, unknown = _u(b, cbody + 20, 4), _u(b, cbody + 24, 8), 0xFFFFFFFFFFFFFFFF
+                last = cbody + 32
+            else:
+                raise Malformed("mvhd version")
+            if last > cend or not scale:
+                raise Malformed("mvhd")
+            return None if duration in (0, unknown) else duration / scale
+        return None
+    return None
+
+
+_EBML, _SEGMENT, _INFO, _TIMECODE_SCALE, _DURATION = 0x1A45DFA3, 0x18538067, 0x1549A966, 0x2AD7B1, 0x4489
+
+
+def _vint(b: bytes, pos: int, max_len: int, *, keep_marker: bool) -> tuple[int, int, bool]:
+    """An EBML variable-length number at `pos`: (value, length, all value bits set)."""
+    first = _u(b, pos, 1)
+    length = 1
+    while length <= max_len and not first & (0x80 >> (length - 1)):
+        length += 1
+    if length > max_len:
+        raise Malformed("vint")
+    value = _u(b, pos, length)
+    bits = 7 * length
+    data = value & ((1 << bits) - 1)
+    return (value if keep_marker else data), length, data == (1 << bits) - 1
+
+
+def _element(b: bytes, pos: int, end: int) -> tuple[int, int, int | None]:
+    """(id, body start, body end or None for "unknown size") of the EBML element at `pos`."""
+    ident, n, _ = _vint(b, pos, 4, keep_marker=True)
+    size, m, unknown = _vint(b, pos + n, 8, keep_marker=False)
+    body = pos + n + m
+    if unknown:
+        return ident, body, None
+    if body + size > end:
+        raise Malformed("element size")
+    return ident, body, body + size
+
+
+def webm_seconds(b: bytes) -> float | None:
+    """The length a WebM states in Segment/Info/Duration (a float in TimecodeScale units, 1,000,000 ns
+    by default). None when Info has no Duration, or no Info comes before an element of unknown size (a
+    live recording's Cluster). Malformed for an element that does not fit."""
+    ident, _, header_end = _element(b, 0, len(b))
+    if ident != _EBML or header_end is None:
+        raise Malformed("EBML header")
+    ident, pos, segment_end = _element(b, header_end, len(b))
+    if ident != _SEGMENT:
+        raise Malformed("no Segment")
+    end = len(b) if segment_end is None else segment_end
+    while pos < end:
+        ident, body, child_end = _element(b, pos, end)
+        if child_end is None:
+            return None
+        if ident == _INFO:
+            return _info_seconds(b, body, child_end)
+        pos = child_end
+    return None
+
+
+def _info_seconds(b: bytes, pos: int, end: int) -> float | None:
+    scale, duration = 1_000_000, None
+    while pos < end:
+        ident, body, child_end = _element(b, pos, end)
+        if child_end is None:
+            raise Malformed("unknown size inside Info")
+        n = child_end - body
+        if ident == _TIMECODE_SCALE:
+            if not 1 <= n <= 8:
+                raise Malformed("TimecodeScale")
+            scale = _u(b, body, n)
+        elif ident == _DURATION:
+            if n not in (4, 8):
+                raise Malformed("Duration")
+            duration = struct.unpack(">f" if n == 4 else ">d", b[body:child_end])[0]
+        pos = child_end
+    if duration is None or duration == 0:
+        return None
+    if not scale or not math.isfinite(duration) or duration < 0:
+        raise Malformed("Duration")
+    return float(duration * scale / 1e9)
 
 
 def wav_seconds(b: bytes) -> float | None:

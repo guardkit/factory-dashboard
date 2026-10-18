@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import socket
+import struct
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -30,7 +31,45 @@ from tests.test_chat import TENANTS_TEST, FakeModel, _chat, _ledger
 
 ORIGIN = {"Origin": LOOPBACK_URL}
 FAKE_WAV = b"RIFF" + b"\x00" * 40 + b"spoken answer"
-WEBM = b"\x1a\x45\xdf\xa3" + b"\x00" * 200
+
+
+def ebml(ident: bytes, payload: bytes, *, unknown: bool = False) -> bytes:
+    """One EBML element with an 8-byte size (or the "unknown size" a live recording uses)."""
+    size = b"\x01\xff\xff\xff\xff\xff\xff\xff" if unknown else ((1 << 56) | len(payload)).to_bytes(8, "big")
+    return ident + size + payload
+
+
+def webm(seconds: float | None = None, *, scale: int = 1_000_000, float32: bool = False) -> bytes:
+    """A WebM: EBML header, then a Segment of unknown size holding Info (TimecodeScale, MuxingApp and,
+    when `seconds` is given, Duration in TimecodeScale units) and a Cluster of unknown size, the way
+    Chrome's live recordings are laid out (they leave Duration out)."""
+    info = ebml(b"\x2a\xd7\xb1", scale.to_bytes(3, "big")) + ebml(b"\x4d\x80", b"test")
+    if seconds is not None:
+        info += ebml(b"\x44\x89", struct.pack(">f" if float32 else ">d", seconds * 1e9 / scale))
+    segment = ebml(b"\x15\x49\xa9\x66", info) + ebml(b"\x1f\x43\xb6\x75", b"\xa3" + b"\x00" * 200, unknown=True)
+    return ebml(b"\x1a\x45\xdf\xa3", ebml(b"\x42\x82", b"webm")) + ebml(b"\x18\x53\x80\x67", segment, unknown=True)
+
+
+def box(kind: bytes, body: bytes) -> bytes:
+    return (8 + len(body)).to_bytes(4, "big") + kind + body
+
+
+def mp4(seconds: float | None = None, *, version: int = 0, scale: int = 1000, fragmented: bool = False,
+        duration: int | None = None) -> bytes:
+    """An MP4: ftyp, then moov holding mvhd (version 0 with 32-bit fields, or 1 with 64-bit) and a trak,
+    then the media (moof + mdat when fragmented, as Safari records, with a duration of zero)."""
+    d = duration if duration is not None else 0 if seconds is None else int(seconds * scale)
+    if version == 0:
+        mvhd = b"\x00\x00\x00\x00" + b"\x00" * 8 + scale.to_bytes(4, "big") + d.to_bytes(4, "big") + b"\x00" * 80
+    else:
+        mvhd = b"\x01\x00\x00\x00" + b"\x00" * 16 + scale.to_bytes(4, "big") + d.to_bytes(8, "big") + b"\x00" * 80
+    media = box(b"moof", b"\x00" * 40) + box(b"mdat", b"\x00" * 400) if fragmented else box(b"mdat", b"\x00" * 400)
+    moov = box(b"moov", box(b"mvhd", mvhd) + box(b"trak", b"\x00" * 40))
+    return box(b"ftyp", b"M4A \x00\x00\x00\x00isomM4A ") + moov + media
+
+
+WEBM = webm()                       # a live recording: no stated length
+MP4 = mp4(fragmented=True)          # Safari's fragmented recording: duration zero
 
 
 def wav(seconds: float, rate: int = 8000) -> bytes:
@@ -157,7 +196,7 @@ def test_a_spoken_question_gets_the_chats_answer_and_audio(world: tuple[TestClie
 
 @pytest.mark.parametrize(("audio", "content_type", "filename"), [
     (WEBM, "audio/webm;codecs=opus", "question.webm"),
-    (b"\x00\x00\x00\x18ftypM4A " + b"\x00" * 100, "audio/mp4", "question.m4a"),
+    (MP4, "audio/mp4", "question.m4a"),
     (wav(3), "audio/wav", "question.wav"),
 ])
 def test_each_browsers_recording_format_is_accepted(world: tuple[TestClient, FakeModel, FakeSpeech],
@@ -684,7 +723,7 @@ def test_a_mislabelled_long_recording_is_refused(world: tuple[TestClient, FakeMo
 
 
 def test_the_format_is_read_from_the_bytes() -> None:
-    mp4 = b"\x00\x00\x00\x18ftypM4A " + b"\x00" * 100
+    mp4 = MP4
     assert [voice.sniff(b) for b in (wav(1), ogg(1), WEBM, mp4, b"ID3\x04mp3", b"", b"RIFF")] == \
         ["wav", None, "webm", "m4a", None, None, None]
     # unknown bytes under an accepted label, and a family mismatch, are both refused
@@ -696,3 +735,81 @@ def test_the_format_is_read_from_the_bytes() -> None:
     for audio, label in ((WEBM, "audio/webm;codecs=opus"), (mp4, "audio/mp4"), (mp4, "audio/x-m4a"),
                          (wav(29), "audio/wav"), (wav(29), "audio/x-wav"), (wav(29), "audio/wave")):
         assert voice.check_recording(audio, label) is None, label
+
+
+# --- Codex round 4 ------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("audio", "label"), [
+    (mp4(60), "audio/mp4"), (mp4(60, version=1), "audio/mp4"), (mp4(31, scale=44100), "audio/x-m4a"),
+    (webm(60), "audio/webm"), (webm(31, float32=True), "audio/webm;codecs=opus"), (webm(60, scale=1000), "audio/webm"),
+], ids=["mp4-60s-v0", "mp4-60s-v1", "mp4-31s", "webm-60s", "webm-31s-float32", "webm-60s-other-scale"])
+def test_a_stated_length_over_30s_is_refused(world: tuple[TestClient, FakeModel, FakeSpeech],
+                                             audio: bytes, label: str) -> None:
+    client, _, speech = world
+    assert len(audio) < voice.MAX_COMPRESSED_BYTES
+    r = _ask(client, audio, label)
+    assert r.status_code == 413 and r.json() == {"message": voice.TOO_LONG}
+    assert speech.requests == []
+
+
+@pytest.mark.parametrize(("audio", "label", "seconds"), [
+    (mp4(10), "audio/mp4", 10.0), (mp4(29, version=1), "audio/mp4", 29.0),
+    (webm(10), "audio/webm", 10.0), (webm(29, float32=True), "audio/webm", 29.0),
+    (WEBM, "audio/webm;codecs=opus", None), (MP4, "audio/mp4", None),
+    (mp4(duration=0xFFFFFFFF), "audio/mp4", None), (mp4(version=1, duration=2**64 - 1), "audio/mp4", None),
+    (mp4(fragmented=False), "audio/mp4", None),
+], ids=["mp4-10s", "mp4-29s-v1", "webm-10s", "webm-29s-float32", "webm-live", "mp4-fragmented",
+        "mp4-unknown-v0", "mp4-unknown-v1", "mp4-zero"])
+def test_short_or_unstated_lengths_pass(world: tuple[TestClient, FakeModel, FakeSpeech],
+                                        audio: bytes, label: str, seconds: float | None) -> None:
+    client, _, _ = world
+    read = voice.webm_seconds(audio) if voice.sniff(audio) == "webm" else voice.mp4_seconds(audio)
+    assert read == pytest.approx(seconds) if seconds is not None else read is None
+    assert _ask(client, audio, label).status_code == 200
+
+
+def _mp4_without_mvhd() -> bytes:
+    return box(b"ftyp", b"M4A \x00\x00\x00\x00") + box(b"moov", box(b"trak", b"\x00" * 40)) + box(b"mdat", b"\x00" * 99)
+
+
+GOOD_WEBM = webm(10)
+_INFO_AT = GOOD_WEBM.index(b"\x15\x49\xa9\x66")
+_DURATION_AT = GOOD_WEBM.index(b"\x44\x89")
+
+MALFORMED = {
+    "mp4-box-too-small": b"\x00\x00\x00\x04ftyp" + mp4(10)[8:],
+    "mp4-box-past-end": (10**6).to_bytes(4, "big") + mp4(10)[4:],
+    "mp4-largesize-past-end": b"\x00\x00\x00\x01ftyp" + (10**6).to_bytes(8, "big") + b"\x00" * 40,
+    "mp4-child-past-moov": box(b"ftyp", b"M4A ") + box(b"moov", (500).to_bytes(4, "big") + b"mvhd" + b"\x00" * 30),
+    "mp4-mvhd-too-short": box(b"ftyp", b"M4A ") + box(b"moov", box(b"mvhd", b"\x00" * 12)),
+    "mp4-mvhd-version-2": box(b"ftyp", b"M4A ") + box(b"moov", box(b"mvhd", b"\x02" + b"\x00" * 99)),
+    "mp4-timescale-zero": mp4(duration=10, scale=0),
+    "mp4-trailing-bytes": mp4(10) + b"\x00\x00\x00",
+    "webm-header-size-zero": b"\x1a\x45\xdf\xa3\x00" + GOOD_WEBM[12:],
+    "webm-header-past-end": b"\x1a\x45\xdf\xa3" + ((1 << 56) | 10**6).to_bytes(8, "big") + b"\x00" * 50,
+    "webm-no-segment": ebml(b"\x1a\x45\xdf\xa3", b"") + ebml(b"\x15\x49\xa9\x66", b""),
+    "webm-info-past-end": (GOOD_WEBM[:_INFO_AT + 4] + ((1 << 56) | 10**6).to_bytes(8, "big")
+                           + GOOD_WEBM[_INFO_AT + 12:]),
+    "webm-duration-3-bytes": ebml(b"\x1a\x45\xdf\xa3", b"") + ebml(
+        b"\x18\x53\x80\x67", ebml(b"\x15\x49\xa9\x66", ebml(b"\x44\x89", b"\x00\x00\x01"))),
+    "webm-bad-id": ebml(b"\x1a\x45\xdf\xa3", b"") + ebml(b"\x18\x53\x80\x67", b"\x00\x00\x00\x00\x00"),
+    "webm-negative-duration": webm(-10),
+    "webm-cut-inside-info": GOOD_WEBM[:_DURATION_AT + 6],
+}
+
+
+@pytest.mark.parametrize("name", sorted(MALFORMED))
+def test_malformed_sizes_are_refused(world: tuple[TestClient, FakeModel, FakeSpeech], name: str) -> None:
+    client, _, speech = world
+    audio = MALFORMED[name]
+    label = "audio/mp4" if name.startswith("mp4") else "audio/webm"
+    assert voice.sniff(audio) == ("m4a" if name.startswith("mp4") else "webm"), name
+    r = _ask(client, audio, label)
+    assert r.status_code == 415 and r.json() == {"message": voice.NOT_AUDIO}, name
+    assert speech.requests == []
+
+
+def test_an_mp4_without_a_movie_header_passes() -> None:
+    assert voice.mp4_seconds(_mp4_without_mvhd()) is None
+    assert voice.check_recording(_mp4_without_mvhd(), "audio/mp4") is None
