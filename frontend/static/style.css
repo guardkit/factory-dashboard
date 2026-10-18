@@ -384,6 +384,26 @@ a.feature-title:hover { text-decoration: underline; }
   font-size: 13px; line-height: 16px; font-weight: 600; white-space: nowrap;
 }
 
+/* Six nav items and the cluster need about 1200px; below that the signed-in name is read out
+   but not shown (the avatar's initials stay), as on phones. */
+@media (max-width: 1199px) {
+  .topbar { gap: var(--space-16); }
+  .user-menu__name {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+}
+/* Tablet widths, above the phone tab bar: the wordmark goes (the green A and "Factory" stay, as
+   on a client's phone bar), the theme switch says just "Dark" or "Light", and the nav tightens. */
+@media (max-width: 959px) {
+  .topbar { padding: 0 var(--space-16); gap: var(--space-12); }
+  .topbar__wordmark, .theme-switch__mode { display: none; }
+  .topnav ul { gap: 0; }
+  .topnav__item { padding: 0 8px; }
+  .topnav__item[aria-current="page"]::after { left: 8px; right: 8px; }
+  .topbar__cluster { gap: var(--space-12); }
+}
+
 /* ==== frame: banner slot (at most one banner) ==== */
 
 .banner {
