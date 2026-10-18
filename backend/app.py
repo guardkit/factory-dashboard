@@ -32,6 +32,7 @@ from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from backend import accounts, auth, db, sse
+from backend.chat.service import Chat, FollowUp
 from backend.config_loader import (
     PLANS_PATH,
     TENANTS_PATH,
@@ -66,6 +67,7 @@ LOGIN_THROTTLED = (
 
 
 FormText = Annotated[str, Form()]
+OptionalFormText = Annotated[str, Form(max_length=2000)]
 
 
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
@@ -112,6 +114,7 @@ CROSS_SITE_LOGIN = (
     "Open the dashboard's own address and sign in there."
 )
 CROSS_SITE_LOGOUT = "This sign-out came from another website, so it was refused."
+CROSS_SITE_CHAT = "This question came from another website, so it was refused."
 _DEFAULT_PORTS = {"http": "80", "https": "443"}
 
 
@@ -191,9 +194,14 @@ def create_app(
     app.state.accounts = account_store
     app.state.login_throttle = accounts.LoginThrottle()
     app.state.templates = templates
+    # The chat (design requirement 9): one shared instance, so its one-at-a-time rule and its
+    # hourly limit hold across every request and every account. Part E's voice endpoint calls the
+    # same `app.state.chat.ask(question, user)`.
+    app.state.chat = Chat(db_path)
 
     _register_exception_handlers(app)
     _register_routes(app)
+    _register_chat_routes(app)
     return app
 
 
@@ -534,6 +542,40 @@ def _register_routes(app: FastAPI) -> None:
         gen = _sse_stream(request, request.app.state.db_path, sse.parse_panels(panels),
                           _last_event_id(request), once)
         return StreamingResponse(gen, media_type="text/event-stream")
+
+
+def _register_chat_routes(app: FastAPI) -> None:
+    """The chat (design requirement 9): operator accounts only."""
+
+    @app.get("/chat", response_class=HTMLResponse)
+    def chat_page(request: Request, user: OperatorPage) -> HTMLResponse:
+        # The full-page chat, for narrow screens; wide screens have the same panel in a side drawer.
+        return _render(request, "chat.html", {"exchanges": [], "chat_page": True, "nav_active": "",
+                                              "chrome": dbread.chrome_view(request.app.state.db_path),
+                                              "tenant": _tenant(request, user)})
+
+    @app.post("/chat", response_class=HTMLResponse)
+    def chat_ask(
+        request: Request,
+        user: OperatorApi,
+        question: OptionalFormText = "",
+        prior_question: OptionalFormText = "",
+        prior_clarify: OptionalFormText = "",
+    ) -> HTMLResponse:
+        # Same-origin only, like sign-in and sign-out: another site's page cannot spend the chat's
+        # model calls in a signed-in browser.
+        if not same_origin(request):
+            return HTMLResponse(CROSS_SITE_CHAT, status_code=403)
+        follow_up = FollowUp(prior_question, prior_clarify) if prior_question and prior_clarify else None
+        chat: Chat = request.app.state.chat
+        answer = chat.ask(question, user, follow_up=follow_up)
+        exchange = {"question": " ".join(question.split()), "answer": answer}
+        if request.headers.get("hx-request") == "true":
+            return _render(request, "fragments/chat_exchange.html", exchange)
+        # Without scripts the form posts here and gets the whole page back, answer included.
+        return _render(request, "chat.html", {"exchanges": [exchange], "chat_page": True, "nav_active": "",
+                                              "chrome": dbread.chrome_view(request.app.state.db_path),
+                                              "tenant": _tenant(request, user)})
 
 
 _FRAGMENT_TEMPLATES: dict[str, str] = {

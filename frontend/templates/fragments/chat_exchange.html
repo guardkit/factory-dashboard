@@ -1,0 +1,22 @@
+{# One question and its answer. The answer text and the links are the server's, from the records. #}
+<article class="chat-exchange chat-exchange--{{ answer.kind }}">
+  <p class="chat-exchange__question"><span class="visually-hidden">You asked: </span>{{ question }}</p>
+  <div class="chat-exchange__answer">
+    <p class="chat-exchange__text">{{ answer.text }}</p>
+    {% if answer.refs %}
+    <ul class="chat-refs" aria-label="Records this answer comes from">
+      {% for ref in answer.refs %}<li class="chat-refs__item chat-refs__item--{{ ref.kind }}"><a href="{{ ref.href }}">{{ ref.label }}</a></li>{% endfor %}
+    </ul>
+    {% endif %}
+    {% if answer.follow_up %}
+    <form class="chat-exchange__reply" method="post" action="/chat"
+          hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-disabled-elt="find button"
+          hx-on::after-request="if (event.detail.successful) this.remove()">
+      <input type="hidden" name="prior_question" value="{{ answer.follow_up.question }}">
+      <input type="hidden" name="prior_clarify" value="{{ answer.follow_up.clarify }}">
+      <label class="chat__label">Your reply <input class="chat__input" name="question" maxlength="500" required></label>
+      <button type="submit" class="chat__ask">Reply</button>
+    </form>
+    {% endif %}
+  </div>
+</article>
