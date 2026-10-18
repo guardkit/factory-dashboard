@@ -16,8 +16,9 @@ asks which (status ``ambiguous``), never a guess. A feature name whose words do 
 any feature falls back to a looser match (word endings and small words ignored) and lists the
 closest features as "did you mean" (also ``ambiguous``, with ``partial`` set), never as an answer.
 
-Cost and time are not measured yet (they arrive with part B). `cost_summary` and `time_summary` are
-registered so a question about them gets a plain "not measured yet", never a made-up number.
+Cost and time (part B) come from `dbread.cost_summary` and `dbread.time_summary`, the pages' own
+figures, on the answer's snapshot. When a figure is not measured or not available the answer says
+so with the record's reason, never as zero.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
-from backend.readmodel import dbread
+from backend.readmodel import costs, dbread
 from backend.readmodel import viewmodels as vm
 from backend.readmodel.factory import STATIONS, Factory, Feature, load_factory
 
@@ -47,8 +48,9 @@ class Ref:
 
 
 #: found: the answer; not_found: nothing matched; ambiguous: more than one record matched;
-#: not_measured: the dashboard does not measure this yet; bad_period: the dates could not be read.
-STATUSES = ("found", "not_found", "ambiguous", "not_measured", "bad_period")
+#: not_measured: the dashboard does not measure this yet; bad_period: the dates could not be read;
+#: no_scope: a cost or time question that named neither a feature nor a project.
+STATUSES = ("found", "not_found", "ambiguous", "not_measured", "bad_period", "no_scope")
 
 
 @dataclass(frozen=True)
@@ -375,18 +377,9 @@ def feature_status(ctx: Context, feature: str) -> Result:
     """Where one feature stands, as its page shows it."""
 
     def read(conn: sqlite3.Connection, factory: Factory) -> Result:
-        found = find_features(factory, feature)
-        if not found:
-            close = suggest_features(factory, feature)
-            if not close:
-                return Result("feature_status", "not_found", {"kind": "feature", "name": feature})
-            return _ambiguous("feature_status", "feature", feature,
-                              (Ref("feature", f"{_label(f)}, sent {_sent(f, ctx.now)}", f.link) for f in close),
-                              partial=True)
-        if len(found) > 1:
-            return _ambiguous("feature_status", "feature", feature,
-                              (Ref("feature", f"{_label(f)}, sent {_sent(f, ctx.now)}", f.link) for f in found))
-        f = found[0]
+        f = _one_feature("feature_status", factory, feature, ctx.now)
+        if isinstance(f, Result):
+            return f
         page = dbread.feature_page(ctx.db_path, f.key, ctx.now, conn=conn)
         assert page is not None
         _chrome, fp = page
@@ -561,13 +554,110 @@ def weekly_report(ctx: Context, period: str | None = None, project: str | None =
     return _with_store(ctx, read)
 
 
+def _one_feature(query: str, factory: Factory, name: str, now: datetime) -> Feature | Result:
+    """The one feature `name` means, or the not-found / which-one answer (as feature_status gives)."""
+    found = find_features(factory, name)
+    if not found:
+        close = suggest_features(factory, name)
+        if not close:
+            return Result(query, "not_found", {"kind": "feature", "name": name})
+        return _ambiguous(query, "feature", name,
+                          (Ref("feature", f"{_label(f)}, sent {_sent(f, now)}", f.link) for f in close), partial=True)
+    if len(found) > 1:
+        return _ambiguous(query, "feature", name,
+                          (Ref("feature", f"{_label(f)}, sent {_sent(f, now)}", f.link) for f in found))
+    return found[0]
+
+
+def _cost_or_time_scope(query: str, ctx: Context, factory: Factory, feature: str | None,
+                        project: str | None) -> tuple[str, str, str, Ref] | Result:
+    """(scope, the key dbread takes, the name to show, a link) for a feature or a project, or the
+    answer when it cannot be told which one is meant. A feature wins when both are given."""
+    if feature:
+        f = _one_feature(query, factory, feature, ctx.now)
+        if isinstance(f, Result):
+            return f
+        return "feature", f.key, _label(f), _feature_ref(f)
+    if project:
+        name, problem = _resolve_project(query, factory, project)
+        if problem is not None or name is None:
+            return problem or Result(query, "not_found", {"kind": "project", "name": project})
+        return "project", name, name, _project_ref(name)
+    return Result(query, "no_scope", {"what": "cost" if query == "cost_summary" else "time"})
+
+
+def _cost_feed_note(conn: sqlite3.Connection, now: datetime) -> str:
+    """The cost feed's "last read at … — may be incomplete" when its last good import is over ten
+    minutes old (the pages' cost warning), or ""."""
+    fresh = costs.cost_freshness(conn)
+    return fresh.stale_text(now) if fresh.state(now) == "stale" else ""
+
+
+def _bounds(p: Period | None) -> tuple[datetime | None, datetime | None]:
+    return dbread._window_bounds(*p.window) if p is not None else (None, None)
+
+
 def cost_summary(ctx: Context, project: str | None = None, feature: str | None = None,
                  period: str | None = None) -> Result:
-    """Cost is not measured yet (part B). Never a number until it is."""
-    return Result("cost_summary", "not_measured", {"what": "cost"}, (PAGES["reports"],))
+    """Model calls, tokens and nominal cost of one feature or one project (`dbread.cost_summary`,
+    the pages' own figures), optionally only calls that started in a period. A gap is said with
+    its reason, never shown as zero."""
+    p = resolve_period(period, ctx.now) if period else None
+    if period and p is None:
+        return _bad_period("cost_summary", period)
+
+    def read(conn: sqlite3.Connection, factory: Factory) -> Result:
+        found = _cost_or_time_scope("cost_summary", ctx, factory, feature, project)
+        if isinstance(found, Result):
+            return found
+        scope, key, name, ref = found
+        lo, hi = _bounds(p)
+        s = dbread.cost_summary(ctx.db_path, feature=key if scope == "feature" else None,
+                                project=key if scope == "project" else None, lo=lo, hi=hi, now=ctx.now, conn=conn)
+        fields: dict[str, object] = {
+            "scope": scope, "name": name, "period_label": p.label if p else "", "state": s.state,
+            "reason": s.reason, "calls": str(s.calls), "tokens_in": vm.fmt_tokens(s.tokens_in),
+            "tokens_out": vm.fmt_tokens(s.tokens_out),
+            "cost": vm.fmt_usd(s.cost_usd) if s.state == "measured" and s.cost_usd is not None else "",
+            # The cost feed's own staleness (not Forge's), whatever the figure's state.
+            "estimated": "yes" if s.estimated else "", "stale_text": _cost_feed_note(conn, ctx.now),
+            "price_label": s.price_label, "left_out": str(s.left_out), "stale_note": _stale_note(ctx, conn),
+        }
+        refs = [ref] + ([_period_ref(p, "reports")] if p else [])
+        return Result("cost_summary", "found", fields, tuple(refs))
+
+    return _with_store(ctx, read)
 
 
 def time_summary(ctx: Context, project: str | None = None, feature: str | None = None,
                  period: str | None = None) -> Result:
-    """Time split into machine time and waiting is not measured yet (part B). Never a number until it is."""
-    return Result("time_summary", "not_measured", {"what": "time"}, (PAGES["features"],))
+    """Elapsed, machine and waiting time of one feature or of one project's features sent in a period
+    (`dbread.time_summary`, the pages' own figures). A gap is said with its reason, never as zero."""
+    p = resolve_period(period, ctx.now) if period else None
+    if period and p is None:
+        return _bad_period("time_summary", period)
+
+    def read(conn: sqlite3.Connection, factory: Factory) -> Result:
+        found = _cost_or_time_scope("time_summary", ctx, factory, feature, project)
+        if isinstance(found, Result):
+            return found
+        scope, key, name, ref = found
+        lo, hi = _bounds(p) if scope == "project" else (None, None)
+        t = dbread.time_summary(ctx.db_path, feature=key if scope == "feature" else None,
+                                project=key if scope == "project" else None, lo=lo, hi=hi, now=ctx.now, conn=conn)
+        measured = t.state == "measured"
+
+        def secs(v: float | None) -> str:
+            return vm.fmt_age(v) if measured and v is not None else ""
+
+        fields: dict[str, object] = {
+            "scope": scope, "name": name, "period_label": p.label if p and scope == "project" else "",
+            "state": t.state, "reason": t.reason, "features": str(t.features),
+            "not_measured_count": str(t.not_measured_count), "elapsed": secs(t.elapsed_secs),
+            "machine": secs(t.machine_secs), "waiting": secs(t.waiting_secs), "so_far": "yes" if t.so_far else "",
+            "waiting_parts": [f"{label} {vm.fmt_age(v)}" for label, v in t.waiting_parts[:3]] if measured else [],
+            "stale_note": _stale_note(ctx, conn),
+        }
+        return Result("time_summary", "found", fields, (ref,))
+
+    return _with_store(ctx, read)

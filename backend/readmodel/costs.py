@@ -334,6 +334,9 @@ class CostSummary:
     stale: bool
     price_label: str
     refs: tuple[str, ...]          # feature codes / request ids the figures cover
+    unpriced_calls: int = 0        # calls on a model with no price (disclosed in `reason`)
+    stale_text: str = ""           # "cost data last read at … — may be incomplete" when `stale`
+    left_out: int = 0              # a project's features sent before calls were tagged (not counted)
 
 
 @dataclass(frozen=True)

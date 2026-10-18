@@ -319,13 +319,15 @@ def test_a_stale_record_is_said_and_the_report_withheld(store: Path) -> None:
     assert "withheld" in answers.render(report)
 
 
-def test_cost_and_time_are_not_measured_yet(ctx: tools.Context) -> None:
-    for run in (tools.cost_summary, tools.time_summary):
-        r = run(ctx, project="acme/notes")
-        assert r.status == "not_measured"
-        text = answers.render(r)
-        assert "isn't measured yet" in text
-        assert not re.search(r"\d", text)
+def test_cost_before_any_cost_import_is_not_available_never_zero(ctx: tools.Context) -> None:
+    """This ledger has no cost import (tests/test_chat_cost.py has the real figures)."""
+    r = tools.cost_summary(ctx, project="acme/notes")
+    assert (r.status, r.fields["state"]) == ("found", "not_available")
+    text = answers.render(r)
+    assert text == "Cost for acme/notes isn't available: LiteLLM's spend log has not been read yet."
+    assert "$" not in text and not re.search(r"\d", text)
+    t = tools.time_summary(ctx, project="acme/notes")
+    assert t.status == "found" and grounding.figures_grounded(answers.render(t), t.fields)
 
 
 def test_periods() -> None:
@@ -432,7 +434,8 @@ def _every_result(ctx: tools.Context) -> list[tools.Result]:
         tools.project_summary(ctx, "notes"), tools.open_issues(ctx), tools.open_issues(ctx, "acme/notes-api"),
         tools.delivered(ctx), tools.delivered(ctx, "last month"), tools.delivered(ctx, "bad"),
         tools.weekly_report(ctx), tools.weekly_report(ctx, "this week", "acme/notes"),
-        tools.cost_summary(ctx), tools.time_summary(ctx),
+        tools.cost_summary(ctx), tools.time_summary(ctx), tools.cost_summary(ctx, project="acme/notes"),
+        tools.time_summary(ctx, feature="FEAT-0001"), tools.time_summary(ctx, project="acme/notes"),
         tools.weekly_report(tools.Context(ctx.db_path, NOW + timedelta(days=2))),
     ]
 
@@ -466,7 +469,7 @@ def test_the_templates_add_no_digits_of_their_own(ctx: tools.Context) -> None:
 
 
 _COUNT_KEYS = {"count", "more", "more_issues", "more_delivered", "open_issue_count", "attempts",
-               "delivered_count", "in_flight_count"}
+               "delivered_count", "in_flight_count", "calls", "left_out", "features", "not_measured_count"}
 
 
 def test_figure_check_catches_an_invented_number() -> None:

@@ -187,6 +187,67 @@ def _not_measured(fields: dict[str, object]) -> str:
             "its page, and you can ask me about a feature by name.")
 
 
+def _scope_head(fields: dict[str, object]) -> str:
+    """"Search box (FEAT-…)" or "acme/notes", with the period when one was asked for."""
+    when = _s(fields, "period_label")
+    return _s(fields, "name").rstrip(".") + (f", {when}" if when else "")
+
+
+def _cost_summary(fields: dict[str, object]) -> str:
+    head = _scope_head(fields)
+    state = _s(fields, "state")
+    # The cost feed's own warning goes with every cost answer, measured or not (as the pages show it).
+    cost_note = (" Note: " + _sentence(_s(fields, "stale_text"))) if _s(fields, "stale_text") else ""
+    if state == "not_available":
+        return (_stale(fields) + f"Cost for {head} isn't available: " + _sentence(_reason(_s(fields, "reason")))
+                + cost_note)
+    if state != "measured":
+        return (_stale(fields) + f"Cost for {head} isn't measured: " + _sentence(_reason(_s(fields, "reason")))
+                + cost_note)
+    if _s(fields, "calls") == "0":
+        parts = [f"{head}: no model calls recorded."]
+    else:
+        estimated = " (part estimated from the tokens)" if _s(fields, "estimated") else ""
+        parts = [f"{head}: {_plural(_s(fields, 'calls'), 'model call', 'model calls')}, "
+                 f"{_s(fields, 'tokens_in')} tokens in and {_s(fields, 'tokens_out')} out, "
+                 f"nominal cost {_s(fields, 'cost')}{estimated}."]
+    if _s(fields, "reason"):
+        parts.append(_sentence(_s(fields, "reason")))
+    left_out = _s(fields, "left_out")
+    if left_out and left_out != "0":
+        noun = "feature" if left_out == "1" else "features"
+        parts.append(f"It leaves out {left_out} {noun} sent before calls were tagged by feature.")
+    if _s(fields, "price_label"):
+        parts.append(_sentence(_s(fields, "price_label")))
+    return _stale(fields) + " ".join(parts) + cost_note
+
+
+def _time_summary(fields: dict[str, object]) -> str:
+    head = _scope_head(fields)
+    if _s(fields, "state") != "measured":
+        return _stale(fields) + f"Time for {head} isn't measured: " + _sentence(_reason(_s(fields, "reason")))
+    so_far = " so far" if _s(fields, "so_far") else ""
+    scope = ""
+    if _s(fields, "scope") == "project":
+        scope = f" across {_plural(_s(fields, 'features'), 'feature', 'features')}"
+    parts = [f"{head}{scope}: {_s(fields, 'elapsed')} elapsed{so_far}, of which {_s(fields, 'machine')} machine "
+             f"time and {_s(fields, 'waiting')} waiting."]
+    waits = [str(w) for w in _list(fields, "waiting_parts")]
+    if waits:
+        parts.append("Longest waits: " + _sentence(_join(waits)))
+    if _s(fields, "reason"):
+        parts.append(_sentence(_s(fields, "reason")))
+    return _stale(fields) + " ".join(parts)
+
+
+def _reason(text: str) -> str:
+    """A reason after "isn't measured:", without its own "Not measured:" in front."""
+    text = text.strip()
+    if text.lower().startswith("not measured:"):
+        text = text[len("not measured:"):].strip()
+    return text
+
+
 #: The clarifying questions, one fixed sentence per kind the model may ask for (grounding.CLARIFY_KINDS).
 CLARIFY_QUESTIONS: dict[str, str] = {
     "which_feature": "Which feature do you mean, by its name or its code on the Features page?",
@@ -211,12 +272,12 @@ TEMPLATES: dict[str, Callable[[dict[str, object]], str]] = {
     "open_issues": _open_issues,
     "delivered": _delivered,
     "weekly_report": _weekly_report,
-    "cost_summary": _not_measured,
-    "time_summary": _not_measured,
+    "cost_summary": _cost_summary,
+    "time_summary": _time_summary,
 }
 
 
-def render(result: Result) -> str:
+def render(result: Result) -> str:  # noqa: PLR0911 (one return per status)
     """The answer for a query's result. Every status has exactly one wording."""
     fields = result.fields
     if result.status == "not_found":
@@ -242,4 +303,7 @@ def render(result: Result) -> str:
                 "dates such as the ones on the Delivered page.")
     if result.status == "not_measured":
         return _not_measured(fields)
+    if result.status == "no_scope":
+        what = "cost" if _s(fields, "what") == "cost" else "time"
+        return f"Which feature or project do you mean? I can give the {what} of one at a time."
     return TEMPLATES[result.query](fields)

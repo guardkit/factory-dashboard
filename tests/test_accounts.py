@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import getpass
 import json
 import os
 import sqlite3
@@ -132,7 +133,7 @@ def test_the_example_accounts_file_parses() -> None:
 def test_hash_command_prints_a_hash_that_verifies(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(accounts.getpass, "getpass", lambda prompt="": "s3cret-typed")
+    monkeypatch.setattr(getpass, "getpass", lambda prompt="": "s3cret-typed")
     assert accounts.main(["hash"]) == 0
     printed = capsys.readouterr().out.strip()
     assert printed.startswith("pbkdf2_sha256$")
@@ -143,7 +144,7 @@ def test_hash_command_refuses_mismatched_passwords(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     answers = iter(["first", "second"])
-    monkeypatch.setattr(accounts.getpass, "getpass", lambda prompt="": next(answers))
+    monkeypatch.setattr(getpass, "getpass", lambda prompt="": next(answers))
     assert accounts.main(["hash"]) == 1
     out = capsys.readouterr()
     assert out.out == ""
@@ -263,7 +264,7 @@ def _set_cookie(client: TestClient, **headers: str) -> str:
     r = client.post("/login", data={"username": TEST_USER, "password": TEST_PASSWORD},
                     headers=headers, follow_redirects=False)
     assert r.status_code == 303
-    return r.headers["set-cookie"].lower()
+    return str(r.headers["set-cookie"]).lower()
 
 
 @pytest.mark.parametrize("base_url", ["https://dashboard.example:8443", "http://dashboard.example"])
@@ -375,7 +376,7 @@ def test_parallel_wrong_passwords_check_at_most_five_hashes(
     """Sixty wrong passwords at once: only five reach the (slow) password check."""
     calls: list[str] = []
     lock = threading.Lock()
-    real = accounts.verify_password
+    real = verify_password          # the function backend.accounts calls (imported from auth)
 
     def slow_verify(password: str, stored: str) -> bool:
         with lock:
@@ -414,7 +415,7 @@ def test_an_unknown_username_still_runs_a_password_check(
 ) -> None:
     """So a wrong username takes as long as a wrong password and does not reveal who exists."""
     seen: list[str] = []
-    real = accounts.verify_password
+    real = verify_password          # the function backend.accounts calls (imported from auth)
 
     def recording(password: str, stored: str) -> bool:
         seen.append(stored)
@@ -430,7 +431,7 @@ def test_an_unknown_username_still_runs_a_password_check(
 
 
 def _signed_in(client: TestClient) -> bool:
-    return client.get("/", follow_redirects=False).status_code == 200
+    return bool(client.get("/", follow_redirects=False).status_code == 200)
 
 
 @pytest.mark.parametrize("headers", [
