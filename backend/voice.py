@@ -37,8 +37,11 @@ DEFAULT_TTS_VOICE = "Ryan"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 MAX_SECONDS = 30
-#: The text-to-speech model stops at about 60 seconds of audio, so at most this many words are spoken.
-MAX_SPOKEN_WORDS = 120
+#: The text-to-speech model stops at about 60 seconds of audio, and the chat's answers (codes, dates,
+#: counts) are read at about one word a second, so by default at most 45 words of an answer are spoken
+#: (FACTORY_DASH_SPOKEN_WORDS). When an answer is cut, the spoken version ends with RESTS_ON_SCREEN.
+DEFAULT_SPOKEN_WORDS = 45
+RESTS_ON_SCREEN = "The rest is on screen."
 
 #: Accepted recordings: Chrome and Firefox record webm or ogg (Opus); Safari records mp4 (AAC).
 #: The value is the file name the speech-to-text server is sent, since it may decode by extension.
@@ -85,11 +88,12 @@ class VoiceSettings:
     tts_model: str = DEFAULT_TTS_MODEL
     tts_voice: str = DEFAULT_TTS_VOICE
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    spoken_words: int = DEFAULT_SPOKEN_WORDS
 
     @classmethod
     def from_env(cls) -> VoiceSettings:
-        """FACTORY_DASH_STT_URL, _STT_MODEL, _TTS_URL, _TTS_MODEL, _TTS_VOICE, _VOICE_TIMEOUT; empty means
-        the default."""
+        """FACTORY_DASH_STT_URL, _STT_MODEL, _TTS_URL, _TTS_MODEL, _TTS_VOICE, _VOICE_TIMEOUT and
+        _SPOKEN_WORDS; empty (or, for the numbers, not a positive number) means the default."""
         def env(name: str, default: str) -> str:
             return (os.environ.get(name) or "").strip() or default
 
@@ -97,9 +101,11 @@ class VoiceSettings:
             timeout = float(env("FACTORY_DASH_VOICE_TIMEOUT", str(DEFAULT_TIMEOUT_SECONDS)))
         except ValueError:
             timeout = DEFAULT_TIMEOUT_SECONDS
+        raw_words = env("FACTORY_DASH_SPOKEN_WORDS", str(DEFAULT_SPOKEN_WORDS))
+        spoken_words = int(raw_words) if raw_words.isdigit() and int(raw_words) > 0 else DEFAULT_SPOKEN_WORDS
         return cls(env("FACTORY_DASH_STT_URL", DEFAULT_STT_URL), env("FACTORY_DASH_STT_MODEL", DEFAULT_STT_MODEL),
                    env("FACTORY_DASH_TTS_URL", DEFAULT_TTS_URL), env("FACTORY_DASH_TTS_MODEL", DEFAULT_TTS_MODEL),
-                   env("FACTORY_DASH_TTS_VOICE", DEFAULT_TTS_VOICE), timeout)
+                   env("FACTORY_DASH_TTS_VOICE", DEFAULT_TTS_VOICE), timeout, spoken_words)
 
 
 class Voice:
@@ -198,19 +204,22 @@ _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 _RECORD_CODE = re.compile(r"\s*\([A-Z]+-[0-9A-Z]+\)")
 
 
-def spoken_version(text: str, max_words: int = MAX_SPOKEN_WORDS) -> str:
+def spoken_version(text: str, max_words: int = DEFAULT_SPOKEN_WORDS) -> str:
     """The first piece of the answer, split on sentences the way the study tutor splits for its speech
-    model: whole sentences up to `max_words`, or the first `max_words` words of one long sentence.
+    model: whole sentences up to `max_words`, or, when the first sentence alone is longer, its first
+    `max_words` whole words. When anything is left out, RESTS_ON_SCREEN is added (it is not counted).
     Record codes in brackets are left out of the spoken version only."""
+    all_words = " ".join(_RECORD_CODE.sub("", text).split())
     words: list[str] = []
-    for sentence in _SENTENCE_END.split(" ".join(_RECORD_CODE.sub("", text).split())):
+    for sentence in _SENTENCE_END.split(all_words):
         more = sentence.split()
         if words and len(words) + len(more) > max_words:
             break
         words.extend(more)
         if len(words) >= max_words:
             break
-    return " ".join(words[:max_words])
+    spoken = " ".join(words[:max_words])
+    return spoken if spoken == all_words else f"{spoken} {RESTS_ON_SCREEN}"
 
 
 # --- one spoken question ---------------------------------------------------------------------------------
@@ -248,7 +257,8 @@ def ask_by_voice(chat: Chat, voice: Voice, audio: bytes, content_type: str, user
         if not heard:
             return VoiceReply(422, HEARD_NOTHING)
         answer = chat.ask(heard, user, follow_up=follow_up)
-        reply = VoiceReply(transcript=heard, answer=answer, spoken=spoken_version(answer.text))
+        spoken = spoken_version(answer.text, voice.settings.spoken_words)
+        reply = VoiceReply(transcript=heard, answer=answer, spoken=spoken)
         try:
             reply.audio = voice.speak(reply.spoken)
         except VoiceUnavailable as exc:

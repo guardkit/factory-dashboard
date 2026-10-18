@@ -103,7 +103,7 @@ def test_a_spoken_question_gets_the_chats_answer_and_audio(world: tuple[TestClie
     assert {"kind": "feature", "label": d["answer"]["refs"][0]["label"], "href": "/features/FEAT-0001"} \
         in d["answer"]["refs"]
     assert base64.b64decode(d["audio"]["base64"]) == FAKE_WAV and d["audio"]["content_type"] == "audio/wav"
-    assert d["spoken"] == voice.spoken_version(d["answer"]["text"])
+    assert d["spoken"] == voice.spoken_version(d["answer"]["text"], 45)
     assert d["spoken"].startswith("2 features were merged") and "(FEAT-" not in d["spoken"]
     assert d["voice_note"] == ""
     # the browser's fragment: the chat's own exchange, marked as spoken, links included
@@ -153,24 +153,35 @@ def test_settings_come_from_the_environment(store: Path, monkeypatch: pytest.Mon
     for name, value in {"FACTORY_DASH_STT_URL": "http://spark.test:9000/v1/audio/transcriptions",
                         "FACTORY_DASH_STT_MODEL": "other-stt", "FACTORY_DASH_TTS_URL": "http://spark.test/tts",
                         "FACTORY_DASH_TTS_MODEL": "other-tts", "FACTORY_DASH_TTS_VOICE": "Vivian",
-                        "FACTORY_DASH_VOICE_TIMEOUT": "12"}.items():
+                        "FACTORY_DASH_VOICE_TIMEOUT": "12", "FACTORY_DASH_SPOKEN_WORDS": "30"}.items():
         monkeypatch.setenv(name, value)
     s = voice.VoiceSettings.from_env()
     assert s == voice.VoiceSettings("http://spark.test:9000/v1/audio/transcriptions", "other-stt",
-                                    "http://spark.test/tts", "other-tts", "Vivian", 12.0)
+                                    "http://spark.test/tts", "other-tts", "Vivian", 12.0, 30)
     monkeypatch.setenv("FACTORY_DASH_STT_URL", "")
     assert voice.VoiceSettings.from_env().stt_url == voice.DEFAULT_STT_URL
+    for bad in ("", "0", "-5", "lots"):
+        monkeypatch.setenv("FACTORY_DASH_SPOKEN_WORDS", bad)
+        assert voice.VoiceSettings.from_env().spoken_words == 45
+    monkeypatch.setenv("FACTORY_DASH_SPOKEN_WORDS", "30")
     assert create_app(db_path=store, tenants_path=TENANTS_TEST).state.voice.settings.tts_voice == "Vivian"
 
 
 def test_the_spoken_version_is_the_first_piece() -> None:
     sentence = "This sentence has exactly ten words in it, you see. "
-    text = sentence * 30
-    spoken = voice.spoken_version(text)
-    assert len(spoken.split()) == 120 and spoken.endswith("see.")
+    rest = " " + voice.RESTS_ON_SCREEN
+    # whole sentences up to the limit (45 by default: four sentences), then the honest ending
+    spoken = voice.spoken_version(sentence * 30)
+    assert spoken == (sentence * 4).strip() + rest
+    assert voice.spoken_version(sentence * 30, 120) == (sentence * 12).strip() + rest
+    # exactly at the limit, or under it: all of it, no ending
+    assert voice.spoken_version(sentence * 4, 40) == (sentence * 4).strip()
     assert voice.spoken_version("Short answer. Two sentences.") == "Short answer. Two sentences."
-    one_long = " ".join(["word"] * 300)
-    assert voice.spoken_version(one_long) == " ".join(["word"] * 120)
+    # one sentence longer than the limit: its first whole words, never part of a word
+    one_long = " ".join(["unbelievably"] * 300)
+    assert voice.spoken_version(one_long) == " ".join(["unbelievably"] * 45) + rest
+    # a short first sentence and a long second one: stop at the end of the first
+    assert voice.spoken_version("It is fine. " + " ".join(["word"] * 60) + ".") == "It is fine." + rest
     assert voice.spoken_version("Search box. (FEAT-0001) on 16 Oct 2026; and Export. (FEAT-0007) today.") \
         == "Search box. on 16 Oct 2026; and Export. today."
 
@@ -182,7 +193,9 @@ def test_a_long_answer_speaks_only_its_first_piece(world: tuple[TestClient, Fake
     monkeypatch.setattr(service.Chat, "ask", lambda self, q, user, follow_up=None: service.Answer(long_text))
     d = _ask(client).json()
     assert d["answer"]["text"] == long_text
-    assert len(json.loads(speech.requests[1].content)["input"].split()) == 120
+    spoken = json.loads(speech.requests[1].content)["input"]
+    assert spoken == "One two three four five six seven eight nine ten. " * 4 + voice.RESTS_ON_SCREEN
+    assert d["spoken"] == spoken
 
 
 # --- each failure falls back to text --------------------------------------------------------------------
