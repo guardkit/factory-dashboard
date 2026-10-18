@@ -60,7 +60,8 @@
       {% block hero %}{% endblock %}
       {% block content %}{% endblock %}
       {# Requirement 11: every operator page offers "Suggest a change", noting the page it came from
-         (not the chat page, the form itself, or the client-safe export, which is a client's document). #}
+         (not the form itself or the client-safe export, which is a client's document; the chat page has it
+         in the chat panel's head, fragments/chat_panel.html, because that page is one screen tall). #}
       {% if signed_in and signed_in.is_operator and not chat_page and not suggest_page and not export_page %}
       <p class="suggest-link no-print"><a href="/suggest?from={{ (request.url.path ~ ('?' ~ request.url.query if request.url.query else '')) | urlencode }}">Suggest a change</a> · <a href="/changes">What changed</a></p>
       {% endif %}

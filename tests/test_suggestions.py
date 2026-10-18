@@ -87,8 +87,13 @@ def test_every_operator_page_links_to_suggest_a_change_with_its_address(board: t
         assert body.count('class="suggest-link') == 1, path
         assert f'<a href="/suggest?from={encoded}">Suggest a change</a>' in body, path
         assert '<a href="/changes">What changed</a>' in body, path
-    # The chat page and the suggestion form itself do not repeat it.
-    assert "suggest-link" not in client.get("/chat").text
+    # The chat page has it in the chat panel's head (the page is one screen tall), once, from /chat;
+    # the drawer on the other pages does not repeat it.
+    chat = client.get("/chat").text
+    assert chat.count("Suggest a change</a>") == 1 and "suggest-link" not in chat
+    assert '<p class="chat__suggest"><a href="/suggest?from=/chat">Suggest a change</a>' in chat
+    assert client.get("/").text.count("Suggest a change</a>") == 1 and "chat__suggest" not in client.get("/").text
+    # The suggestion form itself does not repeat it.
     form = client.get("/suggest?from=/issues").text
     assert "suggest-link" not in form
     assert '<input type="hidden" name="from_page" value="/issues">' in form

@@ -120,6 +120,28 @@ const sideways = (page) => page.evaluate(() => document.documentElement.scrollWi
       await page.goto(base + path);
       out.sideways[path] = await sideways(page);
     }
+
+    // The /chat page at phone size, tall and short: the link shows in the panel's head, on screen,
+    // without covering the microphone or Ask, and the page does not scroll sideways.
+    out.chat = {};
+    for (const height of [800, 640]) {
+      await page.setViewportSize({ width: 375, height });
+      await page.goto(base + '/chat');
+      const hit = async (sel) => {
+        const b = await page.locator(sel).boundingBox();
+        const view = page.viewportSize();
+        const onScreen = !!b && b.y >= 0 && b.x >= 0 && b.y + b.height <= view.height && b.x + b.width <= view.width;
+        const top = b && await page.evaluate(([x, y, s]) => { const e = document.elementFromPoint(x, y);
+          return !!(e && e.closest(s)); }, [b.x + b.width / 2, b.y + b.height / 2, sel]);
+        return onScreen && top;
+      };
+      const sel = 'main .chat .chat__suggest a';
+      out.chat[height] = { link: await hit(sel), mic: await hit('main .chat .chat-mic'),
+                           ask: await hit('main .chat .chat__ask'), sideways: await sideways(page),
+                           href: await page.getAttribute(sel, 'href') };
+    }
+    await Promise.all([page.waitForURL(u => u.pathname === '/suggest', T), page.click('main .chat .chat__suggest a')]);
+    out.chatFrom = await page.inputValue('input[name=from_page]');
     await context.close();
   } catch (e) {
     out.error = String(e);
@@ -159,6 +181,10 @@ def test_a_person_suggests_a_change_by_voice_and_text_and_marks_it_done(
     assert got["fromLink"] == "/features?days=30"
     assert (got["statusBefore"], got["statusAfter"]) == ("New", "Done")
     assert got["sideways"] == {"/suggest": 0, "/suggestions": 0, "/changes": 0}
+    for height in ("800", "640"):
+        assert got["chat"][height] == {"link": True, "mic": True, "ask": True, "sideways": 0,
+                                       "href": "/suggest?from=/chat"}, height
+    assert got["chatFrom"] == "/chat"
 
     (s,) = suggestions.list_all(path)
     assert (s.text, s.from_page, s.status, s.username) == (expected, "/features?days=30", "done", TEST_USER)

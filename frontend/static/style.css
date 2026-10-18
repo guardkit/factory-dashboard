@@ -1660,10 +1660,16 @@ textarea.chat__input { min-height: 68px; }
    suggest, suggest__form, suggest__input, suggest__hint, suggest__error, suggest__sent,
    suggestions, suggestion-list, suggestion(--new, --seen, --done, --declined), suggestion__meta,
    __who, __when, __from, __text, __status, changes, changes__date, changes__list, changes__when,
-   recent-changes. */
+   recent-changes, chat__suggest (the link in the /chat page's panel head). */
 
 .suggest-link { margin: 0; font-size: 13px; line-height: 18px; color: var(--text-dim); }
 .suggest-link a { font-weight: 600; }
+/* On /chat the link sits under the panel's title; when a short phone hides the note, it takes the line. */
+.chat__suggest { margin: 0; padding: 2px 20px 0; font-size: 13px; line-height: 18px; color: var(--text-dim); }
+.chat__suggest a { font-weight: 600; }
+@media (max-width: 720px) and (max-height: 700px) {
+  .content > .chat .chat__suggest { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+}
 
 /* The composer sits inside a card here, so it drops its own border and band; the box takes the full
    width and Send and the microphone sit under it, so the box stays wide on a phone. */
