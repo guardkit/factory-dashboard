@@ -12,7 +12,7 @@
 <section class="panel-card features state-{{ panel.state.value }}">
   <header class="panel-card__header">
     <h2 class="panel-card__title">Newest first</h2>
-    {{ m.asof_chip(panel.as_of) }}
+    {{ m.asof_chip(panel.as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
     {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}

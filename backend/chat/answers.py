@@ -34,6 +34,13 @@ def _join(items: Sequence[str]) -> str:
     return "; ".join(items[:-1]) + "; and " + items[-1]
 
 
+def _join_or(items: Sequence[str]) -> str:
+    items = [i for i in items if i]
+    if len(items) <= 1:
+        return "".join(items)
+    return "; ".join(items[:-1]) + "; or " + items[-1]
+
+
 def _plural(count: str, one: str, many: str) -> str:
     return f"{count} {one if count == '1' else many}"
 
@@ -51,6 +58,11 @@ def _for_project(fields: dict[str, object]) -> str:
 def _more(fields: dict[str, object], key: str, where: str) -> str:
     more = _s(fields, key)
     return f" And {more} more on the {where}." if more and more != "0" else ""
+
+
+def _hidden(fields: dict[str, object]) -> str:
+    """The pages' own sentence for the older unresolved failures a list leaves out, or ""."""
+    return _sentence(_s(fields, "hidden_line"))
 
 
 def _stale(fields: dict[str, object]) -> str:
@@ -96,9 +108,11 @@ def _project_summary(fields: dict[str, object]) -> str:
     if count == "0":
         parts.append("No open issues.")
     else:
-        parts.append(f"{_plural(count, 'open issue', 'open issues')}: "
-                     + _sentence(_join([str(i) for i in _list(fields, "open_issues")])))
+        listed = [str(i) for i in _list(fields, "open_issues")]
+        parts.append(f"{_plural(count, 'open issue', 'open issues')}"
+                     + (": " + _sentence(_join(listed)) if listed else "."))
         parts.append(_more(fields, "more_issues", "project page").strip())
+        parts.append(_hidden(fields))
     parts.append(_sentence(_s(fields, "cost")))
     return _stale(fields) + " ".join(p for p in parts if p)
 
@@ -116,7 +130,9 @@ def _open_issues(fields: dict[str, object]) -> str:
                     f"{row.get('how_serious')}")
     verb = "is" if count == "1" else "are"
     head = f"There {verb} {_plural(count, 'open issue', 'open issues')}{_for_project(fields)}"
-    return (_stale(fields) + head + ": " + _sentence(_join(rows)) + _more(fields, "more", "Issues page"))
+    body = (": " + _sentence(_join(rows)) + _more(fields, "more", "Issues page")) if rows else "."
+    hidden = _hidden(fields)
+    return _stale(fields) + head + body + (" " + hidden if hidden else "")
 
 
 def _delivered(fields: dict[str, object]) -> str:
@@ -171,6 +187,24 @@ def _not_measured(fields: dict[str, object]) -> str:
             "its page, and you can ask me about a feature by name.")
 
 
+#: The clarifying questions, one fixed sentence per kind the model may ask for (grounding.CLARIFY_KINDS).
+CLARIFY_QUESTIONS: dict[str, str] = {
+    "which_feature": "Which feature do you mean, by its name or its code on the Features page?",
+    "which_project": "Which project do you mean?",
+    "which_period": "Which dates do you mean, such as this week, last week or last month?",
+    "rephrase": "Could you ask that another way, naming the feature or the project?",
+}
+_CLARIFY_WITH_OPTIONS = {"which_feature": "Which feature do you mean: ", "which_project": "Which project do you mean: "}
+
+
+def clarify_question(kind: str, option_labels: Sequence[str] = ()) -> str:
+    """The question shown for a clarification: the kind's own sentence or, with options, the
+    options' labels as the records give them."""
+    if option_labels:
+        return _CLARIFY_WITH_OPTIONS[kind] + _join_or(list(option_labels)) + "?"
+    return CLARIFY_QUESTIONS[kind]
+
+
 TEMPLATES: dict[str, Callable[[dict[str, object]], str]] = {
     "feature_status": _feature_status,
     "project_summary": _project_summary,
@@ -188,13 +222,19 @@ def render(result: Result) -> str:
     if result.status == "not_found":
         kind = _s(fields, "kind") or "record"
         name = _s(fields, "name")
-        return (f"I have no record of a {kind} called “{name}”." if name else f"I have no record of that {kind}.")
+        # "couldn't find", not "there is no": the search can miss a record the user named differently.
+        return (f"I couldn't find a {kind} matching “{name}”." if name else f"I couldn't find that {kind}.")
     if result.status == "ambiguous":
         listed = [str(x) for x in _list(fields, "listed")]
         more = _s(fields, "more")
         tail = f" (and {more} more)" if more and more != "0" else ""
         name = _s(fields, "name")
         what = f"“{name}”" if name else "that name"
+        if _s(fields, "partial"):
+            kind = _s(fields, "kind") or "record"
+            head = (f"I couldn't find a {kind} matching “{name}” exactly." if name
+                    else f"I couldn't find a {kind} matching that exactly.")
+            return f"{head} Did you mean {_join_or(listed)}{tail}?"
         return (f"{_s(fields, 'count')} {_s(fields, 'kind')}s match {what}: "
                 f"{_join(listed)}{tail}. Which one do you mean?")
     if result.status == "bad_period":

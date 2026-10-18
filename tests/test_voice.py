@@ -163,15 +163,24 @@ def test_each_browsers_recording_format_is_accepted(world: tuple[TestClient, Fak
 
 
 def test_a_follow_up_reply_by_voice(world: tuple[TestClient, FakeModel, FakeSpeech]) -> None:
+    """A spoken question the chat asks about (the model names the kind; the server writes the question),
+    then a spoken reply carrying the shown question back: the second model call sees it as plain text."""
     client, model, speech = world
+    speech.stt = (200, {"text": "How is the project?"})
+    model.replies += ['{"clarify": "which_project"}',
+                      '{"query": "project_summary", "args": {"project": "acme/notes"}}']
+    first = _ask(client).json()
+    assert first["answer"]["kind"] == "clarify"
+    asked = first["answer"]["follow_up"]
+    assert asked == {"question": "How is the project?", "clarify": "Which project do you mean?"}
+    assert first["answer"]["text"] == "Which project do you mean?" and first["spoken"] == "Which project do you mean?"
+    assert 'name="prior_clarify" value="Which project do you mean?"' in first["html"]
     speech.stt = (200, {"text": "acme notes"})
-    model.replies.append('{"query": "project_summary", "args": {"project": "acme/notes"}}')
-    r = _ask(client, prior_question="How is the project?", prior_clarify="Which project do you mean?")
-    assert r.status_code == 200
-    messages = model.calls[0][0]
-    assert messages[1:] == [{"role": "user", "content": "How is the project?"},
-                            {"role": "assistant", "content": '{"clarify": "Which project do you mean?"}'},
-                            {"role": "user", "content": "acme notes"}]
+    second = _ask(client, prior_question=asked["question"], prior_clarify=asked["clarify"])
+    assert second.status_code == 200 and second.json()["answer"]["kind"] == "answer"
+    assert model.calls[1][0][1:] == [{"role": "user", "content": "How is the project?"},
+                                     {"role": "assistant", "content": "Which project do you mean?"},
+                                     {"role": "user", "content": "acme notes"}]
 
 
 def test_settings_come_from_the_environment(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -421,7 +430,7 @@ def test_the_chat_carries_a_hidden_microphone(world: tuple[TestClient, FakeModel
         assert '<div class="chat-voice" role="status" hidden>' in body
         assert body.count('class="chat-voice__bar"') == 7
         assert '<script src="/static/mic.js" defer></script>' in body
-        assert '<script src="/static/chat.js" defer></script>' in body
+        assert body.count('<script src="/static/chat.js" defer></script>') == 1  # base.html's, once
     assert "<title>Ask about the factory · Appmilla Factory</title>" in client.get("/chat").text
     assert client.get("/static/mic.js").status_code == 200
 
@@ -633,7 +642,8 @@ def test_the_speech_to_text_reply_cap(world: tuple[TestClient, FakeModel, FakeSp
 
 def test_every_voice_failure_is_one_sentence() -> None:
     sentences = [voice.NO_LENGTH, voice.TOO_BIG, voice.TOO_LONG, voice.NOT_AUDIO, voice.NO_RECORDING,
-                 voice.CROSS_SITE, voice.VOICE_BUSY, voice.CANT_HEAR, voice.HEARD_NOTHING, voice.CANT_SPEAK]
+                 voice.CROSS_SITE, voice.VOICE_BUSY, voice.CANT_HEAR, voice.HEARD_NOTHING, voice.CANT_SPEAK,
+                 LIMITED, NOT_SET_UP]  # the chat's two that voice returns itself
     for sentence in sentences:
         assert len(re.findall(r"[.!?](\s|$)", sentence)) == 1, sentence
     mic = (Path(__file__).resolve().parent.parent / "frontend" / "static" / "mic.js").read_text(encoding="utf-8")

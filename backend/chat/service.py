@@ -5,8 +5,9 @@ at a time across the process, and at most 30 an hour across every account; more 
 a plain sentence. Each question gets at most two model calls (the choice, and one more after a
 clarifying answer), each at most 300 output tokens, inside a 60-second limit for the question.
 
-How an answer is made: the model chooses a query and its arguments, or asks one clarifying
-question (`grounding.parse_reply` holds it to that). The server runs the query
+How an answer is made: the model chooses a query and its arguments, or names the kind of
+clarification it needs (`grounding.parse_reply` holds it to that; the server writes the question
+itself, so no model-written text is ever shown). The server runs the query
 (`backend/chat/tools.py`, the pages' own read layer) and writes the answer from that query's fixed
 template (`backend/chat/answers.py`), filled only with the returned fields. The answer's figures
 are checked against the fields once more before it is shown.
@@ -14,7 +15,6 @@ are checked against the fields once more before it is shown.
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
@@ -35,17 +35,18 @@ QUESTIONS_PER_HOUR = 30
 QUESTION_SECONDS = 60.0
 MAX_QUESTION_CHARS = 500
 
-BUSY = "Another question is being answered just now. Please try again in a moment."
+# Every message the chat gives instead of an answer is one plain sentence.
+BUSY = "Another question is being answered just now, so please try again in a moment."
 LIMITED = ("The chat has reached its limit of questions for this hour, which keeps the factory's model free "
-           "for building. Please try again later.")
+           "for building, so please try again later.")
 NOT_SET_UP = "The chat isn't switched on here: the dashboard has no key for the factory's model."
 OPERATORS_ONLY = "The chat is for operator accounts only."
 EMPTY = "Please type a question."
 TOO_LONG = "Please ask a shorter question."
-STILL_UNCLEAR = ("I still can't tell what you mean. Try naming the feature or the project as the Features page "
-                 "shows it.")
+STILL_UNCLEAR = ("I still can't tell what you mean, so try naming the feature or the project as the Features "
+                 "page shows it.")
 READ_FAILED = "Something went wrong reading the dashboard's records, so I can't answer that just now."
-NO_TIME_LEFT = "That took too long, so I stopped. Please try again in a minute."
+NO_TIME_LEFT = "That took too long, so I stopped and you can try again in a minute."
 
 #: Links offered with a refusal: the pages that hold what the chat can answer.
 REFUSAL_REFS: tuple[Ref, ...] = (PAGES["features"], PAGES["delivered"], PAGES["issues"], PAGES["reports"])
@@ -109,7 +110,7 @@ def system_prompt(queries: dict[str, registry.QuerySpec], now: datetime) -> str:
         "the question yourself: the server runs the query and writes the answer from the records.",
         "Reply with ONE JSON object and nothing else, in one of these forms:",
         '  {"query": "<name>", "args": {"<arg>": "<text>"}}',
-        '  {"clarify": "<one short question>"}',
+        '  {"clarify": "<kind>"}   or   {"clarify": "<kind>", "options": ["<id>", ...]}',
         '  {"query": "none"}   (when no query below can answer it, e.g. "why did the planner do that?")',
         "Queries:",
     ]
@@ -118,8 +119,11 @@ def system_prompt(queries: dict[str, registry.QuerySpec], now: datetime) -> str:
         lines.append(f"- {q.name}: {q.purpose}. Args: {args or 'none'}.")
     lines += [
         "Copy names from the user's words; do not invent names, dates or numbers.",
-        "Ask a clarifying question only when you cannot choose a query or a required argument. It must be "
-        "one short question with no digits, no feature codes and no words about status or progress.",
+        "Ask for clarification only when you cannot choose a query or a required argument. You do not write "
+        "the question: name its kind and the server asks it. Kinds: which_feature, which_project, "
+        "which_period, rephrase. With which_feature you may list up to five feature codes (FEAT-...) as "
+        "options, and with which_project up to five project names (owner/name), copied from the user's "
+        "words; leave options out otherwise.",
         f"Today is {_today(now)} (London).",
     ]
     return "\n".join(lines)
@@ -170,8 +174,9 @@ class Chat:
         now = self._now()
         messages = [{"role": "system", "content": system_prompt(queries, now)}]
         if follow_up is not None:
+            # The question shown last time, as the server wrote it (the model only named its kind).
             messages += [{"role": "user", "content": follow_up.question},
-                         {"role": "assistant", "content": json.dumps({"clarify": follow_up.clarify})}]
+                         {"role": "assistant", "content": follow_up.clarify}]
         messages.append({"role": "user", "content": question})
         try:
             raw = self.model.complete(messages, timeout=deadline - self._clock())
@@ -187,9 +192,26 @@ class Chat:
         if isinstance(reply, grounding.Clarify):
             if follow_up is not None:  # the second and last model call asked again
                 return Answer(STILL_UNCLEAR, REFUSAL_REFS, kind="refused")
-            return Answer(reply.question, kind="clarify", follow_up=FollowUp(question, reply.question))
+            return self._clarify(reply, now, question)
         return self._run(reply, queries[reply.query], now, user_texts, first_round=follow_up is None,
                          original=follow_up.question if follow_up else question)
+
+    def _clarify(self, reply: grounding.Clarify, now: datetime, question: str) -> Answer:
+        """The clarifying question, written by the server: the kind's fixed sentence, or the named
+        options as the records label them. An option that is not on record refuses the reply."""
+        refs: tuple[Ref, ...] = ()
+        if reply.options:
+            try:
+                found = tools.clarify_options(tools.Context(self.db_path, now), reply.kind, reply.options)
+            except Exception:
+                log.exception("chat: reading the clarify options failed")
+                return Answer(READ_FAILED, REFUSAL_REFS, kind="refused")
+            if found is None:
+                log.info("chat: model reply refused: a clarify option is not on record")
+                return Answer(answers.CANT_ANSWER, REFUSAL_REFS, kind="refused")
+            refs = found
+        text = answers.clarify_question(reply.kind, [r.label for r in refs])
+        return Answer(text, refs, kind="clarify", follow_up=FollowUp(question, text))
 
     def _run(self, choice: grounding.Choice, spec: registry.QuerySpec, now: datetime,
              user_texts: tuple[str, ...], *, first_round: bool, original: str) -> Answer:

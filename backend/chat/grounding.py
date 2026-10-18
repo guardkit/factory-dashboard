@@ -1,15 +1,17 @@
 """Grounding by construction (design 2026-10-17, requirement 9).
 
-The model does one of two things: names a query and its arguments, or asks one short clarifying
-question. `parse_reply` holds it to exactly that:
+The model does one of two things: names a query and its arguments, or says what kind of
+clarification it needs. It never writes text the user sees. `parse_reply` holds it to exactly that:
 
 - the reply must be one JSON object, either ``{"query": <name>, "args": {...}}`` or
-  ``{"clarify": "<question>"}``, with no other keys (so a reply carrying its own answer, figures or
-  status in free text is refused);
+  ``{"clarify": <kind>}``, optionally with ``"options": [<id>, ...]``, with no other keys (so a
+  reply carrying its own answer, figures or status in free text is refused);
 - the query must be one of the registered ones, and its arguments the ones that query takes, as
   short strings; ``{"query": "none"}`` (the model saying the records cannot answer) is refused;
-- a clarifying question must be one short question with no digits, no feature codes and no status
-  words, so the model cannot state a fact while asking.
+- the clarify kind must be one of `CLARIFY_KINDS`. Options are allowed only for ``which_feature``
+  (feature codes) and ``which_project`` (``owner/name``); the chat then checks each one is on record
+  and writes the question from the records (`backend/chat/answers.py`), so the question shown is
+  always the server's own sentence.
 
 Anything else becomes a `Rejection`, which the chat answers with the one fixed sentence.
 
@@ -28,7 +30,6 @@ from dataclasses import dataclass
 from backend.chat.registry import QuerySpec
 
 MAX_ARG_CHARS = 120
-MAX_CLARIFY_CHARS = 200
 MAX_REPLY_CHARS = 2000
 
 
@@ -38,9 +39,20 @@ class Choice:
     args: dict[str, str]
 
 
+#: What the model may ask for, by name; `answers.clarify_question` writes each one's sentence.
+CLARIFY_KINDS = ("which_feature", "which_project", "which_period", "rephrase")
+#: The kinds that may name options, and the form each option must take.
+_OPTION_FORMS = {
+    "which_feature": re.compile(r"^FEAT-[0-9A-Z]{1,16}$", re.IGNORECASE),
+    "which_project": re.compile(r"^[A-Za-z0-9_.-]{1,60}/[A-Za-z0-9_.-]{1,60}$"),
+}
+MAX_OPTIONS = 5
+
+
 @dataclass(frozen=True)
 class Clarify:
-    question: str
+    kind: str
+    options: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -52,44 +64,29 @@ Reply = Choice | Clarify | Rejection
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 _THINK_RE = re.compile(r"^<think>.*?</think>\s*", re.DOTALL)
-_DIGIT_RE = re.compile(r"\d")
-_CODE_RE = re.compile(r"(?i:\bfeat-)|\b[A-Z]{2,}-[A-Z0-9]+\b")
-_STATUS_WORDS = (
-    "delivered", "merged", "merge", "merging", "failed", "failing", "failure", "building", "built",
-    "waiting", "stalled", "stuck", "cancelled", "canceled", "interrupted", "queued", "approved",
-    "declined", "rejected", "complete", "completed", "finished", "passed", "blocked", "running", "paused",
-    "planning", "planned", "late", "behind", "ahead", "on track", "at risk", "off track", "in progress",
-    "on target", "done", "shipped", "broken", "succeeded", "successful",
-)
-_STATUS_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in _STATUS_WORDS) + r")\b", re.IGNORECASE)
-
-
 def _strip(raw: str) -> str:
     text = _THINK_RE.sub("", raw.strip())
     m = _FENCE_RE.match(text)
     return m.group(1) if m else text
 
 
-def clarify_problem(question: object) -> str:  # noqa: PLR0911 (one return per rule)
-    """Why a clarifying question is refused, or "" when it is allowed."""
-    if not isinstance(question, str):
-        return "clarifying question is not text"
-    q = " ".join(question.split())
-    if not q:
-        return "clarifying question is empty"
-    if len(q) > MAX_CLARIFY_CHARS:
-        return "clarifying question is too long"
-    if not q.endswith("?") or q.count("?") != 1:
-        return "clarifying question is not one question"
-    if _DIGIT_RE.search(q):
-        return "clarifying question contains a digit"
-    if _CODE_RE.search(q):
-        return "clarifying question contains a feature code"
-    if m := _STATUS_RE.search(q):
-        return f"clarifying question contains the status word {m.group(1).lower()!r}"
-    if "<" in q or ">" in q:
-        return "clarifying question contains markup"
-    return ""
+def _clarify(data: dict[str, object]) -> Reply:  # noqa: PLR0911 (one return per rule)
+    kind = data["clarify"]
+    if not isinstance(kind, str) or kind not in CLARIFY_KINDS:
+        return Rejection("clarify kind is not one of " + ", ".join(CLARIFY_KINDS))
+    options = data.get("options")
+    if options is None or options == []:
+        return Clarify(kind)
+    form = _OPTION_FORMS.get(kind)
+    if form is None:
+        return Rejection(f"clarify kind {kind} takes no options")
+    if not isinstance(options, list) or not all(isinstance(o, str) for o in options):
+        return Rejection("clarify options are not a list of text")
+    if len(options) > MAX_OPTIONS or len(set(options)) != len(options):
+        return Rejection("clarify options are too many or repeated")
+    if bad := [o for o in options if not form.match(o)]:
+        return Rejection(f"clarify option {bad[0][:MAX_ARG_CHARS]!r} is not a {kind[6:]} id")
+    return Clarify(kind, tuple(options))
 
 
 def _args_problem(spec: QuerySpec, args: object) -> tuple[str, dict[str, str]]:
@@ -130,9 +127,10 @@ def parse_reply(raw: str, queries: Mapping[str, QuerySpec]) -> Reply:  # noqa: P
     if not isinstance(data, dict):
         return Rejection("reply is not a JSON object")
     keys = set(data)
-    if keys == {"clarify"}:
-        problem = clarify_problem(data["clarify"])
-        return Rejection(problem) if problem else Clarify(" ".join(str(data["clarify"]).split()))
+    if "clarify" in keys:
+        if not keys <= {"clarify", "options"}:
+            return Rejection(f"reply has the wrong keys {sorted(keys)}")
+        return _clarify(data)
     if "query" not in keys or not keys <= {"query", "args"}:
         return Rejection(f"reply has the wrong keys {sorted(keys)}")
     name = data["query"]

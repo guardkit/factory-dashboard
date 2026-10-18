@@ -31,8 +31,9 @@ import sqlite3
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from enum import StrEnum
+from zoneinfo import ZoneInfo
 
 # --- the journey ----------------------------------------------------------------------------
 
@@ -68,7 +69,7 @@ class Outcome(StrEnum):
     NOTHING_TO_BUILD = "nothing_to_build"
     HANDED_OFF = "handed_off"
     STOPPED_IN_QUEUE = "stopped_in_queue"
-    RECORD_STOPPED = "record_stopped"
+    RETIRED = "retired"
 
 
 #: Outcomes that are the factory's own failures (they make a feature red and raise an issue).
@@ -186,7 +187,13 @@ class Build:
 
     def merge_offer_retired(self) -> bool:
         """The owner retired the open merge offer (Forge's 9 October clean-up of old offers)."""
-        return any("merge_retirement" in s.details for s in self.stages)
+        return self.merge_retired_at() is not None
+
+    def merge_retired_at(self) -> datetime | None:
+        for s in self.stages:
+            if "merge_retirement" in s.details:
+                return s.at
+        return None
 
     def merge_check_failed_at(self) -> datetime | None:
         """The last merge-deploy row, if it FAILED and nothing passed after it."""
@@ -221,6 +228,13 @@ class PlanningRun:
             if e.stage_label == "feature-spec-digest-review" and e.status in ("approved", "skipped"):
                 return True
         return self.state in ("BUILD_QUEUED", "PLANNED_HANDOFF")
+
+    def retired_at(self) -> datetime | None:
+        """When the owner retired this planning run's handover (Forge's administrative clean-up)."""
+        for e in self.events:
+            if e.stage_label == "planning-handoff-retirement-administrative":
+                return e.at
+        return None
 
     def nothing_to_build(self) -> bool:
         return any(e.stage_label == "nothing-to-build" for e in self.events)
@@ -562,16 +576,16 @@ def load_factory(conn: sqlite3.Connection, now: datetime | None = None) -> Facto
         run = next((planning[c] for c in corrs if c in planning), None)
         item = next((queue[c] for c in corrs if c in queue), None)
         mission = next((missions[b.mission_id] for b in reversed(attempts) if b.mission_id in missions), None)
-        features.append(_assemble(code, code, run, item, tuple(attempts), mission, now))
+        features.append(_assemble(code, code, run, item, tuple(attempts), mission))
     for corr, run in planning.items():
         if corr in used:
             continue
         used.add(corr)
-        features.append(_assemble(corr, "", run, queue.get(corr), (), None, now))
+        features.append(_assemble(corr, "", run, queue.get(corr), (), None))
     for corr, item in queue.items():
         if corr in used or item.kind not in ("feature", "fix"):
             continue
-        features.append(_assemble(corr, "", None, item, (), None, now))
+        features.append(_assemble(corr, "", None, item, (), None))
 
     features.sort(key=lambda f: (f.sent_at or datetime.min.replace(tzinfo=UTC)), reverse=True)
     return Factory(
@@ -586,7 +600,7 @@ def load_factory(conn: sqlite3.Connection, now: datetime | None = None) -> Facto
 
 def _assemble(
     key: str, code: str, run: PlanningRun | None, item: QueueItem | None,
-    builds: tuple[Build, ...], mission: Mission | None, now: datetime,
+    builds: tuple[Build, ...], mission: Mission | None,
 ) -> Feature:
     request_text = (run.request_text if run else "") or (item.sentence if item else "")
     project = ""
@@ -620,13 +634,9 @@ def _assemble(
         delivered = mission.delivered_at()
     if delivered is not None:
         station, outcome, text, ended = MERGED, Outcome.DELIVERED, "Merged and checked", delivered
-    elif outcome is Outcome.IN_PROGRESS and not any(w.open for w in waits):
-        # Nothing has happened for a week and nobody is being waited on: the record simply stops
-        # here (an old run the factory never finished). Not in progress, and not a guess either.
-        last = _last_activity(run, item, builds)
-        if last is not None and (now - last) > RECORD_STOPPED_AFTER:
-            outcome, ended = Outcome.RECORD_STOPPED, last
-            text = f"{text}, then nothing more was recorded"
+    # However long nothing has been recorded, a feature Forge still records as queued, planning or
+    # building stays in progress: only an ending or a retirement in the record finishes it. A long
+    # silence is shown as a stall (`norms.quiet_spell`), never as an ending.
 
     return Feature(
         key=key, code=code, title=title_from(request_text, code or "untitled request"),
@@ -636,7 +646,10 @@ def _assemble(
     )
 
 
-RECORD_STOPPED_AFTER = timedelta(days=7)
+def _day(dt: datetime) -> str:
+    """'9 October', in London time."""
+    local = dt.astimezone(ZoneInfo("Europe/London"))
+    return f"{local.day} {local.strftime('%B')}"
 
 
 def _last_activity(run: PlanningRun | None, item: QueueItem | None, builds: tuple[Build, ...]) -> datetime | None:
@@ -685,6 +698,11 @@ def _where_planning(  # noqa: PLR0911 (one return per planning state)
     run: PlanningRun, open_wait: Wait | None,
 ) -> tuple[int, Outcome, str, datetime | None]:
     reached = PLAN_APPROVED if run.state == "BUILD_QUEUED" else (SPEC_APPROVED if run.spec_approved() else PLANNING)
+    retired = run.retired_at()
+    if retired is not None:
+        # The owner's administrative clean-up retired this run's handover: nothing more will happen.
+        return (PLAN_APPROVED if reached >= PLAN_APPROVED else reached, Outcome.RETIRED,
+                f"Retired in the clean-up of {_day(retired)}", retired)
     if run.state == "QUEUED":
         return IN_QUEUE, Outcome.IN_PROGRESS, "Waiting for planning to start", None
     if run.active:
@@ -722,7 +740,10 @@ def _where_build(  # noqa: PLR0911 (one return per build state)
     if merge_failed is not None:
         return MERGED, Outcome.MERGE_FAILED, "Merge check failed", merge_failed
     if retired and b.status == "COMPLETE":
-        return MERGE_DECISION, Outcome.NOT_MERGED, "Built, not merged (the merge offer was withdrawn)", b.completed_at
+        when = b.merge_retired_at() or b.completed_at
+        text = f"Built, not merged: the merge offer was retired in the clean-up of {_day(when)}" if when else (
+            "Built, not merged: the merge offer was retired")
+        return MERGE_DECISION, Outcome.NOT_MERGED, text, when
     if approved and landed is None and b.status not in ("FAILED", "CANCELLED", "INTERRUPTED"):
         # The merge word was given; the merge and its checks have not finished yet.
         return MERGED, Outcome.IN_PROGRESS, "Merging and checking", None

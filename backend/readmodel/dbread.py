@@ -30,7 +30,7 @@ from backend.readmodel.factory import (
     parse_dt,
 )
 from backend.readmodel.issues import Issue, find_issues, recent
-from backend.readmodel.norms import GAP, Norms, load_norms, on_track
+from backend.readmodel.norms import GAP, OUTCOME_WORDS, Norms, load_norms, on_track
 from backend.readmodel.viewmodels import (
     ActivityPanel,
     ActivityRow,
@@ -116,12 +116,31 @@ def _read_chip(fr: Freshness, now: datetime, state: PanelState | None = None) ->
                 threshold_secs=vm.MIRROR_FRESH_SECS)
 
 
+#: Ages on a page ("waiting 2 h so far", a stall crossing its threshold) grow without any change
+#: to the record, so the data version also moves on every five minutes.
+VERSION_TICK_SECS = 300
+
+
+def data_version(conn: sqlite3.Connection, fr: Freshness, now: datetime) -> str:
+    """The version of the data behind a page: the feed's change count (it only rises), whether the
+    record is fresh or stale, and a five-minute clock tick. An open page whose version differs from
+    the latest one fetches its content again (static/freshness.js)."""
+    try:
+        row = conn.execute("SELECT seq FROM sqlite_sequence WHERE name='change_log'").fetchone()
+    except sqlite3.Error:
+        row = None
+    seq = int(row[0]) if row and row[0] is not None else 0
+    state = "fresh" if fr.fresh(now) else "stale"
+    return f"{seq}.{state}.{int(now.timestamp() // VERSION_TICK_SECS)}"
+
+
 def page_chrome(conn: sqlite3.Connection, now: datetime | None = None) -> PageChrome:
     now = now or _now()
     fr = freshness(conn)
     chip = _read_chip(fr, now)
+    version = data_version(conn, fr, now)
     if fr.fresh(now):
-        return PageChrome(feed_state="live", read_as_of=chip)
+        return PageChrome(feed_state="live", read_as_of=chip, version=version)
     when = vm.fmt_wall(fr.read_at, now=now) if fr.read_at else None
     if not fr.feed_alive(now):
         text = ("The dashboard's data feed is not running. "
@@ -130,7 +149,7 @@ def page_chrome(conn: sqlite3.Connection, now: datetime | None = None) -> PageCh
         text = "The dashboard has not read the factory's record yet."
     else:
         text = f"Factory data last read at {when} — the dashboard cannot reach the factory's record."
-    return PageChrome(feed_state="stale", read_as_of=chip, banner=Banner(kind="stale", text=text))
+    return PageChrome(feed_state="stale", read_as_of=chip, banner=Banner(kind="stale", text=text), version=version)
 
 
 def _state(fr: Freshness, now: datetime, rows: int) -> PanelState:
@@ -153,7 +172,8 @@ def journey(f: Feature) -> JourneyBar:
         if f.outcome is Outcome.DELIVERED or i < f.station:
             state = "passed"
         elif i == f.station:
-            state = "current" if f.in_progress else "stopped"
+            # A station where the feature is waiting on a person is shown as waiting.
+            state = ("waiting" if f.open_wait() is not None else "current") if f.in_progress else "stopped"
         else:
             state = "future"
         stations.append(JourneyStation(name=name, glyph_state=state))
@@ -188,7 +208,8 @@ def feature_row(f: Feature, norms: Norms, now: datetime) -> FeatureRow:
     sent = f.sent_at
     return FeatureRow(
         title=f.title, code=f.code, link=f.link, project=f.project, project_link=project_link(f.project),
-        status_text=f.status_text, journey=journey(f), band=_band(ot.band), elapsed=elapsed(f, now),
+        status_text=f.status_text, journey=journey(f), band=_band(ot.band, ot.words.lower()),
+        elapsed=elapsed(f, now),
         sent_label=vm.fmt_wall(sent, now=now) if sent else "—", sent_title=vm.fmt_iso(sent) if sent else "",
         in_progress=f.in_progress,
     )
@@ -392,8 +413,8 @@ def feed_panel(conn: sqlite3.Connection, now: datetime | None = None, *_: object
     hb = fr.heartbeat_at
     hb_label = (f"running (last heartbeat {vm.fmt_age((now - hb).total_seconds())} ago)" if alive and hb
                 else f"stopped since {vm.fmt_wall(hb, now=now)}" if hb else "not started")
-    read = (f"Forge's record last read at {vm.fmt_wall(fr.read_at, now=now)}" if fr.read_at
-            else "Forge's record not read yet")
+    read = (f"The factory's record was last read at {vm.fmt_wall(fr.read_at, now=now)}" if fr.read_at
+            else "The factory's record has not been read yet")
     return FeedPanel(panel_id="proj", title="Dashboard data feed",
                      state=PanelState.LIVE if fr.fresh(now) else PanelState.LAGGING, as_of=_read_chip(fr, now),
                      heartbeat_ok=alive, heartbeat_label=hb_label, read_label=read, error=fr.error)
@@ -520,6 +541,25 @@ class IssuesView:
     open_rows: tuple[IssueRow, ...]
     closed_rows: tuple[IssueRow, ...]
     note: str
+    hidden_line: str = ""    # how many old open failures the 14-day cut-off leaves out
+    hidden_count: int = 0    # that number, so a total of open issues can include them (the chat)
+
+
+@dataclass(frozen=True)
+class ProjectRow:
+    project: str
+    link: str
+    features: int          # features on record
+    in_progress: int
+    delivered: int         # merged and checked, ever
+    open_issues: int       # listed open issues plus older unresolved failures
+
+
+@dataclass(frozen=True)
+class ProjectsView:
+    chrome: PageChrome
+    rows: tuple[ProjectRow, ...]
+    as_of: AsOf
 
 
 @dataclass(frozen=True)
@@ -536,7 +576,29 @@ class FleetView:
 
 
 def _open(db_path: Path) -> sqlite3.Connection:
-    return db.connect_ro(db_path)
+    """A read-only connection holding ONE read snapshot for a whole page or fragment.
+
+    Every view builds its content, its read time and its data version on this connection, and a
+    feed pass can commit at any moment (the store is in WAL mode, so it does not wait for readers).
+    Without one read transaction those reads could straddle a pass: old features under the new
+    version and read time, which later polls would then accept as current. So the transaction is
+    opened here and the snapshot is fixed at once, by reading the version's change count first;
+    every later read sees the store as it was then. The view's `conn.close()` ends it. The live
+    update stream keeps its own connection outside this, so it always sees new changes."""
+    conn = db.connect_ro(db_path)
+    conn.execute("BEGIN")
+    try:
+        conn.execute("SELECT seq FROM sqlite_sequence WHERE name='change_log'").fetchone()
+    except sqlite3.Error:
+        conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()  # any read fixes the snapshot
+    return conn
+
+
+def snapshot(db_path: Path) -> sqlite3.Connection:
+    """One read snapshot (see `_open`) for a caller that builds one answer from several views, such
+    as the chat: pass it to each view as ``conn=`` and close it when done. A view given ``conn``
+    reads on it and leaves it open; without one it opens and closes its own, as the pages do."""
+    return _open(db_path)
 
 
 def home_view(db_path: Path, now: datetime | None = None) -> HomeView:
@@ -580,9 +642,11 @@ def _norms_line(norms: Norms) -> str:
             f"Build: {norms.build_minutes.describe()}.")
 
 
-def feature_page(db_path: Path, key: str, now: datetime | None = None) -> tuple[PageChrome, FeaturePage] | None:
+def feature_page(db_path: Path, key: str, now: datetime | None = None, *,
+                 conn: sqlite3.Connection | None = None) -> tuple[PageChrome, FeaturePage] | None:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         factory, norms = load_factory(conn, now), load_norms()
         f = factory.feature(key)
@@ -603,7 +667,7 @@ def feature_page(db_path: Path, key: str, now: datetime | None = None) -> tuple[
         waits = tuple(WaitRow(
             kind=w.kind, started_label=vm.fmt_wall(w.started_at, now=now), started_title=vm.fmt_iso(w.started_at),
             ended_label="waiting now" if w.open else vm.fmt_wall(w.ended_at, now=now) if w.ended_at else "",
-            duration=vm.fmt_age(w.seconds(now)),
+            duration=vm.fmt_age(w.seconds(now)), open=w.open,
         ) for w in f.waits)
         own = [i for i in find_issues(factory, norms, now) if i.feature is f]
         mission_line = ""
@@ -617,13 +681,15 @@ def feature_page(db_path: Path, key: str, now: datetime | None = None) -> tuple[
             request_text=f.request_text, sent_label=vm.fmt_wall(sent, now=now) if sent else "—",
             sent_title=vm.fmt_iso(sent) if sent else "", status_text=f.status_text, mission_line=mission_line,
             journey=journey(f), as_of=_read_chip(fr, now), verdict=_band(ot.band, ot.words.lower()),
+            verdict_heading="How it ended" if f.outcome in OUTCOME_WORDS else "On track",
             verdict_reason=ot.reason, signals=signals, norms_line=_norms_line(norms), elapsed=elapsed(f, now),
             attempts=attempts, waits=waits, issues=tuple(issue_row(i, now) for i in own),
             activity=activity_rows(factory, f.builds, now, limit=20), spend=SpendSlot(),
         )
         return page_chrome(conn, now), page
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
 def _build_words(b: Build) -> str:
@@ -650,9 +716,11 @@ def _mission_words(status: str) -> str:
             "NOT_MERGED": "not merged"}.get(status, status.lower())
 
 
-def project_view(db_path: Path, project: str, now: datetime | None = None) -> ProjectView:
+def project_view(db_path: Path, project: str, now: datetime | None = None, *,
+                 conn: sqlite3.Connection | None = None) -> ProjectView:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         factory, norms = load_factory(conn, now), load_norms()
         fr = freshness(conn)
@@ -666,46 +734,89 @@ def project_view(db_path: Path, project: str, now: datetime | None = None) -> Pr
                                    f"{len(mine)} on record).")
         delivered = [f for f in mine if f.outcome is Outcome.DELIVERED]
         week = now - timedelta(days=7)
-        open_issues, _closed = recent([i for i in find_issues(factory, norms, now) if i.project == project], now)
+        open_issues, _closed, hidden = recent(
+            [i for i in find_issues(factory, norms, now) if i.project == project], now)
         return ProjectView(
             chrome=page_chrome(conn, now), project=project, features=panel,
             delivered_7d=sum(1 for f in delivered if f.delivered_at and f.delivered_at >= week),
             delivered_total=len(delivered), in_progress=sum(1 for f in mine if f.in_progress),
             issues=tuple(issue_row(i, now) for i in open_issues), spend=SpendSlot(),
+            open_issues_total=len(open_issues) + hidden, hidden_line=hidden_line(hidden),
         )
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
-def issues_view(db_path: Path, now: datetime | None = None) -> IssuesView:
+def hidden_line(hidden: int) -> str:
+    """One sentence for the open failures the 14-day cut-off leaves out of a list ("" for none)."""
+    if not hidden:
+        return ""
+    noun, verb = ("failure", "is") if hidden == 1 else ("failures", "are")
+    return f"{hidden} older {noun} with no later attempt {verb} not listed (opened more than 14 days ago)."
+
+
+def projects_view(db_path: Path, now: datetime | None = None) -> ProjectsView:
+    """One row per project on record, with the same counts its project page shows."""
     now = now or _now()
     conn = _open(db_path)
     try:
         factory, norms = load_factory(conn, now), load_norms()
-        open_, closed = recent(find_issues(factory, norms, now), now)
+        issues = find_issues(factory, norms, now)
+        names = sorted({f.project for f in factory.features if f.project}
+                       | {m.target_repo for m in factory.missions if m.target_repo})
+        rows = []
+        for name in names:
+            mine = [f for f in factory.features if f.project == name]
+            open_, _closed, hidden = recent([i for i in issues if i.project == name], now)
+            rows.append(ProjectRow(
+                project=name, link=project_link(name), features=len(mine),
+                in_progress=sum(1 for f in mine if f.in_progress),
+                delivered=sum(1 for f in mine if f.outcome is Outcome.DELIVERED),
+                open_issues=len(open_) + hidden,
+            ))
+        return ProjectsView(chrome=page_chrome(conn, now), rows=tuple(rows), as_of=_read_chip(freshness(conn), now))
+    finally:
+        conn.close()
+
+
+def issues_view(db_path: Path, now: datetime | None = None, *, conn: sqlite3.Connection | None = None) -> IssuesView:
+    now = now or _now()
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
+    try:
+        factory, norms = load_factory(conn, now), load_norms()
+        open_, closed, hidden = recent(find_issues(factory, norms, now), now)
         note = ("Open: anything waiting for a person or stalled now, and failures from the last 14 days with no "
                 "later attempt. Closed: issues that closed in the last 7 days.")
         return IssuesView(chrome=page_chrome(conn, now), open_rows=tuple(issue_row(i, now) for i in open_),
-                          closed_rows=tuple(issue_row(i, now) for i in closed), note=note)
+                          closed_rows=tuple(issue_row(i, now) for i in closed), note=note,
+                          hidden_line=hidden_line(hidden), hidden_count=hidden)
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
-def delivered_view(db_path: Path, window: tuple[str, str] | None = None, now: datetime | None = None) -> DeliveredView:
+def delivered_view(db_path: Path, window: tuple[str, str] | None = None, now: datetime | None = None, *,
+                   conn: sqlite3.Connection | None = None) -> DeliveredView:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         return DeliveredView(chrome=page_chrome(conn, now), panel=delivered_panel(conn, now, window=window))
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
-def chrome_view(db_path: Path, now: datetime | None = None) -> PageChrome:
-    conn = _open(db_path)
+def chrome_view(db_path: Path, now: datetime | None = None, *, conn: sqlite3.Connection | None = None) -> PageChrome:
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         return page_chrome(conn, now or _now())
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
 def fleet_view(db_path: Path, now: datetime | None = None) -> FleetView:
@@ -895,13 +1006,15 @@ def _client_tenants(conn: sqlite3.Connection) -> tuple[tuple[str, str], ...]:
 
 
 def weekly_report_view(db_path: Path, tenant: str, window: tuple[str, str] | None = None,
-                       now: datetime | None = None) -> WeeklyReport:
+                       now: datetime | None = None, *, conn: sqlite3.Connection | None = None) -> WeeklyReport:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         return weekly_report(conn, tenant, now, window=window, client_tenants=_client_tenants(conn))
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
 def export_report_view(db_path: Path, tenant: str, window: tuple[str, str] | None = None,

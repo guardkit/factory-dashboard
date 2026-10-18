@@ -55,7 +55,7 @@ STATIC_DIR = BASE_DIR / "frontend" / "static"
 NAV: tuple[tuple[str, str, str], ...] = (
     ("Now", "/", "now"),
     ("Features", "/features", "features"),
-    ("Delivered", "/delivered", "delivered"),
+    ("Projects", "/projects", "projects"),
     ("Reports", "/reports", "reports"),
     ("Issues", "/issues", "issues"),
     ("Fleet", "/fleet", "fleet"),
@@ -171,6 +171,7 @@ def create_app(
     tenants_path: Path = TENANTS_PATH,
     plans_path: Path = PLANS_PATH,
     config_dir: Path | None = None,
+    freshness_poll_secs: int = 30,
 ) -> FastAPI:
     """Build the board. Refuses to start (accounts.ConfigError) without a session secret of at
     least 32 characters and a usable accounts.yaml in the configuration folder."""
@@ -189,6 +190,8 @@ def create_app(
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     # Fence 6: autoescape ON for every event-derived string.
     templates.env.autoescape = select_autoescape(default=True, default_for_string=True)
+    # How often an open page asks whether the factory's record is still being read (tests shorten it).
+    templates.env.globals["freshness_poll_secs"] = freshness_poll_secs
 
     app = FastAPI(title="factory-dashboard", docs_url=None, redoc_url=None)
     app.add_middleware(SessionsByHost, secret_key=key, max_age=SESSION_MAX_AGE)
@@ -445,13 +448,22 @@ def _register_routes(app: FastAPI) -> None:
             {"page": page, "chrome": chrome, "nav_active": "features", "tenant": _tenant(request, user)},
         )
 
+    @app.get("/projects", response_class=HTMLResponse)
+    def projects(request: Request, user: OperatorPage) -> HTMLResponse:
+        return _render(
+            request,
+            "projects.html",
+            {"view": dbread.projects_view(request.app.state.db_path), "nav_active": "projects",
+             "tenant": _tenant(request, user)},
+        )
+
     @app.get("/projects/{owner}/{name}", response_class=HTMLResponse)
     def project(request: Request, owner: str, name: str, user: OperatorPage) -> HTMLResponse:
         # Projects are named owner/name (the build's repository), so the route takes both parts.
         return _render(
             request,
             "project.html",
-            {"view": dbread.project_view(request.app.state.db_path, f"{owner}/{name}"), "nav_active": "",
+            {"view": dbread.project_view(request.app.state.db_path, f"{owner}/{name}"), "nav_active": "projects",
              "tenant": _tenant(request, user)},
         )
 
@@ -460,7 +472,7 @@ def _register_routes(app: FastAPI) -> None:
         return _render(
             request,
             "project.html",
-            {"view": dbread.project_view(request.app.state.db_path, name), "nav_active": "",
+            {"view": dbread.project_view(request.app.state.db_path, name), "nav_active": "projects",
              "tenant": _tenant(request, user)},
         )
 
@@ -521,6 +533,13 @@ def _register_routes(app: FastAPI) -> None:
         return JSONResponse(dbread.health(request.app.state.db_path))
 
     # --- live-update fragments (refetched when the feed records a change) ---
+
+    @app.get("/fragments/freshness", response_class=HTMLResponse)
+    def freshness_fragment(request: Request, user: OperatorApi) -> HTMLResponse:
+        # Polled by every page every 30 s: the read time and, when the record is not being read,
+        # the stale banner. Independent of the change notifications, which stop when reads stop.
+        chrome = dbread.chrome_view(request.app.state.db_path)
+        return _render(request, "fragments/freshness.html", {"chrome": chrome, "standalone": True})
 
     @app.get("/fragments/{panel}", response_class=HTMLResponse)
     def fragment(

@@ -1,13 +1,20 @@
 """The chat's queries (design 2026-10-17, requirement 9): typed, read-only, over the pages' own read layer.
 
 Each query reads through `backend/readmodel/dbread.py`, the functions the pages render, so a page
-and an answer cannot disagree. Each returns a `Result`: plain fields (every figure already worked
+and an answer cannot disagree. Each answer reads ONE snapshot of the store (`_with_store`, which
+opens `dbread.snapshot` and hands its `conn` to every view the answer uses), so a feed pass that
+commits halfway through cannot mix two moments in one answer. A new query follows the same
+pattern: `return _with_store(ctx, read)`, and every dbread view inside `read` gets `conn=conn`.
+
+Each returns a `Result`: plain fields (every figure already worked
 out and formatted as the page shows it) and references to the records (feature, project, issue,
 period) as links to the pages. The answer text is written from these fields by a fixed template
 (`backend/chat/answers.py`); the model never writes a figure, a status or a name.
 
 A name that matches nothing says so; a name that matches more than one record lists them all and
-asks which (status ``ambiguous``), never a guess.
+asks which (status ``ambiguous``), never a guess. A feature name whose words do not all match
+any feature falls back to a looser match (word endings and small words ignored) and lists the
+closest features as "did you mean" (also ``ambiguous``, with ``partial`` set), never as an answer.
 
 Cost and time are not measured yet (they arrive with part B). `cost_summary` and `time_summary` are
 registered so a question about them gets a plain "not measured yet", never a made-up number.
@@ -23,7 +30,6 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
-from backend import db
 from backend.readmodel import dbread
 from backend.readmodel import viewmodels as vm
 from backend.readmodel.factory import STATIONS, Factory, Feature, load_factory
@@ -78,6 +84,13 @@ _CODE_RE = re.compile(r"^feat-[0-9a-z]+$", re.IGNORECASE)
 _WORD_RE = re.compile(r"[a-z0-9]+")
 _STOP = frozenset({"the", "a", "an", "of", "for", "to", "and", "that", "feature", "called", "named", "one",
                    "with", "in", "on", "by", "is", "it", "its", "which", "this", "about", "project"})
+#: Further small words ignored by the looser match only (the every-word match keeps its old list).
+_LOOSE_STOP = _STOP | frozenset({"from", "as", "at", "into", "onto", "up", "so", "or", "but", "not", "be", "are",
+                                 "was", "were", "has", "have", "had", "do", "does", "did", "can", "could", "will",
+                                 "would", "should", "you", "your", "me", "my", "we", "our", "us", "they", "their",
+                                 "where", "what", "when", "how", "who", "there", "these", "those", "some", "any",
+                                 "all", "thing", "things", "something"})
+_ENDINGS = ("ing", "es", "ed", "s")
 MAX_LISTED = 5
 
 
@@ -89,8 +102,37 @@ def _words(text: str) -> set[str]:
     return {w for w in _WORD_RE.findall((text or "").lower()) if w not in _STOP and len(w) > 1}
 
 
+def _stem(word: str) -> str:
+    """A word with a plain ending taken off, so "trims", "trimming" and "trimmed" all read "trim",
+    and "spaces" and "space" both read "spac". Short words are left alone."""
+    for ending in _ENDINGS:
+        if word.endswith(ending) and len(word) - len(ending) >= 3:
+            word = word[: -len(ending)]
+            if ending in ("ing", "ed") and len(word) > 3 and word[-1] == word[-2]:
+                word = word[:-1]      # "trimming" -> "trimm" -> "trim"
+            break
+    return word[:-1] if word.endswith("e") and len(word) > 3 else word
+
+
+def _stems(text: str) -> set[str]:
+    # "note's" splits into "note" and "s"; the lone "s" is dropped with the other one-letter words.
+    return {_stem(w) for w in _WORD_RE.findall((text or "").lower()) if w not in _LOOSE_STOP and len(w) > 1}
+
+
+def title_with_code(title: str, code: str, fallback: str = "") -> str:
+    """Title first, code after, without the title's full stop: "Export notes as a file (FEAT-0006)"."""
+    title = (title or "").rstrip(" .")
+    if code and title and title != code:
+        return f"{title} ({code})"
+    return title or code or fallback
+
+
+def _label(f: Feature) -> str:
+    return title_with_code(f.title, f.code, f.key)
+
+
 def _feature_ref(f: Feature) -> Ref:
-    return Ref("feature", f.label, f.link)
+    return Ref("feature", _label(f), f.link)
 
 
 def _project_ref(project: str) -> Ref:
@@ -126,6 +168,20 @@ def find_features(factory: Factory, name: str) -> list[Feature]:  # noqa: PLR091
     if not words:
         return []
     return [f for f in factory.features if words <= _words(f.title) | _words(f.request_text)]
+
+
+def suggest_features(factory: Factory, name: str) -> list[Feature]:
+    """The closest features when `find_features` finds none: those sharing the most of the name's
+    words, read loosely (endings such as -s, -es, -ing, -ed taken off, small words ignored), and
+    sharing at least half of them. Offered as "did you mean", never taken as the answer."""
+    wanted = _stems(name)
+    if not wanted:
+        return []
+    scored = [(len(wanted & (_stems(f.title) | _stems(f.request_text))), f) for f in factory.features]
+    best = max((n for n, _f in scored), default=0)
+    if best == 0 or best * 2 < len(wanted):
+        return []
+    return [f for n, f in scored if n == best]
 
 
 def projects_on_record(factory: Factory) -> list[str]:
@@ -239,25 +295,30 @@ def _bad_period(query: str, text: str | None) -> Result:
 # --- shared helpers -------------------------------------------------------------------------------------
 
 
-def _with_store(ctx: Context, read: Callable[[sqlite3.Connection, Factory], Result]) -> Result:
-    conn = db.connect_ro(ctx.db_path)
+def _with_store[T](ctx: Context, read: Callable[[sqlite3.Connection, Factory], T]) -> T:
+    """Run one answer's reads on ONE read snapshot of the store (`dbread.snapshot`): the names it
+    resolves, its rows, its counts and its freshness note all see the store as it was at the same
+    moment, even if a feed pass commits halfway through. Every page view the answer uses must be
+    given this `conn`, never open its own (a view without `conn` reads a newer snapshot)."""
+    conn = dbread.snapshot(ctx.db_path)
     try:
         return read(conn, load_factory(conn, ctx.now))
     finally:
         conn.close()
 
 
-def _stale_note(ctx: Context) -> str:
+def _stale_note(ctx: Context, conn: sqlite3.Connection) -> str:
     """The page's own stale-data banner, word for word, or "" when the record is fresh."""
-    chrome = dbread.chrome_view(ctx.db_path, ctx.now)
+    chrome = dbread.chrome_view(ctx.db_path, ctx.now, conn=conn)
     return chrome.banner.text if chrome.banner else ""
 
 
-def _ambiguous(query: str, kind: str, name: str, refs: Iterable[Ref]) -> Result:
+def _ambiguous(query: str, kind: str, name: str, refs: Iterable[Ref], *, partial: bool = False) -> Result:
     refs = tuple(refs)
     shown = refs[:MAX_LISTED]
     return Result(query, "ambiguous", {"kind": kind, "name": name, "count": str(len(refs)),
-                                       "listed": [r.label for r in shown], "more": str(len(refs) - len(shown))},
+                                       "listed": [r.label for r in shown], "more": str(len(refs) - len(shown)),
+                                       "partial": "yes" if partial else ""},
                   candidates=shown)
 
 
@@ -281,26 +342,57 @@ def _resolve_project(query: str, factory: Factory, name: str | None) -> tuple[st
     return found[0], None
 
 
+# --- the options a clarifying question names ----------------------------------------------------------
+
+
+def clarify_options(ctx: Context, kind: str, ids: Iterable[str]) -> tuple[Ref, ...] | None:
+    """The records a clarifying question's options name, as links labelled from the records, in the
+    order given; None when any of them is not on record (the model named one that does not exist)."""
+    ids = tuple(ids)
+
+    def read(conn: sqlite3.Connection, factory: Factory) -> tuple[Ref, ...] | None:
+        refs: list[Ref] = []
+        known = projects_on_record(factory)
+        for wanted in ids:
+            if kind == "which_feature":
+                f = factory.feature(wanted.upper())
+                if f is None or f.code.upper() != wanted.upper():
+                    return None
+                refs.append(_feature_ref(f))
+            elif kind == "which_project" and wanted in known:
+                refs.append(_project_ref(wanted))
+            else:
+                return None
+        return tuple(refs)
+
+    return _with_store(ctx, read)
+
+
 # --- the queries ---------------------------------------------------------------------------------------
 
 
 def feature_status(ctx: Context, feature: str) -> Result:
     """Where one feature stands, as its page shows it."""
 
-    def read(_conn: sqlite3.Connection, factory: Factory) -> Result:
+    def read(conn: sqlite3.Connection, factory: Factory) -> Result:
         found = find_features(factory, feature)
         if not found:
-            return Result("feature_status", "not_found", {"kind": "feature", "name": feature})
+            close = suggest_features(factory, feature)
+            if not close:
+                return Result("feature_status", "not_found", {"kind": "feature", "name": feature})
+            return _ambiguous("feature_status", "feature", feature,
+                              (Ref("feature", f"{_label(f)}, sent {_sent(f, ctx.now)}", f.link) for f in close),
+                              partial=True)
         if len(found) > 1:
             return _ambiguous("feature_status", "feature", feature,
-                              (Ref("feature", f"{f.label}, sent {_sent(f, ctx.now)}", f.link) for f in found))
+                              (Ref("feature", f"{_label(f)}, sent {_sent(f, ctx.now)}", f.link) for f in found))
         f = found[0]
-        page = dbread.feature_page(ctx.db_path, f.key, ctx.now)
+        page = dbread.feature_page(ctx.db_path, f.key, ctx.now, conn=conn)
         assert page is not None
         _chrome, fp = page
         open_issues = [i for i in fp.issues if not i.closed_label]
         fields: dict[str, object] = {
-            "label": f.label, "project": fp.project, "status_text": fp.status_text, "station": _station(f),
+            "label": _label(f), "project": fp.project, "status_text": fp.status_text, "station": _station(f),
             # Finished without being delivered: the journey marks this step "stopped", not reached.
             "stopped": "yes" if not f.in_progress and not f.delivered_at else "",
             "verdict": fp.verdict.label, "verdict_reason": fp.verdict_reason, "elapsed": fp.elapsed,
@@ -308,7 +400,7 @@ def feature_status(ctx: Context, feature: str) -> Result:
             "delivered_on": dbread.delivered_row(f).delivered_date if f.delivered_at else "",
             "mission_line": fp.mission_line,
             "open_issues": [f"{i.kind}: {i.detail}" if i.detail else i.kind for i in open_issues],
-            "cost": fp.spend.text, "stale_note": _stale_note(ctx),
+            "cost": fp.spend.text, "stale_note": _stale_note(ctx, conn),
         }
         refs = [_feature_ref(f)]
         if fp.project:
@@ -342,15 +434,19 @@ def project_summary(ctx: Context, project: str, period: str | None = None) -> Re
         name, problem = _resolve_project("project_summary", factory, project)
         if problem is not None or name is None:
             return problem or Result("project_summary", "not_found", {"kind": "project", "name": project})
-        view = dbread.project_view(ctx.db_path, name, ctx.now)
+        view = dbread.project_view(ctx.db_path, name, ctx.now, conn=conn)
         fields: dict[str, object] = {
             "project": name, "in_progress": str(view.in_progress), "delivered_7d": str(view.delivered_7d),
-            "delivered_total": str(view.delivered_total), "open_issue_count": str(len(view.issues)),
+            # The project page's own total: the listed open issues and the older unresolved failures
+            # the 14-day cut-off leaves out of the list, which `hidden_line` explains.
+            "delivered_total": str(view.delivered_total), "open_issue_count": str(view.open_issues_total),
             "open_issues": [f"{i.kind}: {i.subject}" for i in view.issues[:MAX_LISTED]],
-            "more_issues": str(max(0, len(view.issues) - MAX_LISTED)), "cost": view.spend.text,
-            "period_label": "", "period_delivered": "", "stale_note": _stale_note(ctx),
+            "more_issues": str(max(0, len(view.issues) - MAX_LISTED)), "hidden_line": view.hidden_line,
+            "cost": view.spend.text, "period_label": "", "period_delivered": "", "stale_note": _stale_note(ctx, conn),
         }
         refs = [_project_ref(name)]
+        if view.hidden_line:
+            refs.append(PAGES["issues"])
         if p is not None:
             lo, hi = dbread._window_bounds(*p.window)
             fields["period_label"] = p.label
@@ -364,21 +460,30 @@ def project_summary(ctx: Context, project: str, period: str | None = None) -> Re
 def open_issues(ctx: Context, project: str | None = None) -> Result:
     """The open issues, as the Issues page lists them, optionally for one project."""
 
-    def read(_conn: sqlite3.Connection, factory: Factory) -> Result:
+    def read(conn: sqlite3.Connection, factory: Factory) -> Result:
         name, problem = _resolve_project("open_issues", factory, project)
         if problem is not None:
             return problem
-        view = dbread.issues_view(ctx.db_path, ctx.now)
+        view = dbread.issues_view(ctx.db_path, ctx.now, conn=conn)
         rows = [r for r in view.open_rows if name is None or r.project == name]
+        # The total counts the older unresolved failures the 14-day cut-off leaves out of the list,
+        # as the pages do: the Issues page's count for every project, the project page's for one.
+        if name is None:
+            total, hidden = len(rows) + view.hidden_count, view.hidden_line
+        else:
+            pv = dbread.project_view(ctx.db_path, name, ctx.now, conn=conn)
+            total, hidden = pv.open_issues_total, pv.hidden_line
         shown = rows[:MAX_LISTED]
         fields: dict[str, object] = {
-            "project": name or "", "count": str(len(rows)), "more": str(len(rows) - len(shown)),
+            "project": name or "", "count": str(total), "more": str(len(rows) - len(shown)),
             "rows": [{"kind": r.kind, "subject": r.subject, "detail": r.detail, "age": r.age,
                       "how_serious": r.band.label} for r in shown],
-            "stale_note": _stale_note(ctx),
+            "hidden_line": hidden, "stale_note": _stale_note(ctx, conn),
         }
         refs = [Ref("issue", f"{r.kind}: {r.subject}" if r.subject else r.kind, r.link) for r in shown]
         refs.append(_project_ref(name) if name else PAGES["issues"])
+        if name and hidden:
+            refs.append(PAGES["issues"])
         return Result("open_issues", "found", fields, tuple(refs))
 
     return _with_store(ctx, read)
@@ -390,23 +495,23 @@ def delivered(ctx: Context, period: str | None = None, project: str | None = Non
     if p is None:
         return _bad_period("delivered", period)
 
-    def read(_conn: sqlite3.Connection, factory: Factory) -> Result:
+    def read(conn: sqlite3.Connection, factory: Factory) -> Result:
         name, problem = _resolve_project("delivered", factory, project)
         if problem is not None:
             return problem
-        panel = dbread.delivered_view(ctx.db_path, p.window, ctx.now).panel
+        panel = dbread.delivered_view(ctx.db_path, p.window, ctx.now, conn=conn).panel
         rows = [r for r in panel.rows if name is None or r.project == name]
         shown = rows[:MAX_LISTED * 2]
         fields: dict[str, object] = {
             "project": name or "", "period_label": p.label, "count": str(len(rows)),
             "more": str(len(rows) - len(shown)),
-            "rows": [{"label": f"{r.title} ({r.code})" if r.code else r.title, "on": r.delivered_date}
+            "rows": [{"label": title_with_code(r.title, r.code), "on": r.delivered_date}
                      for r in shown],
             # Factory-wide, so only when no project was asked for.
             "other_endings": "" if name else panel.other_endings,
-            "stale_note": _stale_note(ctx),
+            "stale_note": _stale_note(ctx, conn),
         }
-        refs = [Ref("feature", f"{r.title} ({r.code})" if r.code else r.title, r.link) for r in shown]
+        refs = [Ref("feature", title_with_code(r.title, r.code), r.link) for r in shown]
         refs.append(_period_ref(p, "delivered"))
         if name:
             refs.append(_project_ref(name))
@@ -424,11 +529,11 @@ def weekly_report(ctx: Context, period: str | None = None, project: str | None =
     if p is None:
         return _bad_period("weekly_report", period)
 
-    def read(_conn: sqlite3.Connection, factory: Factory) -> Result:
+    def read(conn: sqlite3.Connection, factory: Factory) -> Result:
         name, problem = _resolve_project("weekly_report", factory, project)
         if problem is not None:
             return problem
-        report = dbread.weekly_report_view(ctx.db_path, "operator", p.window, ctx.now)
+        report = dbread.weekly_report_view(ctx.db_path, "operator", p.window, ctx.now, conn=conn)
         h = report.headline
         delivered_rows = [r for r in report.delivered_rows if name is None or r.project == name]
         in_flight_rows = [r for r in report.in_flight_rows if name is None or r.project == name]
@@ -437,7 +542,7 @@ def weekly_report(ctx: Context, period: str | None = None, project: str | None =
             "project": name or "", "period_label": p.label,
             "withheld": "yes" if h.withheld else "", "withheld_since": h.withheld_since,
             "delivered_count": str(len(delivered_rows)), "in_flight_count": str(len(in_flight_rows)),
-            "delivered": [f"{r.title} ({r.code})" if r.code else r.title for r in delivered_rows[:MAX_LISTED]],
+            "delivered": [title_with_code(r.title, r.code) for r in delivered_rows[:MAX_LISTED]],
             "more_delivered": str(max(0, len(delivered_rows) - MAX_LISTED)),
             "plan_agreed": "yes" if milestones else "",
             "behind": str(h.behind_count), "on_target": str(h.on_target_count), "ahead": str(h.ahead_count),
@@ -447,7 +552,7 @@ def weekly_report(ctx: Context, period: str | None = None, project: str | None =
         refs = [Ref("period", f"Weekly report, {p.label}",
                     "/reports?" + urlencode({"from": p.window[0], "to": p.window[1]}))]
         if not h.withheld:
-            refs += [Ref("feature", f"{r.title} ({r.code})" if r.code else r.title, r.link)
+            refs += [Ref("feature", title_with_code(r.title, r.code), r.link)
                      for r in delivered_rows[:MAX_LISTED]]
         if name:
             refs.append(_project_ref(name))

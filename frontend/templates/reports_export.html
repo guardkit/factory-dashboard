@@ -18,7 +18,7 @@
       <h1>Weekly report — {{ report.tenant_display }}</h1>
       <p class="report-export__meta">
         <span>Week: {{ report.window_from }} to {{ report.window_to }}</span>
-        {{ m.asof_chip(report.as_of) }}
+        {{ m.asof_chip(report.as_of, source='factory') }}
       </p>
     </header>
 

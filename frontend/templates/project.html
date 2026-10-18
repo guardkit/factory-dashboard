@@ -11,7 +11,7 @@
       <li><span class="num">{{ view.in_progress }}</span> in progress</li>
       <li><span class="num">{{ view.delivered_7d }}</span> merged and checked in the last 7 days
         (<span class="num">{{ view.delivered_total }}</span> in all)</li>
-      <li><span class="num">{{ view.issues | length }}</span> open issues</li>
+      <li><span class="num">{{ view.open_issues_total }}</span> open {{ 'issue' if view.open_issues_total == 1 else 'issues' }}</li>
       <li>{{ m.spend_slot(view.spend) }}</li>
     </ul>
   </div>
@@ -21,7 +21,7 @@
 <section class="panel-card project-features state-{{ panel.state.value }}">
   <header class="panel-card__header">
     <h2 class="panel-card__title">{{ panel.title }}</h2>
-    {{ m.asof_chip(panel.as_of) }}
+    {{ m.asof_chip(panel.as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
     {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
@@ -33,6 +33,7 @@
 <section class="panel-card project-issues">
   <header class="panel-card__header"><h2 class="panel-card__title">Open issues</h2></header>
   <div class="panel-card__body">
+    {% if view.hidden_line %}<p class="page-lead issues-hidden">{{ view.hidden_line }}</p>{% endif %}
     {% if view.issues %}
       <ul class="issue-list">
       {% for i in view.issues %}
@@ -40,7 +41,7 @@
           <span title="{{ i.opened_title }}">({{ i.opened_label }})</span>. {{ i.detail }}</li>
       {% endfor %}
       </ul>
-    {% else %}<p class="true-empty">No open issues for this project.</p>{% endif %}
+    {% elif not view.open_issues_total %}<p class="true-empty">No open issues for this project.</p>{% endif %}
   </div>
 </section>
 {% endblock %}

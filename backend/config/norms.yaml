@@ -34,3 +34,12 @@ waiting_hours:
   unit: h
   how: Kept from the July design (under 1 h normal, over 4 h needs chasing); waiting is a person's time,
     not the factory's, so recent builds do not change it.
+quiet_hours:
+  green_max: 4
+  amber_max: 24
+  unit: h
+  how: For a feature still in progress that is not planning and not waiting for a person, how long nothing
+    at all has been recorded for it. Forge records nothing inside a build, and the 95th percentile build
+    in the 14 days to 2026-10-18 took 208 min, so up to 4 h of silence is normal and over a day the record
+    has stopped moving. The feature stays in progress, shown as stalled, until Forge records how it ended.
+    Added on 2026-10-18 in place of the rule that ended a feature after a week without activity.

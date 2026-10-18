@@ -9,7 +9,7 @@ from fastapi.routing import APIRoute
 from starlette.testclient import TestClient
 
 # On an empty store (the factory's record not read yet) every page still renders, honestly.
-OPERATOR_PAGES = ["/", "/features", "/features/FEAT-3ED2", "/projects/acme/notes", "/projects/single",
+OPERATOR_PAGES = ["/", "/features", "/features/FEAT-3ED2", "/projects", "/projects/acme/notes", "/projects/single",
                   "/delivered", "/reports", "/reports?view=export", "/issues", "/fleet"]
 
 
@@ -47,14 +47,22 @@ def test_unauthenticated_redirects_to_login(client: TestClient) -> None:
 
 
 def test_fragment_api_requires_login(client: TestClient) -> None:
-    r = client.get("/fragments/p2", follow_redirects=False)
-    assert r.status_code == 401
+    for path in ("/fragments/p2", "/fragments/freshness"):
+        r = client.get(path, follow_redirects=False)
+        assert r.status_code == 401, path
 
 
-CLIENT_REDIRECTED = ["/features", "/features/FEAT-3ED2", "/features/anything",
+def test_the_nav_reads_now_features_projects_reports_issues_fleet(operator_client: TestClient) -> None:
+    """Requested by the redesign session (18 October 2026): Projects joins the nav and Delivered
+    leaves it; the Delivered page itself stays."""
+    assert [label for label, _href, _key in NAV] == ["Now", "Features", "Projects", "Reports", "Issues", "Fleet"]
+    assert operator_client.get("/delivered").status_code == 200
+
+
+CLIENT_REDIRECTED = ["/features", "/features/FEAT-3ED2", "/features/anything", "/projects",
                      "/projects/study-tutor", "/projects/anything", "/projects/acme/notes", "/delivered", "/reports",
                      "/reports?view=export", "/issues", "/fleet", "/chat"]
-CLIENT_FORBIDDEN = ["/fragments/p2", "/events?once=1", "/api/voice/ask"]
+CLIENT_FORBIDDEN = ["/fragments/p2", "/fragments/freshness", "/events?once=1", "/api/voice/ask"]
 # "/" is tenant-aware (the client layout for a client); /healthz is for the start script and
 # says only whether the factory's record is fresh (tested in tests/test_pages.py).
 OPEN_ROUTES = {"/", "/login", "/logout", "/healthz"}

@@ -1,13 +1,16 @@
-// The chat's two after-answer steps, as listeners rather than inline attributes: once an answer has
-// arrived, the question box is cleared, and a clarifying question's reply form (now answered) goes.
+// chat.js — first-party, no framework. What the chat's htmx forms do once a request has worked,
+// so no template needs an inline handler: the question box is cleared after an answer arrives,
+// and a clarifying question's reply form is removed once the reply has been answered. Without
+// scripts the forms post normally and the page comes back whole, so nothing here is needed.
 (function () {
   "use strict";
-  function afterAnswer(e) {
-    var form = e.target, d = e.detail || {};
-    if (!d.successful || !form || !form.classList) return;
-    if (form.classList.contains("chat__form")) form.reset();
-    else if (form.classList.contains("chat-exchange__reply")) form.remove();
-  }
-  if (typeof module !== "undefined" && module.exports) module.exports = { afterAnswer: afterAnswer };
-  else document.addEventListener("htmx:afterRequest", afterAnswer);
+  document.addEventListener("htmx:afterRequest", function (event) {
+    var form = event.target;
+    if (!event.detail || !event.detail.successful || !form || typeof form.matches !== "function") return;
+    if (form.matches("form.chat__form")) {
+      form.reset();
+    } else if (form.matches("form.chat-exchange__reply")) {
+      form.remove();
+    }
+  });
 })();

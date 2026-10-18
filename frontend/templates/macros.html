@@ -1,12 +1,12 @@
 {# Shared pieces. Class names are stable so a later stylesheet can restyle them. #}
 
 {% macro station_glyph(state) -%}
-{{ {'passed':'●','current':'◉','future':'○','stopped':'✕'}.get(state, '○') }}
+{{ {'passed':'●','current':'◉','waiting':'◔','future':'○','stopped':'✕'}.get(state, '○') }}
 {%- endmacro %}
 
 {# When the data on a card was read. data-asof / data-threshold let freshness.js age the dot. #}
-{% macro asof_chip(a) -%}
-<span class="asof-chip asof-chip--{{ a.dot_state }}"
+{% macro asof_chip(a, source='') -%}
+<span class="asof-chip asof-chip--{{ a.dot_state }}"{% if source %} data-source="{{ source }}"{% endif %}
       {% if a.title_iso %}title="{{ a.title_iso }}"{% endif %}
       {% if a.asof_epoch is not none %}data-asof="{{ a.asof_epoch }}" data-threshold="{{ a.threshold_secs }}"{% endif %}>
   <span class="asof-chip__label">{{ a.prefix }} {{ a.label }}</span>

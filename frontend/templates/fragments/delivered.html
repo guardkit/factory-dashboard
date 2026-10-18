@@ -3,7 +3,7 @@
 <section class="panel-card delivered state-{{ panel.state.value }}" id="panel-p7" data-panel="p7">
   <header class="panel-card__header">
     <h2 class="panel-card__title">{{ panel.title }}</h2>
-    {{ m.asof_chip(panel.as_of) }}
+    {{ m.asof_chip(panel.as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
     <p class="delivered__summary"><span class="delivered__count">{{ panel.delivered_count }} feature{{ '' if panel.delivered_count == 1 else 's' }} merged and checked from {{ panel.window_from }} to {{ panel.window_to }}.</span></p>
