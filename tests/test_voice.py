@@ -131,7 +131,8 @@ class FakeSpeech:
     """The two speech models. `stt` and `tts` are (status, body) or an exception to raise."""
 
     def __init__(self) -> None:
-        self.stt: tuple[int, object] | Exception = (200, {"text": "What was delivered this week?"})
+        # verbose_json, as the speech model answers it: the text and the decoded length in seconds
+        self.stt: tuple[int, object] | Exception = (200, {"text": "What was delivered this week?", "duration": 3.0})
         self.tts: tuple[int, bytes] | Exception = (200, FAKE_WAV)
         self.requests: list[httpx.Request] = []
 
@@ -203,6 +204,7 @@ def test_a_spoken_question_gets_the_chats_answer_and_audio(world: tuple[TestClie
     assert str(stt.url) == voice.DEFAULT_STT_URL
     body = stt.content
     assert b'name="model"' in body and b"parakeet-tdt-0.6b-v3" in body
+    assert b'name="response_format"' in body and b"verbose_json" in body
     assert b'name="file"; filename="question.webm"' in body and WEBM in body
     assert str(tts.url) == voice.DEFAULT_TTS_URL
     assert json.loads(tts.content) == {"model": "qwen3-tts-0.6b", "voice": "Ryan", "input": d["spoken"],
@@ -226,7 +228,7 @@ def test_a_follow_up_reply_by_voice(world: tuple[TestClient, FakeModel, FakeSpee
     """A spoken question the chat asks about (the model names the kind; the server writes the question),
     then a spoken reply carrying the shown question back: the second model call sees it as plain text."""
     client, model, speech = world
-    speech.stt = (200, {"text": "How is the project?"})
+    speech.stt = (200, {"text": "How is the project?", "duration": 2.0})
     model.replies += ['{"clarify": "which_project"}',
                       '{"query": "project_summary", "args": {"project": "acme/notes"}}']
     first = _ask(client).json()
@@ -235,7 +237,7 @@ def test_a_follow_up_reply_by_voice(world: tuple[TestClient, FakeModel, FakeSpee
     assert asked == {"question": "How is the project?", "clarify": "Which project do you mean?"}
     assert first["answer"]["text"] == "Which project do you mean?" and first["spoken"] == "Which project do you mean?"
     assert 'name="prior_clarify" value="Which project do you mean?"' in first["html"]
-    speech.stt = (200, {"text": "acme notes"})
+    speech.stt = (200, {"text": "acme notes", "duration": 1.5})
     second = _ask(client, prior_question=asked["question"], prior_clarify=asked["clarify"])
     assert second.status_code == 200 and second.json()["answer"]["kind"] == "answer"
     assert model.calls[1][0][1:] == [{"role": "user", "content": "How is the project?"},
@@ -316,7 +318,7 @@ def test_when_speech_to_text_fails_there_is_no_question(world: tuple[TestClient,
 
 def test_a_recording_with_no_words_says_so(world: tuple[TestClient, FakeModel, FakeSpeech]) -> None:
     client, model, speech = world
-    speech.stt = (200, {"text": "   "})
+    speech.stt = (200, {"text": "   ", "duration": 2.0})
     r = _ask(client)
     assert r.status_code == 422 and r.json() == {"message": voice.HEARD_NOTHING}
     assert model.calls == []
@@ -693,12 +695,12 @@ def test_the_speech_to_text_reply_cap(world: tuple[TestClient, FakeModel, FakeSp
     """A well-formed transcript reply over 64 KB is refused (only the cap can refuse it); one just under is
     read."""
     client, model, speech = world
-    over = json.dumps({"text": "a" * voice.MAX_STT_REPLY_BYTES}).encode()
+    over = json.dumps({"text": "a" * voice.MAX_STT_REPLY_BYTES, "duration": 3.0}).encode()
     speech.stt = (200, over)
     r = _ask(client)
     assert r.status_code == 503 and r.json() == {"message": voice.CANT_HEAR}
     assert model.calls == []
-    under = json.dumps({"text": "Any issues? " + " " * (voice.MAX_STT_REPLY_BYTES - 100)}).encode()
+    under = json.dumps({"text": "Any issues? " + " " * (voice.MAX_STT_REPLY_BYTES - 120), "duration": 3.0}).encode()
     assert len(under) <= voice.MAX_STT_REPLY_BYTES
     speech.stt = (200, under)
     model.replies.append('{"query": "open_issues"}')
@@ -872,3 +874,65 @@ def test_a_malformed_track_is_refused(world: tuple[TestClient, FakeModel, FakeSp
     r = _ask(client, audio, "audio/mp4")
     assert r.status_code == 415 and r.json() == {"message": voice.NOT_AUDIO}
     assert speech.requests == []
+
+
+# --- Codex round 6: the decoded length is the authority -------------------------------------------------
+
+
+def test_decoded_audio_over_30s_is_refused_and_never_reaches_the_chat(
+        world: tuple[TestClient, FakeModel, FakeSpeech]) -> None:
+    """Whatever the headers say (here a live WebM, which states nothing), the speech model's decoded
+    length decides: 60 s is refused, the transcript dropped, no chat call and nothing spoken."""
+    client, model, speech = world
+    speech.stt = (200, {"text": "What was delivered this week?", "duration": 60.0})
+    r = _ask(client)
+    assert r.status_code == 413 and r.json() == {"message": voice.TOO_LONG}
+    assert model.calls == [] and speech.paths() == ["/v1/audio/transcriptions"]
+    assert "delivered" not in r.text
+
+
+@pytest.mark.parametrize("reply", [
+    {"text": "Any issues?"}, {"text": "Any issues?", "duration": None}, {"text": "Any issues?", "duration": "29"},
+    {"text": "Any issues?", "duration": True}, b'{"text": "Any issues?", "duration": NaN}',
+    b'{"text": "Any issues?", "duration": Infinity}',
+], ids=["missing", "null", "string", "bool", "nan", "infinity"])
+def test_an_unmeasured_recording_is_not_guessed(world: tuple[TestClient, FakeModel, FakeSpeech],
+                                                reply: object) -> None:
+    client, model, speech = world
+    speech.stt = (200, reply)
+    r = _ask(client)
+    assert r.status_code == 503 and r.json() == {"message": voice.CANT_HEAR}
+    assert model.calls == [] and speech.paths() == ["/v1/audio/transcriptions"]
+
+
+def test_decoded_audio_of_29s_goes_through(world: tuple[TestClient, FakeModel, FakeSpeech]) -> None:
+    client, model, speech = world
+    speech.stt = (200, {"text": "Any issues?", "duration": 29})
+    model.replies.append('{"query": "open_issues"}')
+    r = _ask(client)
+    assert r.status_code == 200 and r.json()["transcript"] == "Any issues?"
+    assert speech.paths() == ["/v1/audio/transcriptions", "/v1/audio/speech"]
+
+
+def mehd(version: int, duration: int) -> bytes:
+    return box(b"mvex", box(b"mehd", bytes([version, 0, 0, 0]) + duration.to_bytes(8 if version else 4, "big")))
+
+
+def test_an_mp4_stating_60s_only_in_mehd(world: tuple[TestClient, FakeModel, FakeSpeech]) -> None:
+    """Codex's file: mvhd and mdhd say nothing (zero), mvex/mehd's fragment_duration says 60 s. It is refused
+    early from the header; were it not, the decoded length would refuse it."""
+    client, model, speech = world
+    for version in (0, 1):
+        audio = mp4(fragmented=True, tracks=(trak(0, 48000, 0), mehd(version, 60_000)))
+        assert voice.mp4_seconds(audio) == 60.0
+        r = _ask(client, audio, "audio/mp4")
+        assert r.status_code == 413 and r.json() == {"message": voice.TOO_LONG}
+    assert speech.requests == [] and model.calls == []
+    # the same file with the header check bypassed still ends at the decoded length
+    speech.stt = (200, {"text": "Any issues?", "duration": 60.0})
+    no_mehd = mp4(fragmented=True, tracks=(trak(0, 48000, 0),))
+    r = _ask(client, no_mehd, "audio/mp4")
+    assert r.status_code == 413 and model.calls == []
+    assert voice.mp4_seconds(mp4(fragmented=True, tracks=(mehd(0, 10_000),))) == 10.0
+    bad = mp4(fragmented=True, tracks=(box(b"mvex", box(b"mehd", b"\x01\x00\x00\x00\x00\x00")),))
+    assert _ask(client, bad, "audio/mp4").status_code == 415

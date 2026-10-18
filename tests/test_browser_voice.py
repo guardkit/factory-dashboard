@@ -35,7 +35,7 @@ def voice_board(tmp_path: Path) -> Iterator[tuple[str, FakeModel, FakeSpeech]]:
     store = _ledger(tmp_path)
     model = FakeModel('{"query": "open_issues"}', '{"query": "open_issues"}')
     speech = FakeSpeech()
-    speech.stt = (200, {"text": "Any issues?"})
+    speech.stt = (200, {"text": "Any issues?", "duration": 1.2})
     speech.tts = (200, wav(1))                       # a real (silent) WAV the browser can play
     app = create_app(db_path=store, tenants_path=TENANTS_TEST)
     app.state.chat = Chat(store, model, now=lambda: NOW)

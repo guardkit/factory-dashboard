@@ -221,16 +221,23 @@ class Voice:
             raise VoiceUnavailable(f"{what}: {type(exc).__name__}") from None
         return bytes(body)
 
-    def transcribe(self, audio: bytes, filename: str, content_type: str) -> str:
+    def transcribe(self, audio: bytes, filename: str, content_type: str) -> tuple[str, float]:
+        """(text, seconds): the transcript, and the length of the audio as the model decoded it
+        (`response_format=verbose_json`). That length is the authority for the 30-second limit, whatever
+        the file's headers say; a reply without a finite length is VoiceUnavailable, never a guess."""
         body = self._post("speech-to-text", self.settings.stt_url, MAX_STT_REPLY_BYTES,
-                          data={"model": self.settings.stt_model}, files={"file": (filename, audio, content_type)})
+                          data={"model": self.settings.stt_model, "response_format": "verbose_json"},
+                          files={"file": (filename, audio, content_type)})
         try:
-            text = json.loads(body)["text"]
-        except (ValueError, KeyError, TypeError):
+            reply = json.loads(body)
+            text, seconds = reply["text"], reply.get("duration")
+        except (ValueError, KeyError, TypeError, AttributeError):
             raise VoiceUnavailable("speech-to-text: no text in the reply") from None
         if not isinstance(text, str):
             raise VoiceUnavailable("speech-to-text: no text")
-        return text
+        if isinstance(seconds, bool) or not isinstance(seconds, int | float) or not math.isfinite(seconds):
+            raise VoiceUnavailable("speech-to-text: no decoded length in the reply")
+        return text, float(seconds)
 
     def speak(self, text: str) -> bytes:
         wav = self._post("text-to-speech", self.settings.tts_url, MAX_TTS_REPLY_BYTES,
@@ -326,9 +333,14 @@ def _boxes(b: bytes, start: int, end: int) -> Iterator[tuple[bytes, int, int]]:
 
 
 def _stated(b: bytes, body: int, end: int, name: str) -> float | None:
+    return _scaled(b, body, end, name)[1]
+
+
+def _scaled(b: bytes, body: int, end: int, name: str) -> tuple[int, float | None]:
     """The length an mvhd or mdhd states (the same layout for both: version 0 has a 32-bit timescale and
     duration after two 32-bit times, version 1 has 64-bit times and duration). None when the duration is
-    zero or "unknown" (all ones). Malformed for another version, a short box, or a timescale of zero."""
+    zero or "unknown" (all ones), with the timescale. Malformed for another version, a short box, or a
+    timescale of zero."""
     version = _u(b, body, 1)
     if version == 0:
         scale, duration, unknown, last = _u(b, body + 12, 4), _u(b, body + 16, 4), 0xFFFFFFFF, body + 20
@@ -338,30 +350,42 @@ def _stated(b: bytes, body: int, end: int, name: str) -> float | None:
         raise Malformed(f"{name} version")
     if last > end or not scale:
         raise Malformed(name)
-    return None if duration in (0, unknown) else duration / scale
+    return scale, (None if duration in (0, unknown) else duration / scale)
 
 
 def mp4_seconds(b: bytes) -> float | None:
-    """The longest length an MP4 states: in moov/mvhd, and in every moov/trak/mdia/mdhd. None only when
-    none of them states a usable length (as in a fragmented recording, whose durations are zero).
-    Malformed for a box that does not fit; the top-level boxes are all walked first, so they must fill
-    the file exactly, and every trak and mdia walked must be well formed too."""
-    stated: list[float] = []
+    """The longest length an MP4 states: in moov/mvhd, moov/mvex/mehd, and every moov/trak/mdia/mdhd
+    (an early refusal only: the speech model's decoded length is the authority). None only when none of
+    them states a usable length (as in a fragmented recording, whose durations are zero). Malformed for a
+    box that does not fit; the top-level boxes are all walked first, so they must fill the file exactly,
+    and every box walked inside moov must be well formed too."""
+    stated = [0.0]
     for kind, body, end in list(_boxes(b, 0, len(b))):
-        if kind != b"moov":
-            continue
-        for child, cbody, cend in _boxes(b, body, end):
-            if child == b"mvhd":
-                stated.append(_stated(b, cbody, cend, "mvhd") or 0.0)
-            elif child == b"trak":
-                for part, pbody, pend in _boxes(b, cbody, cend):
-                    if part != b"mdia":
-                        continue
-                    for media, mbody, mend in _boxes(b, pbody, pend):
-                        if media == b"mdhd":
-                            stated.append(_stated(b, mbody, mend, "mdhd") or 0.0)
-    longest = max(stated, default=0.0)
-    return longest or None
+        if kind == b"moov":
+            stated += _moov_lengths(b, body, end)
+    return max(stated) or None
+
+
+def _moov_lengths(b: bytes, body: int, end: int) -> list[float]:
+    stated: list[float] = []
+    movie_scale = 0
+    for child, cbody, cend in _boxes(b, body, end):
+        if child == b"mvhd":
+            movie_scale, seconds = _scaled(b, cbody, cend, "mvhd")
+            stated.append(seconds or 0.0)
+        elif child == b"mvex":  # fragment_duration, in the movie's timescale (mvhd comes first)
+            for part, pbody, pend in _boxes(b, cbody, cend):
+                if part == b"mehd" and movie_scale:
+                    width = 8 if _u(b, pbody, 1) == 1 else 4
+                    if pbody + 4 + width > pend:
+                        raise Malformed("mehd")
+                    stated.append(_u(b, pbody + 4, width) / movie_scale)
+        elif child == b"trak":
+            for part, pbody, pend in _boxes(b, cbody, cend):
+                if part == b"mdia":
+                    stated += [_stated(b, mbody, mend, "mdhd") or 0.0
+                               for media, mbody, mend in _boxes(b, pbody, pend) if media == b"mdhd"]
+    return stated
 
 
 _EBML, _SEGMENT, _INFO, _TIMECODE_SCALE, _DURATION = 0x1A45DFA3, 0x18538067, 0x1549A966, 0x2AD7B1, 0x4489
@@ -520,10 +544,14 @@ def ask_by_voice(  # noqa: PLR0911 (one return per refusal)
         return VoiceReply(429, VOICE_BUSY)
     try:
         try:
-            heard = " ".join(voice.transcribe(audio, ACCEPTED_TYPES[base_type(content_type)], content_type).split())
+            text, seconds = voice.transcribe(audio, ACCEPTED_TYPES[base_type(content_type)], content_type)
         except VoiceUnavailable as exc:
             log.warning("voice: %s", exc)
             return VoiceReply(503, CANT_HEAR)
+        if seconds > MAX_SECONDS + 0.5:  # the decoded length decides: the transcript is dropped unread
+            log.warning("voice: refused %.1f s of decoded audio", seconds)
+            return VoiceReply(413, TOO_LONG)
+        heard = " ".join(text.split())
         if not heard:
             return VoiceReply(422, HEARD_NOTHING)
         answer = chat.ask(heard, user, follow_up=follow_up)
