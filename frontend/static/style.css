@@ -853,7 +853,7 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
    12em, so an ordinary word never does. */
 .dense-table .band-chip, .dense-table .status-pill, .dense-table td .spend-slot { white-space: normal; }
 .dense-table .dense-table__text, .dense-table .issue-row__detail { overflow-wrap: anywhere; min-width: 12em; }
-/* Below the width where the chat sits beside the page, cells tighten to the phone padding. */
+/* Below laptop width, cells tighten to the phone padding. */
 @media (max-width: 1279px) {
   .dense-table th, .dense-table td { padding-left: 8px; padding-right: 8px; }
 }
@@ -1412,8 +1412,10 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 
 /* ==== stage 3: chat and microphone ==== */
 /* Part D's chat and Part E's microphone, in the design's ChatDrawer look. Part D shows the drawer
-   as a permanent second column at 1280px and wider, with no open or close script, so it takes the
-   design's page form (no overlay, no scrim). Below 1280px the drawer is hidden and the floating
+   as a permanent second column, with no open or close script, so it takes the design's page form
+   (no overlay, no scrim). The column appears at 1600px and wider, where the page beside it keeps
+   room for its tables (measured: at 1280 and 1440 the column left 774 and 934px, too narrow for
+   the Features, Issues and Reports tables). Below 1600px the drawer is hidden and the floating
    "Ask a question" link opens /chat; below 720px that link is hidden too, because the phone tab bar
    has Ask. Part D's and Part E's markup is unchanged; every rule here is on their class names. */
 
@@ -1427,7 +1429,7 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 }
 .chat-toggle:hover { background: var(--accent-text); color: var(--surface); }
 .chat-toggle:focus-visible { border-radius: var(--radius-pill); }
-@media (min-width: 1280px) {
+@media (min-width: 1600px) {
   .frame:has(> .chat-drawer:not([hidden])) {
     grid-template-columns: minmax(0, 1fr) var(--chat-width);
     max-width: calc(var(--content-max) + var(--chat-width));
