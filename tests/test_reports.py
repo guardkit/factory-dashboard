@@ -15,6 +15,7 @@ from backend.config_loader import load_tenants
 from backend.projector.plan_mirror import mirror_plans_once
 from backend.projector.store import iso
 from backend.readmodel import dbread
+from backend.readmodel.viewmodels import SpendSlot
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from tests.forge_fake import T0, ForgeFake, delivered_feature, store_from
@@ -261,15 +262,15 @@ def test_no_spend_tile_writes_its_own_words() -> None:
         assert f"m.spend_value({slot})" in source, name
         assert "Not measured" not in source, name
     env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=select_autoescape(default=True))
-    macros = env.get_template("macros.html").module
-    gap = str(macros.spend_value(dbread.SpendSlot()))
+    spend_value = getattr(env.get_template("macros.html").module, "spend_value")  # noqa: B009 (a Jinja macro)
+    gap = str(spend_value(SpendSlot()))
     assert gap.endswith("Not measured") and "#i-slash" in gap
 
     class Measured:  # the shape the cost feed gives a slot
         value = "$2.20"
         label = ""
 
-    assert str(macros.spend_value(Measured())) == "$2.20"
+    assert str(spend_value(Measured())) == "$2.20"
 
 
 def test_client_export_says_when_its_delivery_information_may_be_out_of_date(store: sqlite3.Connection) -> None:
