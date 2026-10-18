@@ -62,5 +62,9 @@ request, not by the scheme.
   `http://localhost:8090` or `http://127.0.0.1:8090`; on those two addresses the cookie is not
   marked Secure.
 
+Sign-in and sign-out accept a form only from the dashboard's own address: the browser's Origin
+(or Referer) must match the Host, or `X-Forwarded-Host` behind tailscale serve. Sign-out is a
+button (a POST), so a link from elsewhere cannot sign anyone out.
+
 A copied session cookie stays valid until it expires (14 days), unless that account is removed
 from `accounts.yaml` or the session secret is changed.

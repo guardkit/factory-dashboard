@@ -54,7 +54,7 @@ C4Context
 
   System_Ext(nats, "ships-computer-nats (JetStream)", "The spine. Streams: PIPELINE/AGENTS/FLEET/JARVIS/MEMORY/FINPROXY - real retention in section 3")
   System_Ext(forge, "forge SQLite", "Durable planning/gate/build state (read-only file access or replica)")
-  System_Ext(gw, "LiteLLM :4000 -> llama-swap :9000", "The AI gateway (dgx-spark DF-005) on promaxgb10-41b1: chat serving + gateway-side spend capture")
+  System_Ext(gw, "LiteLLM :4000 -> llama-swap :9000", "The AI gateway (dgx-spark DF-005) on the Dell (the factory machine): chat serving + gateway-side spend capture")
   System_Ext(evid, "guardkit evidence artifacts", "F5 evidence indexes, turn states, QAV bundles - linked, never scraped for status")
   System_Ext(gh, "GitHub", "PR links rendered in the ledger")
 
@@ -308,7 +308,7 @@ track · what are the issues* — are first-class in the status model, per featu
    planning front door stays Slack, identity-pinned. When the PO panel later folds in, its
    approve action uses the existing gate mechanism — a panel affordance, not a chat capability.
 5. **Serving via LiteLLM `:4000`** per dgx-spark DF-005 (client → LiteLLM → llama-swap :9000, on
-   promaxgb10-41b1 over Tailscale). Local-first: default alias `chat` (gpt-oss-20b) for NL turns,
+   the Dell over Tailscale). Local-first: default alias `chat` (gpt-oss-20b) for NL turns,
    `workhorse` (Qwen3.6-35B) for tool-heavy turns; the chat is an attended surface so `claude-*`
    frontier-via-gateway is **permitted but not default** (and on this gateway `claude-*` routes
    local unless a cloud model is deliberately configured — the public config names none;

@@ -103,6 +103,11 @@ def test_operator_home_is_the_operator_layout(operator_client: TestClient) -> No
     assert operator_client.get("/fragments/p1").status_code == 200
 
 
+def test_client_layout_signs_out_with_a_post_form(clientco_client: TestClient) -> None:
+    body = clientco_client.get("/").text
+    assert '<form method="post" action="/logout"' in body and 'href="/logout"' not in body
+
+
 def test_operator_reaches_the_pages_a_client_is_redirected_from(operator_client: TestClient) -> None:
     for path in CLIENT_REDIRECTED:
         assert operator_client.get(path, follow_redirects=False).status_code in (200, 404), path

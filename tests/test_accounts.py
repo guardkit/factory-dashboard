@@ -16,12 +16,19 @@ import itsdangerous
 import pytest
 from backend import accounts
 from backend.accounts import AccountStore, ConfigError, LoginThrottle
-from backend.app import LOGIN_FAILED, LOGIN_THROTTLED, create_app
+from backend.app import (
+    CROSS_SITE_LOGIN,
+    CROSS_SITE_LOGOUT,
+    LOGIN_FAILED,
+    LOGIN_THROTTLED,
+    create_app,
+)
 from backend.auth import make_credential_hash, verify_password
 from starlette.testclient import TestClient
 
 from tests.conftest import (
     CLIENT_USER,
+    LOOPBACK_URL,
     TENANTS_TEST,
     TEST_DISPLAY_NAME,
     TEST_PASSWORD,
@@ -183,7 +190,8 @@ def test_production_entry_point_stops_with_a_plain_message(
 def test_sign_in_shows_the_display_name_and_a_sign_out_link(client: TestClient) -> None:
     body = login(client).text
     assert f"Signed in as {TEST_DISPLAY_NAME}" in body
-    assert 'href="/logout"' in body and "Sign out" in body
+    assert '<form method="post" action="/logout"' in body and "Sign out" in body
+    assert 'href="/logout"' not in body  # a plain link could sign people out from anywhere
 
 
 def test_login_page_is_plain_english(client: TestClient) -> None:
@@ -242,7 +250,7 @@ def test_removing_an_account_ends_its_session(client: TestClient, config_dir: Pa
 def test_logout_ends_the_session(client: TestClient) -> None:
     login(client)
     assert client.get("/", follow_redirects=False).status_code == 200
-    r = client.get("/logout", follow_redirects=False)
+    r = client.post("/logout", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/login"
     assert client.get("/", follow_redirects=False).headers["location"] == "/login"
     assert client.get("/fragments/p1").status_code == 401
@@ -296,7 +304,7 @@ def test_a_proxied_request_naming_loopback_still_gets_secure(app, header: str) -
 def test_sign_out_clears_the_cookie_with_the_same_flags(app) -> None:  # type: ignore[no-untyped-def]
     with TestClient(app, base_url="https://dashboard.example:8443") as c:
         login(c)
-        r = c.get("/logout", follow_redirects=False)
+        r = c.post("/logout", follow_redirects=False)
     assert "; secure" in r.headers["set-cookie"].lower()
 
 
@@ -395,7 +403,7 @@ def test_a_right_password_clears_earlier_failures(client: TestClient) -> None:
     for _ in range(4):
         login(client, password="wrong")
     assert login(client).status_code == 200
-    client.get("/logout")
+    client.post("/logout")
     for _ in range(4):
         assert login(client, password="wrong").status_code == 401
     assert login(client).status_code == 200
@@ -416,3 +424,76 @@ def test_an_unknown_username_still_runs_a_password_check(
     store = AccountStore(config_dir / "accounts.yaml")
     assert store.authenticate("nobody", "anything") is None
     assert seen == [accounts._DUMMY_HASH]
+
+
+# --- cross-site requests (CSRF) --------------------------------------------------------
+
+
+def _signed_in(client: TestClient) -> bool:
+    return client.get("/", follow_redirects=False).status_code == 200
+
+
+@pytest.mark.parametrize("headers", [
+    {"Origin": "https://evil.example"},
+    {"Origin": "http://localhost:9999"},                     # same name, different port
+    {"Origin": "null"},                                      # sandboxed or privacy-stripped
+    {"Referer": "https://evil.example/page"},                # no Origin: the Referer decides
+])
+def test_cross_site_sign_in_is_refused(client: TestClient, headers: dict[str, str]) -> None:
+    """Another site's page must not sign the visitor into an account it controls."""
+    r = client.post("/login", data={"username": TEST_USER, "password": TEST_PASSWORD},
+                    headers=headers, follow_redirects=False)
+    assert r.status_code == 403
+    assert CROSS_SITE_LOGIN.split(",")[0] in r.text  # the apostrophe later on is HTML-escaped
+    assert "set-cookie" not in r.headers
+    assert not _signed_in(client)
+
+
+def test_same_origin_sign_in_and_sign_out_succeed(client: TestClient) -> None:
+    own = {"Origin": LOOPBACK_URL}
+    r = client.post("/login", data={"username": TEST_USER, "password": TEST_PASSWORD},
+                    headers=own, follow_redirects=False)
+    assert r.status_code == 303 and _signed_in(client)
+    r = client.post("/logout", headers={"Referer": LOOPBACK_URL + "/features"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and not _signed_in(client)
+
+
+def test_cross_site_sign_out_is_refused(client: TestClient) -> None:
+    login(client)
+    for headers in ({"Origin": "https://evil.example"}, {"Referer": "https://evil.example/x"}):
+        r = client.post("/logout", headers=headers, follow_redirects=False)
+        assert r.status_code == 403
+        assert CROSS_SITE_LOGOUT in r.text
+        assert _signed_in(client)
+
+
+def test_a_link_cannot_sign_anyone_out(client: TestClient) -> None:
+    login(client)
+    assert client.get("/logout", follow_redirects=False).status_code == 405
+    assert _signed_in(client)
+
+
+def test_tailnet_address_through_the_proxy_is_same_origin(app) -> None:  # type: ignore[no-untyped-def]
+    """Behind tailscale serve: the browser's Origin is the tailnet HTTPS address; the board sees
+    plain HTTP, with the address in Host or X-Forwarded-Host."""
+    tailnet = "https://dashboard.example:8443"
+    with TestClient(app, base_url=tailnet) as c:  # Host passed through
+        r = c.post("/login", data={"username": TEST_USER, "password": TEST_PASSWORD},
+                   headers={"Origin": tailnet}, follow_redirects=False)
+        assert r.status_code == 303
+    with TestClient(app, base_url="http://127.0.0.1:8090") as c:  # Host rewritten, X-Forwarded-Host kept
+        fwd = {"Origin": tailnet, "X-Forwarded-Host": "dashboard.example:8443", "X-Forwarded-Proto": "https"}
+        r = c.post("/login", data={"username": TEST_USER, "password": TEST_PASSWORD},
+                   headers=fwd, follow_redirects=False)
+        assert r.status_code == 303
+        r = c.post("/login", data={"username": TEST_USER, "password": TEST_PASSWORD},
+                   headers={**fwd, "Origin": "https://evil.example"}, follow_redirects=False)
+        assert r.status_code == 403
+
+
+def test_default_ports_compare_equal(app) -> None:  # type: ignore[no-untyped-def]
+    with TestClient(app, base_url="https://dashboard.example") as c:
+        r = c.post("/login", data={"username": TEST_USER, "password": TEST_PASSWORD},
+                   headers={"Origin": "https://dashboard.example:443"}, follow_redirects=False)
+        assert r.status_code == 303

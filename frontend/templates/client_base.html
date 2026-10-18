@@ -26,7 +26,7 @@
     <div class="topbar__cluster">
       <details class="user-menu">
         <summary>{{ tenant.display_name if tenant is defined and tenant else 'session' }}</summary>
-        <ul><li><a href="/logout">Log out</a></li></ul>
+        <ul><li><form method="post" action="/logout" class="user-menu__form"><button type="submit" class="user-menu__signout">Log out</button></form></li></ul>
       </details>
     </div>
   </header>

@@ -21,6 +21,7 @@ import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
@@ -104,6 +105,48 @@ class SessionsByHost:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         inner = self._loopback if _is_loopback_request(scope) else self._secure
         await inner(scope, receive, send)
+
+
+CROSS_SITE_LOGIN = (
+    "This sign-in came from another website, so it was refused. "
+    "Open the dashboard's own address and sign in there."
+)
+CROSS_SITE_LOGOUT = "This sign-out came from another website, so it was refused."
+_DEFAULT_PORTS = {"http": "80", "https": "443"}
+
+
+def _strip_default_port(netloc: str, scheme: str | None) -> str:
+    netloc = netloc.strip().lower()
+    for sch, port in _DEFAULT_PORTS.items():
+        if (scheme is None or scheme == sch) and netloc.endswith(":" + port):
+            return netloc[: -len(port) - 1]
+    return netloc
+
+
+def same_origin(request: Request) -> bool:
+    """Cross-site request check for the sign-in and sign-out forms (CSRF).
+
+    The browser's Origin header (or, when it is missing, the Referer) must name the address the
+    request was sent to: X-Forwarded-Host when a proxy such as tailscale serve supplied one,
+    otherwise Host. Another site's page cannot set either header on a form post. A request with
+    neither Origin nor Referer (not a browser form) is allowed; "Origin: null" is refused.
+    The scheme is ignored, because the board always sees plain HTTP behind tailscale serve.
+    """
+    source = request.headers.get("origin")
+    if source is None:
+        source = request.headers.get("referer")
+        if source is None:
+            return True
+    if source.strip().lower() == "null":
+        return False
+    parts = urlsplit(source.strip())
+    if not parts.scheme or not parts.netloc:
+        return False
+    forwarded = request.headers.get("x-forwarded-host")
+    target = forwarded.split(",")[0] if forwarded else request.headers.get("host", "")
+    if not target.strip():
+        return False
+    return _strip_default_port(parts.netloc, parts.scheme) == _strip_default_port(target, None)
 
 
 class _LoginRedirect(Exception):
@@ -323,10 +366,15 @@ def _register_routes(app: FastAPI) -> None:
         username: FormText,
         password: FormText,
     ) -> Response:
+        if not same_origin(request):
+            return _render(request, "login.html", {"error": CROSS_SITE_LOGIN}, status_code=403)
         return _sign_in(request, username, password)
 
-    @app.get("/logout")
+    @app.post("/logout")
     def logout(request: Request) -> Response:
+        # POST only, and same-origin only: a link or another site's form cannot sign anyone out.
+        if not same_origin(request):
+            return HTMLResponse(CROSS_SITE_LOGOUT, status_code=403)
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
 

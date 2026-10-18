@@ -41,7 +41,7 @@
       {% endif %}
       <span class="user-menu">
         {% if signed_in %}<span class="user-menu__name">Signed in as {{ signed_in.display_name }}</span>{% endif %}
-        <a href="/logout" class="user-menu__signout">Sign out</a>
+        <form method="post" action="/logout" class="user-menu__form"><button type="submit" class="user-menu__signout">Sign out</button></form>
       </span>
     </div>
   </header>
