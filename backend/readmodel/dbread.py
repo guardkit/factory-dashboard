@@ -1325,15 +1325,24 @@ def time_summary(db_path: Path, *, feature: str | None = None, project: str | No
                       if f.sent_at and (lo is None or f.sent_at >= lo) and (hi is None or f.sent_at < hi)]
         times = [(f, feature_time(f, now)) for f in chosen]
         known: list[tuple[Feature, FeatureTime]] = [(f, t) for f, t in times if t is not None and not t.unmeasured]
+        if not chosen:
+            slot = TimeSlot(reason="No such record.")
+        elif scope == "feature":
+            slot = time_slot(times[0][1])
+        else:
+            slot = sum_time(t for _f, t in times)
         waits: dict[str, float] = {}
         for _f, t in known:
             for p in t.parts:
                 if p.kind == "wait":
                     waits[p.label] = waits.get(p.label, 0.0) + p.seconds
+        measured = slot.measured
         return cost.TimeSummary(
-            scope=scope, name=name, period=cost.period(lo, hi), features=len(known),
-            elapsed_secs=sum(t.elapsed for _f, t in known), machine_secs=sum(t.machine for _f, t in known),
-            waiting_secs=sum(t.waiting for _f, t in known),
+            scope=scope, name=name, period=cost.period(lo, hi), state=slot.state, reason=slot.reason,
+            features=len(known), not_measured_count=slot.not_measured_count,
+            elapsed_secs=sum(t.elapsed for _f, t in known) if measured else None,
+            machine_secs=sum(t.machine for _f, t in known) if measured else None,
+            waiting_secs=sum(t.waiting for _f, t in known) if measured else None,
             waiting_parts=tuple(sorted(waits.items(), key=lambda kv: -kv[1])),
             so_far=any(t.so_far for _f, t in known), refs=tuple(f.code or f.key for f, _t in known),
         )

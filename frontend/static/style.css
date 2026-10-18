@@ -94,7 +94,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
 /* The freshness element: the read time, and the stale banner when the record is not being read. */
 .freshness .read-asof { display: block; text-align: right; padding: 2px 16px; }
 /* Never two banners: the stale banner wins over "updates paused" whichever arrived first. */
-.banner-slot:has(.banner--stale) .banner--sse_paused { display: none; }
+.banner-slot:has(.banner--stale:not([data-feed="cost"])) .banner--sse_paused { display: none; }
 .banner--sse_paused { background: #fdf5e3; color: var(--warn); border-bottom: 2px solid var(--warn); }
 
 /* ---- frame (content + chat drawer grid) -------------------------------- */

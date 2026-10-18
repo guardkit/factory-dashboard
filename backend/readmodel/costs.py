@@ -329,16 +329,23 @@ class CostSummary:
 
 @dataclass(frozen=True)
 class TimeSummary:
+    """Elapsed, machine and waiting time. When `state` is 'not_measured' the seconds are None and
+    `reason` says why; a project's figures leave out `not_measured_count` features, and `reason`
+    says so."""
+
     scope: str
     name: str
     period: str
-    features: int
-    elapsed_secs: float
-    machine_secs: float
-    waiting_secs: float
+    state: str                     # 'measured' | 'not_measured'
+    reason: str
+    features: int                  # features the figures cover
+    not_measured_count: int        # features left out because their time cannot be measured
+    elapsed_secs: float | None
+    machine_secs: float | None
+    waiting_secs: float | None
     waiting_parts: tuple[tuple[str, float], ...]   # (label, seconds), waiting first: what James can act on
     so_far: bool
-    refs: tuple[str, ...]
+    refs: tuple[str, ...]          # the features the figures cover
 
 
 def scope(factory: Factory, feature: str | None, project: str | None) -> tuple[str, str, list[Feature]]:

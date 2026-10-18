@@ -10,11 +10,14 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from backend.app import create_app
 from backend.readmodel import dbread
 from backend.readmodel.factory import Feature, load_factory
 from backend.readmodel.timing import FeatureTime, build_start, feature_time
+from starlette.testclient import TestClient
 
 from tests import forge_fake
+from tests.conftest import LOOPBACK_URL, TENANTS_TEST, login
 from tests.forge_fake import ForgeFake, delivered_feature, store_from
 
 MIN = 60.0
@@ -334,3 +337,64 @@ def test_machine_plus_waiting_never_exceeds_elapsed_on_any_shape(tmp_path: Path,
             assert abs(t.machine + t.waiting + t.part("not_placed") - t.elapsed) < 1e-6, f.key
         checked += 1
     assert checked >= 8
+
+
+# --- coach re-check: the chat's time summary, the project page's time line, a long wait for a person -----
+
+
+def _cleaned_up_world(tmp_path: Path) -> Path:
+    """One delivered feature and one whose builds the clean-up closed months later."""
+    fake = ForgeFake(tmp_path / "forge.db")
+    delivered_feature(fake, 1)
+    fake.planning("c2", "An old thing.", start=-140 * DAY, end=-140 * DAY + 20)
+    fake.build("b2", "FEAT-0002", "c2", status="FAILED", queued=-140 * DAY + 21, started=-15 * DAY,
+               completed=-15 * DAY, error="x")
+    fake.work("b2", -140 * DAY + 21)
+    path = tmp_path / "readmodel.db"
+    store_from(fake, path, forge_fake.T0 + timedelta(minutes=300)).close()
+    return path
+
+
+def test_the_chats_time_summary_says_when_time_is_not_measured(tmp_path: Path) -> None:
+    path = _cleaned_up_world(tmp_path)
+    now = forge_fake.T0 + timedelta(minutes=300)
+    one = dbread.time_summary(path, feature="FEAT-0002", now=now)
+    assert one.state == "not_measured" and one.reason.startswith("Not measured: a build was closed in a clean-up")
+    assert (one.elapsed_secs, one.machine_secs, one.waiting_secs) == (None, None, None)   # never zeros
+    assert one.features == 0 and one.not_measured_count == 1
+    project = dbread.time_summary(path, project=forge_fake.REPO, now=now)
+    assert project.state == "measured" and project.features == 1 and project.not_measured_count == 1
+    assert project.reason.startswith("1 feature is left out") and project.refs == ("FEAT-0001",)
+    assert project.elapsed_secs == 90 * MIN
+    missing = dbread.time_summary(path, feature="FEAT-9999", now=now)
+    assert missing.state == "not_measured" and missing.reason == "No such record."
+
+
+def test_the_project_page_says_which_features_its_time_covers(tmp_path: Path) -> None:
+    path = _cleaned_up_world(tmp_path)
+    with TestClient(create_app(db_path=path, tenants_path=TENANTS_TEST), base_url=LOOPBACK_URL) as client:
+        login(client)
+        body = client.get(f"/projects/{forge_fake.REPO}").text
+    assert "Time, measured features: machine" in body and "Time, all features" not in body
+    assert "1 feature is left out: a build was closed in a later clean-up" in body
+
+
+def test_a_build_that_ended_waiting_for_a_person_is_still_measured(tmp_path: Path) -> None:
+    """Exception to the 24-hour rule (18 October 2026): the last row is a gate pause, so the long gap
+    before the completion was a wait for a person, not a clean-up."""
+    fake = ForgeFake(tmp_path / "forge.db")
+    fake.planning("c1", "A thing.")
+    fake.build("b1", "FEAT-0001", "c1", status="CANCELLED", completed=30 + 3 * DAY)
+    fake.gate_pause("b1", 30)
+    _f, t = _time(tmp_path, fake, "FEAT-0001", now_min=10 * DAY)
+    assert not t.unmeasured and t.elapsed == (30 + 3 * DAY) * MIN
+    assert t.machine + t.waiting <= t.elapsed
+
+
+def test_a_build_that_ended_on_a_merge_offer_is_still_measured(tmp_path: Path) -> None:
+    fake = ForgeFake(tmp_path / "forge.db")
+    fake.planning("c1", "A thing.")
+    fake.build("b1", "FEAT-0001", "c1", status="FAILED", completed=81 + 2 * DAY, error="x")
+    fake.merge_offer("b1", 81)
+    _f, t = _time(tmp_path, fake, "FEAT-0001", now_min=10 * DAY)
+    assert not t.unmeasured

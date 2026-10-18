@@ -30,7 +30,9 @@ shows a build that ran for months. A build's runner writes its rows at the start
 can run for hours with no row near its end: in Forge's record on 18 October the longest such gap
 was 7.9 hours, and every clean-up gap was 66 days or more. So: **when a build's completion is more
 than 24 hours after its last stage row, the record does not say when it really ended**, and the
-feature's time is "not measured", with the reason.
+feature's time is "not measured", with the reason. The one exception (18 October 2026): when that
+last row is a gate pause or a merge offer, the build was waiting for a person, and a long wait for
+a person is real time, so it is measured as usual.
 
 **A Forge record defect, handled here.** On 17 October 2026 two mission builds (FEAT-4C9B, FEAT-7C34)
 had `started_at` written when they finished (a 2 ms build), although their runner's first stage row
@@ -118,6 +120,9 @@ def unbacked_end(b: Build) -> bool:
     if last is None:
         start = b.started_at or b.queued_at
         return start is not None and b.completed_at - start > UNBACKED_END
+    final = max(b.stages, key=lambda s: (s.at, s.id))
+    if "gate_pause" in final.details or "merge_offer" in final.details:
+        return False   # the build ended waiting for a person: a long wait is real, not a clean-up
     return b.completed_at - last > UNBACKED_END
 
 

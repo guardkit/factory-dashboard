@@ -326,8 +326,10 @@ def test_the_paused_banner_gives_way_to_the_stale_banner() -> None:
     script = (
         "function slot(names) {"
         "  const kids = [];"
-        "  const s = {kids, querySelector(sel) { const c = sel.slice(1);"
-        "      return kids.find(k => k.className.split(' ').includes(c)) || null; },"
+        "  const s = {kids, querySelector(sel) {"
+        "      const m = sel.match(/^\\.([\\w-]+)(?::not\\(\\[data-feed=\"(\\w+)\"\\]\\))?$/);"
+        "      if (!m) throw new Error('stub cannot read ' + sel);"
+        "      return kids.find(k => k.className.split(' ').includes(m[1]) && (!m[2] || k.feed !== m[2])) || null; },"
         "    appendChild(el) { kids.push(el); el.remove = () => kids.splice(kids.indexOf(el), 1); }};"
         "  names.forEach(n => s.appendChild({className: 'banner ' + n}));"
         "  return s;"
@@ -345,6 +347,8 @@ def test_the_paused_banner_gives_way_to_the_stale_banner() -> None:
         "out.withStale = current.kids.map(k => k.className);"
         "current = slot([]); m.setPaused(true); current.appendChild({className: 'banner banner--stale'});"
         "m.setPaused(true); out.staleLater = current.kids.map(k => k.className);"
+        "current = slot([]); current.appendChild({className: 'banner banner--stale', feed: 'cost'});"
+        "m.setPaused(true); out.costStale = current.kids.map(k => k.className);"
         "console.log(JSON.stringify(out));"
     )
     out = subprocess.run([_node(), "-e", script], capture_output=True, text=True, check=True, timeout=30)
@@ -354,9 +358,13 @@ def test_the_paused_banner_gives_way_to_the_stale_banner() -> None:
     assert result["cleared"] == 0
     assert result["withStale"] == ["banner banner--stale"]
     assert result["staleLater"] == ["banner banner--stale"]
-    # And if the stale banner arrives through the poll while the paused one shows, the page hides it.
+    # The cost feed's stale banner says nothing about live updates: the paused banner still shows.
+    assert result["costStale"] == ["banner banner--stale", "banner banner--sse_paused"]
+    # And if Forge's stale banner arrives through the poll while the paused one shows, the page
+    # hides it; the cost feed's stale banner does not.
     css = (SSE_JS.parent / "style.css").read_text(encoding="utf-8")
-    assert ".banner-slot:has(.banner--stale) .banner--sse_paused { display: none; }" in css
+    assert ('.banner-slot:has(.banner--stale:not([data-feed="cost"])) .banner--sse_paused { display: none; }'
+            in css)
 
 
 # --- Codex round 1, R3: a project page never hides its older unresolved failures ------------------

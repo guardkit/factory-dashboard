@@ -13,7 +13,8 @@
         (<span class="num">{{ view.delivered_total }}</span> in all)</li>
       <li><span class="num">{{ view.open_issues_total }}</span> open {{ 'issue' if view.open_issues_total == 1 else 'issues' }}</li>
       <li>Spend to date: {{ m.spend_slot(view.spend) }}; this week: {{ m.spend_slot(view.spend_week) }}</li>
-      {% if view.time.measured %}<li>Time, all features: machine {{ view.time.machine }}, waiting {{ view.time.waiting }}</li>{% endif %}
+      {% if view.time.measured %}<li>Time, {{ 'measured features' if view.time.not_measured_count else 'all features' }}: machine {{ view.time.machine }}, waiting {{ view.time.waiting }}{% if view.time.reason %} <span class="stat-tile__sub">{{ view.time.reason }}</span>{% endif %}</li>
+      {% elif view.time.reason %}<li><span class="honest-badge honest-badge--not-measured">Time not measured</span> <span class="stat-tile__sub">{{ view.time.reason }}</span></li>{% endif %}
     </ul>
   </div>
 </section>
