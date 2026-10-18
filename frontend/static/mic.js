@@ -1,11 +1,12 @@
 // Voice for the chat (Part E): hold the microphone button to speak, or press it once to start and
 // again to send. The recording (at most 30 seconds) goes to /api/voice/ask; the answer joins the chat
-// log as text and is read aloud. Without a secure page, a microphone or MediaRecorder, the button
-// stays hidden and the text box works as before. States: chat-mic (ready), chat-mic--listening,
+// log as text and is read aloud. It records WebM/Opus (Chrome, Edge, Firefox) or MP4 (Safari), the
+// formats the server accepts. Without a secure page, a microphone, or a MediaRecorder that can make one
+// of those, the button stays hidden and the text box works as before. States: chat-mic (ready), chat-mic--listening,
 // --thinking, --speaking, --error; the words for each are in the .chat-voice status line.
 (function () {
   "use strict";
-  var TYPES = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"];
+  var TYPES = ["audio/webm;codecs=opus", "audio/mp4"];
   var MAX_MS = 30000, HOLD_MS = 400;
   var WORDS = {
     idle: "Hold the microphone to ask by voice, or press it once to start and again to send.",
@@ -21,7 +22,9 @@
 
   function supported(w) {
     var md = w.navigator && w.navigator.mediaDevices;
-    return !!(w.isSecureContext && w.MediaRecorder && md && md.getUserMedia);
+    var rec = w.MediaRecorder;
+    return !!(w.isSecureContext && rec && md && md.getUserMedia && typeof rec.isTypeSupported === "function" &&
+      TYPES.some(function (t) { return rec.isTypeSupported(t); }));
   }
 
   function attach(w, panel) {

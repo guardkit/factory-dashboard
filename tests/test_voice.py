@@ -50,9 +50,15 @@ def ogg_page(granule: int, payload: bytes, header_type: int = 0, serial: int = 1
 
 
 def ogg(seconds: float, serial: int = 1) -> bytes:
-    """One logical stream: a beginning page, a page with no position, and an end page at `seconds`."""
+    """Ogg/Opus, one logical stream: a beginning page, a page with no position, and an end page at `seconds`."""
     return (ogg_page(0, b"OpusHead" + b"\x00" * 11, 2, serial) + ogg_page(0xFFFFFFFFFFFFFFFF, b"x" * 100, 0, serial)
             + ogg_page(int(seconds * 48000), b"y" * 60, 4, serial))
+
+
+def ogg_vorbis(seconds: float, rate: int = 16000) -> bytes:
+    """Ogg/Vorbis: positions count samples at the stream's own rate (16 kHz here), not Opus's 48 kHz."""
+    ident = b"\x01vorbis" + b"\x00" * 4 + b"\x01" + rate.to_bytes(4, "little") + b"\x00" * 16
+    return ogg_page(0, ident, 2) + ogg_page(int(seconds * rate), b"v" * 200, 4)
 
 
 class Chunks(httpx.SyncByteStream):
@@ -151,7 +157,6 @@ def test_a_spoken_question_gets_the_chats_answer_and_audio(world: tuple[TestClie
 
 @pytest.mark.parametrize(("audio", "content_type", "filename"), [
     (WEBM, "audio/webm;codecs=opus", "question.webm"),
-    (ogg(4), "audio/ogg;codecs=opus", "question.ogg"),
     (b"\x00\x00\x00\x18ftypM4A " + b"\x00" * 100, "audio/mp4", "question.m4a"),
     (wav(3), "audio/wav", "question.wav"),
 ])
@@ -312,8 +317,6 @@ def test_an_oversize_or_overlong_recording_is_refused(world: tuple[TestClient, F
     assert too_big_webm.status_code == 413 and too_big_webm.json() == {"message": voice.TOO_BIG}
     long_wav = _ask(client, wav(31), "audio/wav")
     assert long_wav.status_code == 413 and long_wav.json() == {"message": voice.TOO_LONG}
-    long_ogg = _ask(client, ogg(45), "audio/ogg")
-    assert long_ogg.status_code == 413 and long_ogg.json() == {"message": voice.TOO_LONG}
     assert speech.requests == []
     assert _ask(client, wav(29), "audio/wav").status_code == 200
 
@@ -503,15 +506,23 @@ def test_a_wav_must_say_its_length_truthfully(world: tuple[TestClient, FakeModel
     assert voice.wav_seconds(good) == 20.0
 
 
-def test_an_ogg_must_say_its_length(world: tuple[TestClient, FakeModel, FakeSpeech]) -> None:
+OGG_LABELS = ("audio/ogg", "audio/ogg;codecs=opus", "audio/ogg;codecs=vorbis", "audio/opus", "audio/webm",
+              "audio/webm;codecs=opus", "audio/mp4", "audio/x-m4a", "audio/wav")
+
+
+@pytest.mark.parametrize("audio", [ogg(10), ogg(60), ogg_vorbis(10), ogg_vorbis(60),
+                                   ogg(20, serial=1) + ogg(20, serial=2)],
+                         ids=["opus-10s", "opus-60s", "vorbis-10s", "vorbis-60s", "chained-40s"])
+def test_ogg_is_refused_whatever_its_label(world: tuple[TestClient, FakeModel, FakeSpeech], audio: bytes) -> None:
+    """Ogg is not accepted at all (its length depends on the codec inside): Ogg/Opus and Ogg/Vorbis, short
+    or long, single or chained, under 1 MB and under every label, get 415 and no speech call."""
     client, _, speech = world
-    for refused in (b"OggS" + b"x" * 200, ogg(10) + b"trailing", ogg(10)[:-10], WEBM,
-                    ogg_page(0xFFFFFFFFFFFFFFFF, b"x" * 50)):
-        for label in ("audio/ogg;codecs=opus", "audio/opus"):
-            r = _ask(client, refused, label)
-            assert r.status_code == 415 and r.json() == {"message": voice.NOT_AUDIO}, (refused[:8], label)
+    assert len(audio) < voice.MAX_COMPRESSED_BYTES
+    for label in OGG_LABELS:
+        r = _ask(client, audio, label)
+        assert r.status_code == 415 and r.json() == {"message": voice.NOT_AUDIO}, label
     assert speech.requests == []
-    assert voice.ogg_seconds(ogg(10)) == 10.0
+    assert voice.sniff(audio) is None
     assert voice.MAX_COMPRESSED_BYTES <= 1024 * 1024
 
 
@@ -659,13 +670,12 @@ def test_every_voice_failure_is_one_sentence() -> None:
 
 
 @pytest.mark.parametrize(("audio", "label"), [
-    (wav(60), "audio/webm"), (wav(60), "audio/mp4"), (wav(60), "audio/ogg"),
-    (ogg(45), "audio/webm;codecs=opus"), (ogg(45), "audio/mp4"), (ogg(45), "audio/wav"),
-], ids=["wav60-as-webm", "wav60-as-mp4", "wav60-as-ogg", "ogg45-as-webm", "ogg45-as-mp4", "ogg45-as-wav"])
+    (wav(60), "audio/webm"), (wav(60), "audio/mp4"), (wav(60), "audio/x-m4a"),
+], ids=["wav60-as-webm", "wav60-as-mp4", "wav60-as-m4a"])
 def test_a_mislabelled_long_recording_is_refused(world: tuple[TestClient, FakeModel, FakeSpeech],
                                                  audio: bytes, label: str) -> None:
-    """The format comes from the bytes: a 60-second WAV (under 1 MB) or a 45-second Ogg labelled as
-    another family is refused, so the label cannot skip the length check."""
+    """The format comes from the bytes: a 60-second WAV (under 1 MB) labelled as another family is
+    refused, so the label cannot skip the length check."""
     client, _, speech = world
     assert len(audio) < voice.MAX_COMPRESSED_BYTES
     r = _ask(client, audio, label)
@@ -676,40 +686,13 @@ def test_a_mislabelled_long_recording_is_refused(world: tuple[TestClient, FakeMo
 def test_the_format_is_read_from_the_bytes() -> None:
     mp4 = b"\x00\x00\x00\x18ftypM4A " + b"\x00" * 100
     assert [voice.sniff(b) for b in (wav(1), ogg(1), WEBM, mp4, b"ID3\x04mp3", b"", b"RIFF")] == \
-        ["wav", "ogg", "webm", "m4a", None, None, None]
+        ["wav", None, "webm", "m4a", None, None, None]
     # unknown bytes under an accepted label, and a family mismatch, are both refused
     assert voice.check_recording(b"ID3\x04" + b"\x00" * 100, "audio/webm") == (415, voice.NOT_AUDIO)
     assert voice.check_recording(WEBM, "audio/ogg") == (415, voice.NOT_AUDIO)
+    assert voice.check_recording(WEBM, "audio/wav") == (415, voice.NOT_AUDIO)
     assert voice.check_recording(mp4, "audio/webm") == (415, voice.NOT_AUDIO)
     # within a family any of its labels will do; genuine short recordings pass
     for audio, label in ((WEBM, "audio/webm;codecs=opus"), (mp4, "audio/mp4"), (mp4, "audio/x-m4a"),
-                         (wav(29), "audio/wav"), (wav(29), "audio/x-wav"), (ogg(29), "audio/ogg"),
-                         (ogg(29), "audio/opus")):
+                         (wav(29), "audio/wav"), (wav(29), "audio/x-wav"), (wav(29), "audio/wave")):
         assert voice.check_recording(audio, label) is None, label
-
-
-# --- Codex round 2 ------------------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("chained", [
-    ogg(20, serial=1) + ogg(20, serial=2),                      # two streams, two serial numbers
-    ogg(20, serial=7) + ogg(20, serial=7),                      # a second beginning page, same serial
-    ogg(20) + ogg_page(10 * 48000, b"z" * 60, 4, serial=9),       # a page from another stream
-], ids=["two-serials", "second-beginning", "foreign-page"])
-def test_a_chained_ogg_is_refused(world: tuple[TestClient, FakeModel, FakeSpeech], chained: bytes) -> None:
-    """A chained Ogg of two 20-second streams (40 s, under 1 MB) would read as 20 s by its highest
-    position; more than one logical stream is refused outright."""
-    client, _, speech = world
-    assert len(chained) < voice.MAX_COMPRESSED_BYTES
-    for label in ("audio/ogg;codecs=opus", "audio/opus"):
-        r = _ask(client, chained, label)
-        assert r.status_code == 415 and r.json() == {"message": voice.NOT_AUDIO}, label
-    assert speech.requests == []
-    assert voice.ogg_seconds(chained) is None
-
-
-def test_a_single_stream_ogg_still_passes(world: tuple[TestClient, FakeModel, FakeSpeech]) -> None:
-    client, _, _ = world
-    for serial in (1, 0x7FFFFFFF):
-        assert voice.ogg_seconds(ogg(29, serial)) == 29.0
-        assert _ask(client, ogg(29, serial), "audio/ogg;codecs=opus").status_code == 200

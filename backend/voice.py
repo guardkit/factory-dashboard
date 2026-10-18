@@ -49,12 +49,12 @@ MAX_SECONDS = 30
 DEFAULT_SPOKEN_WORDS = 45
 RESTS_ON_SCREEN = "The rest is on screen."
 
-#: Accepted recordings: Chrome and Firefox record webm or ogg (Opus); Safari records mp4 (AAC).
+#: Accepted recordings: Chrome, Edge and Firefox record webm (Opus); Safari records mp4 (AAC); WAV for
+#: other callers. Ogg is not accepted at all: its length depends on the codec inside, and no browser the
+#: dashboard supports needs it.
 #: The value is the file name the speech-to-text server is sent, since it may decode by extension.
 ACCEPTED_TYPES = {
     "audio/webm": "question.webm",
-    "audio/ogg": "question.ogg",
-    "audio/opus": "question.ogg",
     "audio/mp4": "question.m4a",
     "audio/m4a": "question.m4a",
     "audio/x-m4a": "question.m4a",
@@ -248,12 +248,10 @@ def base_type(content_type: str) -> str:
 
 def sniff(audio: bytes) -> str | None:
     """The recording's format from its own first bytes, never from its label: "wav" (RIFF....WAVE),
-    "ogg" (OggS), "webm" (the EBML header 1A 45 DF A3, as WebM and Matroska start) or "m4a" ("ftyp" at
-    offset 4, as MP4 starts). None for anything else."""
+    "webm" (the EBML header 1A 45 DF A3, as WebM and Matroska start) or "m4a" ("ftyp" at offset 4, as MP4
+    starts). None for anything else, Ogg included."""
     if audio[:4] == b"RIFF" and audio[8:12] == b"WAVE":
         return "wav"
-    if audio[:4] == b"OggS":
-        return "ogg"
     if audio[:4] == b"\x1a\x45\xdf\xa3":
         return "webm"
     if audio[4:8] == b"ftyp":
@@ -265,13 +263,14 @@ def check_recording(audio: bytes, content_type: str) -> tuple[int, str] | None: 
     """(status, sentence) when the recording is refused, else None.
 
     The format is worked out from the bytes (`sniff`), and must be one the dashboard accepts and the same
-    family as the label (webm, ogg/opus, mp4/m4a, wav), or the recording is refused (415). Both rules,
+    family as the label (webm, mp4/m4a, wav), or the recording is refused (415); Ogg is refused whatever its
+    label. Both rules,
     because the label then decides nothing: the size limit and the length check follow the bytes, and the
     speech-to-text model is sent a file name that matches what it will decode. A browser's own recordings
     always agree with their labels, so a disagreement is a mistake or a way round the length check.
-    A WAV or Ogg recording must say its length, and one that cannot be read is refused (415). Chrome's
-    webm and Safari's mp4 do not say, so for those the browser's 30-second stop and the 1 MB limit (about a
-    minute even at 128 kbps) bound it."""
+    A WAV must say its length truthfully, and one that cannot be read is refused (415). Chrome's webm and
+    Safari's mp4 do not say, so for those the browser's 30-second stop and the 1 MB limit (about a minute
+    even at 128 kbps) bound it."""
     kind = base_type(content_type)
     if kind not in ACCEPTED_TYPES:
         return 415, NOT_AUDIO
@@ -282,9 +281,9 @@ def check_recording(audio: bytes, content_type: str) -> tuple[int, str] | None: 
         return 415, NOT_AUDIO
     if len(audio) > (MAX_WAV_BYTES if found == "wav" else MAX_COMPRESSED_BYTES):
         return 413, TOO_BIG
-    if found in ("webm", "m4a"):
+    if found != "wav":
         return None
-    seconds = wav_seconds(audio) if found == "wav" else ogg_seconds(audio)
+    seconds = wav_seconds(audio)
     if seconds is None:
         return 415, NOT_AUDIO
     if seconds > MAX_SECONDS + 0.5:
@@ -315,28 +314,6 @@ def wav_seconds(b: bytes) -> float | None:
             return (len(b) - body) / byte_rate if byte_rate else None
         pos = body + size + (size & 1)
     return None
-
-
-def ogg_seconds(b: bytes) -> float | None:
-    """Opus in Ogg: the highest granule position (48 kHz samples), walking every page from the start.
-    None unless the pages run exactly to the end, at least one gives a position, and there is one logical
-    stream only: every page carries the first page's serial number, and no page after the first begins a
-    stream. (A chained file of two 20-second streams would otherwise read as 20 seconds; a browser's
-    recording is always one stream.)"""
-    pos, highest = 0, -1
-    while pos < len(b):
-        if b[pos:pos + 4] != b"OggS" or len(b) < pos + 27 or b[pos + 4] != 0:
-            return None
-        if pos and (b[pos + 14:pos + 18] != b[14:18] or b[pos + 5] & 0x02):  # another stream, or a new one
-            return None
-        segments = b[pos + 27:pos + 27 + b[pos + 26]]
-        if len(segments) < b[pos + 26]:
-            return None
-        granule = int.from_bytes(b[pos + 6:pos + 14], "little")
-        if granule != 0xFFFFFFFFFFFFFFFF:
-            highest = max(highest, granule)
-        pos += 27 + len(segments) + sum(segments)
-    return highest / 48000 if pos == len(b) and highest >= 0 else None
 
 
 # --- the spoken version ----------------------------------------------------------------------------------

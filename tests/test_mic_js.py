@@ -35,10 +35,11 @@ def test_the_microphone_states_and_where_it_hides() -> None:
     results = json.loads(out.stdout)
     assert results["insecure"] == results["no_recorder"] == results["no_microphone"] == "hidden"
     assert results["hold"] == "listening, thinking, speaking, idle"
-    assert results["question.ogg"] == "audio/ogg;codecs=opus" and results["question.mp4"] == "audio/mp4"
+    assert results["question.mp4"] == "audio/mp4"           # Safari; Ogg is never chosen
+    assert results["ogg_only"] == results["no_format"] == "hidden"
     assert results["signed_out"] == results["forbidden"] == results["bad_gateway"] == "error"
     assert results["overlapping_prompts"] == "one recording, both microphones closed"
     assert results["recorder_throws"] == results["start_throws"] == "error, microphone released"
-    assert len(results) == 22
+    assert len(results) == 23
 
 

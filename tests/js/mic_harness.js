@@ -39,7 +39,7 @@ function page() {
 
 function browser(opts = {}) {
   const w = { isSecureContext: opts.secure !== false, calls: [], timers: [], processed: 0, audios: [] };
-  const supportedTypes = opts.types || ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"];
+  const supportedTypes = opts.types || ["audio/webm;codecs=opus", "audio/mp4"];
   const tracks = opts.tracks || 1;  // a stream's tracks, each counting its stop() into stream.stopped
   const stream = { stopped: 0, getTracks: () => Array.from({ length: tracks }, () => ({ stop() { stream.stopped++; } })) };
   w.stream = stream;
@@ -169,8 +169,15 @@ const results = {};
     results.hard_stop = "sent at 30 seconds";
   }
 
-  // Recording formats: ogg (Firefox), then mp4 (Safari).
-  for (const [types, name] of [[["audio/ogg;codecs=opus"], "question.ogg"], [["audio/mp4"], "question.mp4"]]) {
+  // A browser that can record only Ogg (the server refuses Ogg), or no format at all: the mic stays hidden.
+  for (const [types, name] of [[["audio/ogg;codecs=opus", "audio/ogg"], "ogg_only"], [[], "no_format"]]) {
+    const p = page(), w = browser({ types });
+    assert.equal(mic.attach(w, p.panel), null, name);
+    assert.equal(p.btn.hidden, true, name); assert.equal(p.status.hidden, true, name);
+    results[name] = "hidden";
+  }
+  // Recording formats: WebM/Opus first (above), then MP4 (Safari).
+  for (const [types, name] of [[["audio/mp4", "audio/ogg;codecs=opus"], "question.mp4"]]) {
     const p = page(), w = browser({ types });
     mic.attach(w, p.panel);
     p.btn.fire("pointerdown"); await tick(); clock += 1000; p.btn.fire("pointerup"); await tick();
