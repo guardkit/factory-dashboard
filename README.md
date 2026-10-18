@@ -5,7 +5,9 @@ it answers three questions: how far through is it, is it on track, and what are 
 
 - Running it: [docs/runbook.md](docs/runbook.md)
 - Current design: [docs/architecture/live-data-cost-time-voice-design-2026-10-17.md](docs/architecture/live-data-cost-time-voice-design-2026-10-17.md)
-- Tests: `uv run --frozen pytest`
+- Tests: `uv run --frozen pytest`. One test runs `frontend/static/sse.js` under node (found on
+  `PATH` or at `~/.local/bin/node`) and fails if node is missing. Set
+  `FACTORY_DASH_ALLOW_NO_NODE=1` to let it skip instead, only where node cannot be installed.
 
 ## Accounts and access
 

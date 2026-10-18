@@ -116,6 +116,9 @@
   }
 
   if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded", start);
-  // For tests (tests/test_pages.py runs this file under node): expose the pure URL builder.
-  if (typeof module !== "undefined" && module.exports) module.exports = { fragmentUrl: fragmentUrl };
+  // For tests (tests/test_pages.py runs this file under node with a stub page): expose the URL
+  // builder and the refetch itself, so the test checks the address the refetch really requests.
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { fragmentUrl: fragmentUrl, refetch: refetch };
+  }
 })();

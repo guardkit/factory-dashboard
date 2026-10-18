@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -199,19 +200,36 @@ def test_the_delivered_window_survives_a_live_update(world: tuple[TestClient, Pa
 
 
 SSE_JS = Path(__file__).resolve().parent.parent / "frontend" / "static" / "sse.js"
+# Set to 1 only where node genuinely cannot be installed; otherwise a missing node fails the test.
+ALLOW_NO_NODE = "FACTORY_DASH_ALLOW_NO_NODE"
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def _node() -> str:
+    found = shutil.which("node") or next(
+        (str(p) for p in (Path.home() / ".local" / "bin" / "node",) if p.exists()), None)
+    if found:
+        return found
+    if os.environ.get(ALLOW_NO_NODE) == "1":
+        pytest.skip(f"node is not installed and {ALLOW_NO_NODE}=1 allows skipping")
+    pytest.fail(f"node is needed to test frontend/static/sse.js; install it or set {ALLOW_NO_NODE}=1")
+
+
 def test_the_refetch_address_carries_the_pages_window() -> None:
-    """Runs sse.js's own URL builder (under node, no browser) with the page's query in place."""
+    """Runs sse.js under node with a stub page on /delivered?from=…&to=…: the live-update refetch
+    must request the fragment with the page's window (the cause of "the date window is ignored")."""
     script = (
-        "global.window = {location: {search: '?from=2026-10-01&to=2026-10-18'}};"
+        "const calls = [];"
+        "global.window = {location: {search: '?from=2026-10-01&to=2026-10-18'},"
+        "  htmx: {ajax: (method, url) => { calls.push([method, url]); return Promise.resolve(); }}};"
         f"const m = require({json.dumps(str(SSE_JS))});"
-        "console.log(JSON.stringify([m.fragmentUrl('p7'), m.fragmentUrl('p2', '')]));"
+        "global.document = {querySelector: () => ({classList: {add() {}, remove() {}}})};"
+        "m.refetch('p7');"
+        "console.log(JSON.stringify({calls, plain: m.fragmentUrl('p2', '')}));"
     )
-    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True, timeout=30)
-    assert json.loads(out.stdout) == ["/fragments/p7?from=2026-10-01&to=2026-10-18", "/fragments/p2"]
-    assert "fragmentUrl(panel)" in SSE_JS.read_text(encoding="utf-8")  # the refetch uses it
+    out = subprocess.run([_node(), "-e", script], capture_output=True, text=True, check=True, timeout=30)
+    result = json.loads(out.stdout)
+    assert result["calls"] == [["GET", "/fragments/p7?from=2026-10-01&to=2026-10-18"]]
+    assert result["plain"] == "/fragments/p2"
 
 
 def test_a_cancelled_feature_is_not_called_on_track(world: tuple[TestClient, Path, ForgeFake]) -> None:
