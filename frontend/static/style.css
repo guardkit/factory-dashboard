@@ -781,7 +781,9 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
   border: 1px solid transparent;
 }
 .button--primary, .login-form button { background: var(--heading); color: var(--surface); }
-.button--primary:hover, .login-form button:hover { background: var(--bright-green); color: var(--on-dark); }
+/* Hover: the green that is safe for text, with the surface colour on it (5.3:1 light, 6.9:1 dark).
+   White on Bright Green was 4.2:1 light and 1.8:1 dark. */
+.button--primary:hover, .login-form button:hover { background: var(--accent-text); color: var(--surface); }
 .button--secondary, .window-form button { background: var(--surface); color: var(--heading); border-color: var(--line-strong); }
 .button--secondary:hover, .window-form button:hover { border-color: var(--bright-green); }
 .button--primary[disabled], .button--secondary[disabled] { opacity: 0.45; cursor: not-allowed; }
@@ -1396,7 +1398,7 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
   background: var(--heading); color: var(--surface); box-shadow: var(--shadow-raised);
   font: 600 14px/16px var(--font-body); text-decoration: none;
 }
-.chat-toggle:hover { background: var(--bright-green); color: var(--on-dark); }
+.chat-toggle:hover { background: var(--accent-text); color: var(--surface); }
 .chat-toggle:focus-visible { border-radius: var(--radius-pill); }
 @media (min-width: 1280px) {
   .frame:has(> .chat-drawer:not([hidden])) {
@@ -1518,7 +1520,7 @@ textarea.chat__input { min-height: 68px; }
   background: var(--heading); color: var(--surface); cursor: pointer;
   font: 600 14px/16px var(--font-body);
 }
-.chat__ask:hover { background: var(--bright-green); color: var(--on-dark); }
+.chat__ask:hover { background: var(--accent-text); color: var(--surface); }
 .chat__ask:focus-visible { border-radius: var(--radius-md); }
 .chat__ask[disabled] { opacity: 0.45; cursor: not-allowed; }
 .chat-send {
