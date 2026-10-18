@@ -57,14 +57,16 @@
    The chat (Part D's markup and Part E's microphone; styled in stage 3, do not rename):
      chat-toggle, chat-drawer, chat, chat__title, chat__note, chat__log, chat__form, chat__label,
      chat__input, chat__ask, chat__working (shown while .htmx-request is on the form),
-     chat-exchange(--answer, --clarify, --refused, --unavailable, --busy, --limited),
-     chat-exchange__question, __answer, __text, __how, __voice-note, __reply, chat-refs,
+     chat-exchange, chat-exchange--answer, chat-exchange--clarify, chat-exchange--refused,
+     chat-exchange--unavailable, chat-exchange--busy, chat-exchange--limited,
+     chat-exchange__question, chat-exchange__answer, chat-exchange__text, chat-exchange__how,
+     chat-exchange__voice-note, chat-exchange__reply, chat-refs,
      chat-refs__item(--feature, --project, --issue, --period, --page)
-     microphone: chat-mic (ready, no modifier), chat-mic--listening, --thinking, --speaking,
-       --error (not in the design: no permission or capture failed), chat-voice (the status line,
-       role="status", carries the words), chat-voice__text, chat-voice__wave with chat-voice__bar
-       (height = --h, a fraction of 22px), chat-voice__dots (three empty spans), chat-send (an
-       arrow send button, if one is added). The wave and dots move only under
+     microphone: chat-mic (ready, no modifier), chat-mic--listening, chat-mic--thinking,
+       chat-mic--speaking, chat-mic--error (not in the design: no permission or capture failed),
+       chat-voice (the status line, role="status", carries the words), chat-voice__text,
+       chat-voice__wave with chat-voice__bar (height = --h, a fraction of 22px), chat-voice__dots
+       (three empty spans), chat-send (an arrow send button, if one is added). The wave and dots move only under
        prefers-reduced-motion: no-preference.
 
    How the as-of states map onto the design (freshness.js swaps the classes on the chip and dot):
@@ -1035,11 +1037,15 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
     grid-template-columns: minmax(0, 1fr) var(--chat-width);
     max-width: calc(var(--content-max) + var(--chat-width));
   }
+  /* The column runs the page's full height; the panel inside it stays in view as the page
+     scrolls, sized to fit below the top bar and the read-time line on first load. */
   .frame > .chat-drawer:not([hidden]) {
-    grid-column: 2; grid-row: 1; align-self: start;
-    position: sticky; top: 0; height: calc(100vh - var(--topbar-height)); height: calc(100dvh - var(--topbar-height));
-    display: flex; flex-direction: column;
+    display: block; grid-column: 2; grid-row: 1;
     background: var(--surface); border-left: 1px solid var(--line);
+  }
+  .frame > .chat-drawer > .chat {
+    position: sticky; top: 0; flex: none;
+    height: calc(100vh - var(--topbar-height) - 40px); height: calc(100dvh - var(--topbar-height) - 40px);
   }
   .chat-toggle:not([hidden]) { display: none; }
 }
@@ -1069,7 +1075,7 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
 
 /* The /chat page: the same panel as a page of its own (the design's page form). */
 .content > .chat {
-  width: 100%; max-width: 820px; margin: 0 auto;
+  flex: none; width: 100%; max-width: 820px; margin: 0 auto;
   height: calc(100vh - var(--topbar-height) - 2 * var(--space-32));
   height: calc(100dvh - var(--topbar-height) - 2 * var(--space-32));
   min-height: 420px;
