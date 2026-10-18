@@ -7,6 +7,16 @@
    problems, models, people, money or other projects. Its heading names the report's own client
    and week, never the signed-in account. Tests check this template for internal-only tokens. #}
 {% block content %}
+{% if report_tenant == 'operator' %}
+{# The all-projects report has no client: a document made from it would carry every client's work.
+   So there is no document and no Save as PDF here, only the way to choose a client. #}
+<div class="page-head">
+  <p class="page-eyebrow">Weekly report · Client-safe version</p>
+  <h1 class="page-title">Choose a client first</h1>
+  <p class="page-lead">A client-safe version is made for one client at a time, so it never shows another client's work. Choose the client on the internal report, then open its client-safe version.</p>
+</div>
+<p><a class="button--secondary" href="/reports?tenant=operator&from={{ report.window_from }}&to={{ report.window_to }}">Back to the internal report</a></p>
+{% else %}
 <div class="report-toolbar no-print">
   <nav class="report-rendering" aria-label="Report version">
     <a class="report-rendering__link" href="/reports?tenant={{ report_tenant }}&from={{ report.window_from }}&to={{ report.window_to }}">Internal report</a>
@@ -72,4 +82,5 @@
     <span>Prepared by Appmilla · appmilla.com</span>
   </footer>
 </article>
+{% endif %}
 {% endblock %}

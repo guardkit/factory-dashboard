@@ -563,3 +563,15 @@ def test_factory_read_times_are_marked_and_other_sources_are_not(world: tuple[Te
     read_at = re.search(r'id="freshness"[^>]*data-read-at="([^"]+)"', fragment)
     top = re.search(r'data-source="factory"[^>]*data-asof="([^"]+)"', fragment)
     assert read_at is not None and top is not None and read_at.group(1) == top.group(1)
+
+
+# --- Codex round 1, R3: the all-projects report has no client-safe document ----------------------
+
+
+def test_the_operator_export_url_shows_no_document(world: tuple[TestClient, Path, ForgeFake]) -> None:
+    client, _, _ = world
+    body = client.get("/reports?view=export").text   # no client chosen: the all-projects report
+    assert "Choose a client first" in body
+    assert 'class="report-export"' not in body and "data-print" not in body
+    assert "Search box that filters notes by title." not in body
+    assert "view=export" not in client.get("/reports").text

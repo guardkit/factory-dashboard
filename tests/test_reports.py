@@ -213,6 +213,43 @@ def test_an_issue_closed_after_the_window_is_not_called_closed_this_week(tmp_pat
     assert "None of these issues is still open." in card
 
 
+def _two_clients(tmp_path: Path) -> sqlite3.Connection:
+    """Acme's delivery, and one from a project that belongs to no Acme engagement."""
+    fake = ForgeFake(tmp_path / "forge.db")
+    delivered_feature(fake, 1, text="Search notes by title.")
+    delivered_feature(fake, 7, text="OTHER_CLIENT_DELIVERY.")
+    fake.conn.execute("UPDATE builds SET repo='globex/site' WHERE feature_id='FEAT-0007'")
+    fake.conn.execute("UPDATE planning_runs SET target_repo='globex/site' WHERE correlation_id='c-7'")
+    path = tmp_path / "readmodel.db"
+    conn = store_from(fake, path, NOW)
+    db.init_db(path, load_tenants(TENANTS).values())
+    return conn
+
+
+def test_the_all_projects_report_makes_no_client_safe_document(tmp_path: Path) -> None:
+    """Codex R3: the operator's all-projects export carried every client's deliveries under a
+    'their project only' promise, with Save as PDF. Now it asks for a client and shows nothing."""
+    conn = _two_clients(tmp_path)
+    env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=select_autoescape(default=True))
+    operator = env.get_template("reports_export.html").render(
+        report=dbread.export_report(conn, "operator", NOW, window=WEEK), report_tenant="operator")
+    assert "Choose a client first" in operator
+    assert "<article" not in operator and "data-print" not in operator and "their project only" not in operator
+    assert "Search notes by title." not in operator and "OTHER_CLIENT_DELIVERY" not in operator
+    acme = env.get_template("reports_export.html").render(
+        report=dbread.export_report(conn, "acme", NOW, window=WEEK), report_tenant="acme")
+    assert '<article class="report-export"' in acme and "data-print" in acme
+    assert "Search notes by title." in acme and "OTHER_CLIENT_DELIVERY" not in acme
+    # The internal all-projects report offers no client-safe link; a client's report does.
+    internal = env.get_template("reports.html")
+    report = dbread.weekly_report(conn, "operator", NOW, window=WEEK, client_tenants=(("acme", "Acme"),))
+    page = internal.render(report=report, report_tenant="operator")
+    assert "view=export" not in page and "For a client-safe version, choose a client:" in page
+    assert 'href="/reports?tenant=acme"' in page
+    page = internal.render(report=dbread.weekly_report(conn, "acme", NOW, window=WEEK), report_tenant="acme")
+    assert "view=export&tenant=acme" in page
+
+
 def test_no_spend_tile_writes_its_own_words() -> None:
     """Each tile shows its page's spend slot through one macro, so a measured cost replaces "Not
     measured" everywhere at once. (Now's view carries no spend slot yet; the cost feed adds one.)"""

@@ -1202,7 +1202,7 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 }
 
 /* ==== stage 2b: Reports, export, Fleet, Login, Client ==== */
-/* Names used here (besides the shared ones above): report-toolbar, report-toolbar__end,
+/* Names used here (besides the shared ones above): report-toolbar, report-toolbar__end, report-toolbar__hint,
    report-rendering(__active, __link), report-engagements(__active), report-headline(__line),
    report-stats, report-stats__tile--behind, report-delivered(__list, __row, __commit),
    report-issues(__counts, __list, __row, __row--closed, __closed), report-plan, plan-list,
@@ -1216,6 +1216,8 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 /* Reports: the toolbar with its segmented switches (one level each, side by side). */
 .report-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-12); }
 .report-toolbar__end { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+/* On the all-projects report: "For a client-safe version, choose a client:", beside the clients. */
+.report-toolbar__hint { margin-left: auto; }
 .report-rendering, .report-engagements {
   display: inline-flex; flex-wrap: wrap; padding: 3px; gap: 2px;
   border-radius: var(--radius-md); background: var(--surface-sunken); border: 1px solid var(--line);

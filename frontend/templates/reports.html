@@ -22,9 +22,13 @@
 <div class="report-toolbar">
   <nav class="report-rendering" aria-label="Report version">
     <span class="report-rendering__active" aria-current="page">Internal report</span>
+    {# A client-safe version is only ever for one client: the all-projects report offers none. #}
+    {% if report_tenant != 'operator' %}
     <a class="report-rendering__link"
        href="/reports?view=export&tenant={{ report_tenant }}&from={{ report.window_from }}&to={{ report.window_to }}">Client-safe version</a>
+    {% endif %}
   </nav>
+  {% if report_tenant == 'operator' %}<p class="hint report-toolbar__hint">{% if report.client_tenants %}For a client-safe version, choose a client:{% else %}A client-safe version is made for one client; none is set up yet.{% endif %}</p>{% endif %}
   {% if report.client_tenants %}
   <nav class="report-engagements" aria-label="Client">
     <a href="/reports?tenant=operator"{% if report_tenant == 'operator' %} class="report-engagements__active" aria-current="page"{% endif %}>All projects</a>
