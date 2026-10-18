@@ -3,6 +3,9 @@
    shows them. Without scripts the form posts to /chat and the page comes back with the answer. #}
 <section class="chat" aria-labelledby="chat-title">
   <h2 id="chat-title" class="chat__title">Ask about the factory</h2>
+  {# Requirement 11 on the /chat page, which has no page foot: the drawer on other pages leaves it to
+     the foot of the page, so each page has the link once. #}
+  {% if chat_page %}<p class="chat__suggest"><a href="/suggest?from=/chat">Suggest a change</a> to the dashboard</p>{% endif %}
   <p class="chat__note">Answers come from the dashboard's records, with links to them. Ask about a feature, a project, issues or deliveries.</p>
   <div id="chat-log" class="chat__log" aria-live="polite">
     {% for exchange in exchanges %}{% with question = exchange.question, answer = exchange.answer %}{% include "fragments/chat_exchange.html" %}{% endwith %}{% endfor %}

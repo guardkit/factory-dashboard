@@ -10,7 +10,8 @@ from starlette.testclient import TestClient
 
 # On an empty store (the factory's record not read yet) every page still renders, honestly.
 OPERATOR_PAGES = ["/", "/features", "/features/FEAT-3ED2", "/projects", "/projects/acme/notes", "/projects/single",
-                  "/delivered", "/reports", "/reports?view=export", "/issues", "/fleet"]
+                  "/delivered", "/reports", "/reports?view=export", "/issues", "/fleet", "/suggest", "/suggestions",
+                 "/changes"]
 
 
 def test_every_operator_page_200(operator_client: TestClient) -> None:
@@ -63,8 +64,9 @@ def test_the_nav_reads_now_features_projects_reports_issues_fleet(operator_clien
 
 CLIENT_REDIRECTED = ["/features", "/features/FEAT-3ED2", "/features/anything", "/projects",
                      "/projects/study-tutor", "/projects/anything", "/projects/acme/notes", "/delivered", "/reports",
-                     "/reports?view=export", "/issues", "/fleet", "/chat"]
-CLIENT_FORBIDDEN = ["/fragments/p2", "/fragments/freshness", "/events?once=1", "/api/voice/ask"]
+                     "/reports?view=export", "/issues", "/fleet", "/chat", "/suggest", "/suggestions", "/changes"]
+CLIENT_FORBIDDEN = ["/fragments/p2", "/fragments/freshness", "/events?once=1", "/api/voice/ask",
+                    "/api/voice/transcribe", "/suggestions/1/status"]
 # "/" is tenant-aware (the client layout for a client); /healthz is for the start script and
 # says only whether the factory's record is fresh (tested in tests/test_pages.py).
 OPEN_ROUTES = {"/", "/login", "/logout", "/healthz"}

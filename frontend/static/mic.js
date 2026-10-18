@@ -4,6 +4,9 @@
 // formats the server accepts. Without a secure page, a microphone, or a MediaRecorder that can make one
 // of those, the button stays hidden and the text box works as before. States: chat-mic (ready), chat-mic--listening,
 // --thinking, --speaking, --error; the words for each are in the .chat-voice status line.
+// A voice note (Part F, the suggestion box): in a panel whose text box carries data-voice-fill, the
+// recording goes to /api/voice/transcribe instead, and the words heard are added to that box for the
+// person to check and send. Nothing is asked of the chat and nothing is read aloud.
 (function () {
   "use strict";
   var TYPES = ["audio/webm;codecs=opus", "audio/mp4"];
@@ -19,6 +22,17 @@
     recorder: "This browser couldn't start recording, so please type your question instead.",
     failed: "Something went wrong sending your question, so please try again or type it."
   };
+  var NOTE_WORDS = {
+    idle: "Hold the microphone to say your suggestion, or press it once to start and again to stop.",
+    listening: "Listening. Let go, or press again, to stop. Up to 30 seconds.",
+    thinking: "Writing down what you said…",
+    filled: "Your words are in the box. Check them, then press Send.",
+    error: "The microphone isn't working here, so allow it for this site and try again, or type your suggestion.",
+    offline: "Voice isn't available right now, so please type your suggestion.",
+    signin: "Please sign in again, then try the microphone.",
+    recorder: "This browser couldn't start recording, so please type your suggestion instead.",
+    failed: "Something went wrong sending your recording, so please try again or type your suggestion."
+  };
 
   function supported(w) {
     var md = w.navigator && w.navigator.mediaDevices;
@@ -31,13 +45,14 @@
     var btn = panel.querySelector(".chat-mic"), status = panel.querySelector(".chat-voice");
     if (!btn || !status || !supported(w)) return null;
     var log = panel.querySelector(".chat__log"), words = status.querySelector(".chat-voice__text");
+    var box = panel.querySelector("[data-voice-fill]"), W = box ? NOTE_WORDS : WORDS;
     var rec = null, stream = null, chunks = [], timer = null, pressedAt = 0, audio = null, state = "", asked = 0;
 
     function set(s, text) {
       state = s;
       ["listening", "thinking", "speaking", "error"].forEach(function (m) { btn.classList.toggle("chat-mic--" + m, s === m); });
       btn.setAttribute("aria-pressed", s === "listening" ? "true" : "false");
-      words.textContent = text || WORDS[s];
+      words.textContent = text || W[s];
       status.querySelector(".chat-voice__wave").hidden = s !== "listening";
       status.querySelector(".chat-voice__dots").hidden = s !== "thinking";
     }
@@ -60,7 +75,7 @@
           timer = w.setTimeout(stop, MAX_MS);
         } catch (err) { // the recorder would not start: let the microphone go
           w.clearTimeout(timer); timer = null; rec = null; close();
-          set("error", WORDS.recorder);
+          set("error", W.recorder);
         }
       }, function () { if (mine === asked) set("error"); });
     }
@@ -75,23 +90,29 @@
       rec = null;
       if (!blob.size) return set("idle");
       set("thinking");
-      var form = new w.FormData(), last = log && log.lastElementChild;
-      form.append("audio", blob, "question." + (type.split("/")[1] || "webm"));
+      var form = new w.FormData(), last = !box && log && log.lastElementChild;
+      form.append("audio", blob, (box ? "note." : "question.") + (type.split("/")[1] || "webm"));
       var reply = last && last.querySelector(".chat-exchange__reply");
       if (reply) ["prior_question", "prior_clarify"].forEach(function (n) {
         form.append(n, reply.querySelector("[name=" + n + "]").value);
       });
-      w.fetch("/api/voice/ask", { method: "POST", body: form, credentials: "same-origin" })
+      w.fetch(box ? "/api/voice/transcribe" : "/api/voice/ask", { method: "POST", body: form, credentials: "same-origin" })
         .then(function (r) {
           return r.json().catch(function () { return {}; }).then(function (d) { return [r, d || {}]; });
         })
         .then(function (res) {
           var r = res[0], d = res[1];
-          if (r.ok && d.html) return show(d, reply);
+          if (box && r.ok && typeof d.transcript === "string") return fill(d.transcript);
+          if (!box && r.ok && d.html) return show(d, reply);
           if (d.message) return set("idle", d.message);
-          set("error", r.status === 401 || r.status === 403 ? WORDS.signin : WORDS.failed);
+          set("error", r.status === 401 || r.status === 403 ? W.signin : W.failed);
         })
-        .catch(function () { set("idle", WORDS.offline); });
+        .catch(function () { set("idle", W.offline); });
+    }
+    function fill(text) { // a voice note: the words join what is already in the box, as plain text
+      box.value = box.value ? box.value.replace(/\s+$/, "") + " " + text : text;
+      if (box.focus) box.focus();
+      set("idle", W.filled);
     }
     function show(d, reply) {
       if (reply) reply.remove();
@@ -132,5 +153,5 @@
   }
 
   if (typeof module !== "undefined" && module.exports) module.exports = { attach: attach, supported: supported };
-  else document.querySelectorAll(".chat").forEach(function (p) { attach(window, p); });
+  else document.querySelectorAll(".chat, .suggest").forEach(function (p) { attach(window, p); });
 })();

@@ -40,4 +40,7 @@ def test_the_microphone_states_and_where_it_hides() -> None:
     assert results["signed_out"] == results["forbidden"] == results["bad_gateway"] == "error"
     assert results["overlapping_prompts"] == "one recording, both microphones closed"
     assert results["recorder_throws"] == results["start_throws"] == "error, microphone released"
-    assert len(results) == 23
+    # Part F's voice note for the suggestion box.
+    assert results["voice_note"] == "words in the box, nothing read aloud"
+    assert results["note_refused"] == results["note_network"] == "idle" and results["note_signed_out"] == "error"
+    assert len(results) == 27

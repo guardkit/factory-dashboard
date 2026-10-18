@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Suggestions · Appmilla Factory{% endblock %}
+{% block content %}
+<header class="page-head page-head--split">
+  <div>
+    <p class="page-eyebrow">Suggestions</p>
+    <h1 class="page-title">{% if unreadable %}Suggestions{% else %}{{ rows | length }} suggestion{{ '' if rows | length == 1 else 's' }}{% endif %}</h1>
+    <p class="page-lead">Changes people have asked for on the dashboard, newest first. Rich reads them and marks where each has got to.</p>
+  </div>
+  <a class="button--primary" href="/suggest?from=/suggestions">Suggest a change</a>
+</header>
+
+{% if sent %}<p class="suggest__sent" role="status">{{ m.icon('check') }}<span>Thank you. Your suggestion is saved.</span></p>{% endif %}
+{% if error %}<p class="error-block suggest__error" role="alert">{{ m.icon('alert') }}<span>{{ error }}</span></p>{% endif %}
+
+<section class="panel-card panel-card--flush suggestions" aria-labelledby="suggestions-title">
+  <header class="panel-card__header"><h2 class="panel-card__title" id="suggestions-title">All suggestions</h2></header>
+  <div class="panel-card__body">
+  {% if rows %}
+    <ol class="suggestion-list">
+    {% for s in rows %}
+      <li class="suggestion suggestion--{{ s.status }}" id="suggestion-{{ s.id }}">
+        {# New is waiting for a person (purple, as everywhere); seen is in hand; declined is set aside. #}
+        <p class="suggestion__meta">
+          {{ m.status_pill({'new': 'wait', 'seen': 'info', 'done': 'done', 'declined': 'neutral'}.get(s.status, 'neutral'), s.status_word) }}
+          <span class="suggestion__who">{{ s.display_name }}</span>
+          <span class="suggestion__when">{{ s.when }}</span>
+          <span class="suggestion__from">{% if s.from_page %}from <a href="{{ s.from_page }}">{{ s.from_page }}</a>{% else %}page not known{% endif %}</span>
+        </p>
+        <p class="suggestion__text">{{ s.text }}</p>
+        <form class="window-form suggestion__status" method="post" action="/suggestions/{{ s.id }}/status">
+          <label>Status
+            <select name="status">
+              {% for value, word in statuses %}<option value="{{ value }}"{% if value == s.status %} selected{% endif %}>{{ word }}</option>{% endfor %}
+            </select>
+          </label>
+          <button type="submit">Save</button>
+        </form>
+      </li>
+    {% endfor %}
+    </ol>
+  {% elif unreadable %}
+    <p class="true-empty">The list can't be shown just now.</p>
+  {% else %}
+    <p class="true-empty">No suggestions yet.</p>
+  {% endif %}
+  </div>
+</section>
+
+{% include "fragments/recent_changes.html" %}
+{% endblock %}

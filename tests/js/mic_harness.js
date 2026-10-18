@@ -296,5 +296,39 @@ const results = {};
     assert.equal(state(p), "idle");
     results.right_click = "ignored";
   }
+  // Part F, the voice note: in the suggestion box (a text box marked data-voice-fill) the recording goes to
+  // /api/voice/transcribe, the words heard join the box, nothing is read aloud and no chat log is touched.
+  {
+    const p = page(), w = browser({ reply: { ok: true, body: { transcript: "Make the Features page shorter." } } });
+    const box = { value: "Two things. ", focused: false, focus() { this.focused = true; } };
+    p.panel.sel["[data-voice-fill]"] = box;
+    delete p.panel.sel[".chat__log"];
+    mic.attach(w, p.panel);
+    assert.match(p.words.textContent, /say your suggestion/);
+    p.btn.fire("pointerdown"); await tick(); clock += 1500; p.btn.fire("pointerup"); await tick();
+    assert.equal(w.calls.length, 1); assert.equal(w.calls[0].url, "/api/voice/transcribe");
+    assert.equal(w.calls[0].init.body.get("audio").name, "note.webm");
+    assert.equal(w.calls[0].init.body.get("prior_question"), null);
+    assert.equal(box.value, "Two things. Make the Features page shorter."); assert.equal(box.focused, true);
+    assert.equal(w.audios.length, 0); assert.equal(state(p), "idle");
+    assert.match(p.words.textContent, /Your words are in the box/);
+    results.voice_note = "words in the box, nothing read aloud";
+  }
+  // The voice note refused (the server's sentence), signed out, and the network failing: in its own words.
+  for (const [reply, st, words, name] of [
+    [{ ok: false, status: 429, body: { message: "You have recorded 10 voice notes in the last hour." } }, "idle",
+      /10 voice notes/, "note_refused"],
+    [{ ok: false, status: 401, body: { detail: "login required" } }, "error", /Please sign in again/, "note_signed_out"],
+    ["network", "idle", /please type your suggestion/, "note_network"],
+  ]) {
+    const p = page(), w = browser({ reply });
+    const box = { value: "" };
+    p.panel.sel["[data-voice-fill]"] = box;
+    mic.attach(w, p.panel);
+    p.btn.fire("pointerdown"); await tick(); clock += 1000; p.btn.fire("pointerup"); await tick();
+    assert.equal(state(p), st, name); assert.match(p.words.textContent, words, name);
+    assert.equal(box.value, "", name);
+    results[name] = st;
+  }
   console.log(JSON.stringify(results));
 })().catch((e) => { console.error(e); process.exit(1); });

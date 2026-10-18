@@ -4,6 +4,7 @@ A read-only web dashboard over the software factory's build record. For each fea
 it answers three questions: how far through is it, is it on track, and what are the issues.
 
 - Running it: [docs/runbook.md](docs/runbook.md)
+- What changed, in plain words: [CHANGES.md](CHANGES.md) (also the dashboard's "What changed" page)
 - Current design: [docs/architecture/live-data-cost-time-voice-design-2026-10-17.md](docs/architecture/live-data-cost-time-voice-design-2026-10-17.md)
 - Tests: `uv run --frozen pytest`. One test runs `frontend/static/sse.js` under node (found on
   `PATH` or at `~/.local/bin/node`) and fails if node is missing. Set

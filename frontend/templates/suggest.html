@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Suggest a change · Appmilla Factory{% endblock %}
+{% block content %}
+<header class="page-head">
+  <p class="page-eyebrow">Suggest a change</p>
+  <h1 class="page-title">What would you like changed?</h1>
+  <p class="page-lead">Say what you would like to see differently on the dashboard. Rich reads every suggestion, and the <a href="/suggestions">Suggestions page</a> shows where each one has got to.</p>
+</header>
+
+{# The text box, and a voice note (Part E's microphone): mic.js shows the microphone only where the
+   browser can record, and puts the words it hears into the box to check before sending. mic.js is
+   loaded once per page, by the chat panel in base.html. #}
+<section class="panel-card suggest" aria-labelledby="suggest-title">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title" id="suggest-title">Your suggestion</h2>
+    {% if from_page %}<span class="panel-card__sub">From the page {{ from_page }}</span>{% endif %}
+  </header>
+  {% if error %}<p class="error-block suggest__error" role="alert">{{ m.icon('alert') }}<span>{{ error }}</span></p>{% endif %}
+  <form class="chat__form suggest__form" method="post" action="/suggest">
+    <input type="hidden" name="from_page" value="{{ from_page }}">
+    <label for="suggest-text" class="chat__label">What should change, and why</label>
+    <div class="chat-voice" role="status" hidden>
+      <span class="chat-voice__wave" aria-hidden="true" hidden>{% for h in (0.35, 0.6, 0.9, 0.5, 0.8, 0.45, 0.3) %}<span class="chat-voice__bar" style="--h: {{ h }}"></span>{% endfor %}</span>
+      <span class="chat-voice__dots" aria-hidden="true" hidden><span></span><span></span><span></span></span>
+      <span class="chat-voice__text"></span>
+    </div>
+    <textarea id="suggest-text" class="chat__input suggest__input" name="text" rows="5" maxlength="{{ max_chars }}" required data-voice-fill>{{ text }}</textarea>
+    <button type="submit" class="chat__ask">Send</button>
+    <button type="button" class="chat-mic" aria-pressed="false" hidden>
+      {{ m.icon('mic') }}<span class="visually-hidden">Say it instead: hold to speak, or press to start and again to stop</span>
+    </button>
+  </form>
+  <p class="hint suggest__hint">Up to {{ max_chars }} characters. Your name, the time and the page you came from are kept with it.</p>
+</section>
+
+{% include "fragments/recent_changes.html" %}
+{% endblock %}

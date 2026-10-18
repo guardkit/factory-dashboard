@@ -13,7 +13,9 @@ Two containers from one image, under `docker compose` in this checkout:
   30 seconds. It has no bus connection and needs no NATS login.
 
 Forge's record is the estate's ledger volume (`forge-estate_forge-ledger`), mounted read-only.
-`./data` is disposable: if it is deleted, the feed rebuilds it on its next pass.
+`./data/readmodel.db` is disposable: if it is deleted, the feed rebuilds it on its next pass.
+`./data/suggestions.db` is not: it holds the suggestions people have sent (below), and nothing
+rebuilds it. Delete only `readmodel.db` (and its `-wal` and `-shm` files), never the whole folder.
 
 ## Start, or bring it back after a rollout or reboot
 
@@ -75,3 +77,32 @@ docker compose exec projector python -m backend.readmodel.norms --db /data/readm
 ```
 
 and commit the result with its date.
+
+## Suggestions and "What changed"
+
+Operators can send a suggestion for the dashboard from the "Suggest a change" link at the foot of
+every page (text, or a voice note turned into text). The Suggestions page (`/suggestions`) lists
+them with who sent each, when, from which page, and its status (new, seen, done or declined); any
+operator can set the status there. They are kept in `./data/suggestions.db`, the only file the
+board writes while it runs; the feed never opens it. Each person can send 10 an hour, each up to
+2,000 characters, and record 10 voice notes an hour.
+
+If `suggestions.db` is locked or damaged, the board still starts (the log says
+"suggestions.db cannot be opened"), every other page works, and the suggestion pages say in one
+sentence that suggestions can't be saved or read just now. To start afresh, stop the board, move
+the damaged file aside and start it again; it creates an empty one.
+
+To read them without a browser (read-only; it never creates the file):
+
+```sh
+docker compose exec board python -m backend.suggestions list               # newest first
+docker compose exec board python -m backend.suggestions list --status new  # only the new ones
+docker compose exec board python -m backend.suggestions list --json        # for a script
+# or, from this checkout without the container:
+.venv/bin/python -m backend.suggestions list --data ./data
+```
+
+The "What changed" page (`/changes`) shows `CHANGES.md` from this repository: a dated list in
+plain words, newest first. Add a line under its day (a `## 18 October 2026` heading, then
+`- what changed`) when a change goes live; the page shows only those headings and lines, as plain
+text. The image carries the file, so a new line shows after `deploy/dashboard-up.sh --build`.
