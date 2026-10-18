@@ -30,7 +30,7 @@
 <section class="panel-card issues-open">
   <header class="panel-card__header">
     <h2 class="panel-card__title">Open ({{ view.open_rows | length }})</h2>
-    {{ m.asof_chip(view.chrome.read_as_of) }}
+    {{ m.asof_chip(view.chrome.read_as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
     {% if view.open_rows %}{{ issue_table(view.open_rows) }}{% else %}<p class="true-empty">No open issues.</p>{% endif %}

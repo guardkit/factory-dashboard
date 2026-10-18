@@ -32,7 +32,28 @@
     }
   }
 
+  // Every chip that shows the factory record's read time (data-source="factory") takes the latest
+  // successful read time of the freshness element (data-read-at). That element is only replaced
+  // by one of the same data version (so the cards still show exactly that data, now confirmed by
+  // a later read) or together with the content, so moving the cards' times on is always true.
+  // Chips for other sources (the serving checks) keep their own times.
+  function syncFactoryChips() {
+    var fresh = document.getElementById("freshness");
+    var readAt = fresh ? fresh.getAttribute("data-read-at") : null;
+    if (readAt === null) return;
+    var top = fresh.querySelector(".asof-chip");
+    var label = top ? top.querySelector(".asof-chip__label") : null;
+    document.querySelectorAll('.asof-chip[data-source="factory"]').forEach(function (chip) {
+      if (chip === top) return;
+      chip.setAttribute("data-asof", readAt);
+      if (top && top.getAttribute("title") !== null) chip.setAttribute("title", top.getAttribute("title"));
+      var text = chip.querySelector(".asof-chip__label");
+      if (text && label) text.textContent = label.textContent;
+    });
+  }
+
   function tick() {
+    syncFactoryChips();
     var nowSecs = Date.now() / 1000;
     var chips = document.querySelectorAll(".asof-chip[data-asof]");
     chips.forEach(function (chip) {
@@ -71,6 +92,7 @@
 
   if (typeof document !== "undefined") {
     document.addEventListener("htmx:beforeSwap", onBeforeSwap);
+    document.addEventListener("htmx:load", tick); // a new read time or new content: level the cards now
     document.addEventListener("DOMContentLoaded", function () {
       tick();
       setInterval(tick, 5000);
@@ -78,6 +100,6 @@
   }
   // For tests (tests/test_pages.py runs this file under node with a stub page).
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { onBeforeSwap: onBeforeSwap, driftState: driftState };
+    module.exports = { onBeforeSwap: onBeforeSwap, driftState: driftState, tick: tick };
   }
 })();

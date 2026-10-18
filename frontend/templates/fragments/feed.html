@@ -3,7 +3,7 @@
 <section class="panel-card feed state-{{ panel.state.value }}" id="panel-proj" data-panel="proj">
   <header class="panel-card__header">
     <h2 class="panel-card__title">{{ panel.title }}</h2>
-    {{ m.asof_chip(panel.as_of) }}
+    {{ m.asof_chip(panel.as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
     <p class="feed__heartbeat">

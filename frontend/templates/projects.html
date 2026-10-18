@@ -6,7 +6,7 @@
 <section class="panel-card projects">
   <header class="panel-card__header">
     <h2 class="panel-card__title">Every project on record</h2>
-    {{ m.asof_chip(view.as_of) }}
+    {{ m.asof_chip(view.as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
     {% if view.rows %}

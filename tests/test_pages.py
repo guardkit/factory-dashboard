@@ -542,3 +542,22 @@ def test_a_poll_with_newer_data_refreshes_the_content_instead() -> None:
     assert result["newer"] is False and result["again"] is False and result["later"] is False
     target = {"target": "#main", "select": "#main", "swap": "outerHTML"}
     assert result["calls"] == [["GET", "http://x/features?days=30", target]] * 2  # one at a time
+
+
+# --- Codex round 3, R2: every card showing the factory record's read time is marked as such -------
+
+
+def test_factory_read_times_are_marked_and_other_sources_are_not(world: tuple[TestClient, Path, ForgeFake]) -> None:
+    client, _, _ = world
+    body = client.get("/").text
+    chips = re.findall(r'<span class="asof-chip[^>]*>', body)
+    factory = [c for c in chips if 'data-source="factory"' in c]
+    assert len(factory) >= 4                                  # the top time and the factory cards
+    services = body[body.index('data-panel="p6"'):]
+    services_chip = re.search(r'<span class="asof-chip[^>]*>', services)
+    assert services_chip is not None and "data-source" not in services_chip.group(0)  # its own time
+    # The freshness element carries the latest successful read, the time the cards are kept at.
+    fragment = client.get("/fragments/freshness").text
+    read_at = re.search(r'id="freshness"[^>]*data-read-at="([^"]+)"', fragment)
+    top = re.search(r'data-source="factory"[^>]*data-asof="([^"]+)"', fragment)
+    assert read_at is not None and top is not None and read_at.group(1) == top.group(1)
