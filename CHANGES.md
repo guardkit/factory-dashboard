@@ -5,6 +5,7 @@ shows this list. Keep each line short, and add new lines at the top of their day
 
 ## 18 October 2026
 
+- You can suggest a change to the dashboard from any page, by typing or by voice, and see what changed here.
 - The chat answers questions about cost and time, from the same figures the pages show.
 - You can ask the chat by voice: hold the microphone, speak, and hear a short answer read aloud.
 - Feature and project pages show what each build cost (tokens, calls and a nominal price) and how long it took.
