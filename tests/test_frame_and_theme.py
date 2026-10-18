@@ -226,3 +226,14 @@ def test_chat_fits_the_screen_whatever_banners_show() -> None:
     assert "body:has(.content > .chat) { height: 100vh; height: 100dvh;" in page
     assert "calc(" not in page and "min-height: 420px" not in page
     assert ".content > .chat > .chat__form, .content > .chat .chat-voice { flex: none; }" in page
+
+
+def test_cost_reasons_stay_out_of_rows_and_off_the_badge_line() -> None:
+    """Part B's real cost states, in the redesigned pages: a row without a figure shows the short
+    label (the reason is in the tooltip); a card's reason sits on its own line under the badge."""
+    frontend = Path(__file__).resolve().parent.parent / "frontend"
+    macros = (frontend / "templates" / "macros.html").read_text(encoding="utf-8")
+    # A figure keeps its caveat on the phone line (Part B's rule); a gap shows only its short label there.
+    assert "{{ r.elapsed }} · {{ spend_slot(r.spend, compact=not r.spend.value) }}" in macros
+    css = (frontend / "static" / "style.css").read_text(encoding="utf-8")
+    assert ".spend-slot > .stat-tile__sub { flex-basis: 100%;" in css

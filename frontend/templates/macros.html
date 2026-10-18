@@ -132,7 +132,7 @@
     <span class="build-row__band">{{ band_chip(r.band) }}</span>
     <span class="num build-row__elapsed">{{ r.elapsed }}</span>
     <span class="num build-row__cost">{{ spend_slot(r.spend, compact=True) }}</span>
-    <span class="build-row__phone-line">{{ r.elapsed }} · {{ spend_slot(r.spend) }}</span>
+    <span class="build-row__phone-line">{{ r.elapsed }} · {{ spend_slot(r.spend, compact=not r.spend.value) }}</span>
   </a></li>
   {% endfor %}
 </ul>

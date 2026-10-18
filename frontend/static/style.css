@@ -712,6 +712,10 @@ body { --banner-stack: calc(var(--banner-a, 0px) + var(--banner-b, 0px) + var(--
 .honest-badge--not-measured, .spend-slot, .state-pending { background: var(--pending-hatch); }
 .state-pending { display: block; padding: var(--space-16) 18px; font-size: 14px; line-height: 20px; font-weight: 500; }
 .state-pending__label, .spend-slot__label { font-weight: 700; color: var(--text-dim); }
+/* A spend slot that carries its reason (a card, not a cell) puts the reason on its own line, so the
+   badge's words are never squeezed into a narrow column beside it. */
+.spend-slot:has(> .stat-tile__sub) { flex-wrap: wrap; }
+.spend-slot > .stat-tile__sub { flex-basis: 100%; margin: 0; font-weight: 500; }
 /* Older than it should be: amber, with the clock icon. */
 .honest-badge--stale, .lagging-note, .named-gap { color: var(--status-risk-text); background: var(--status-risk-tint); border: 1px solid transparent; }
 .honest-badge--stale .icon, .lagging-note .icon, .named-gap .icon { color: var(--status-risk); }
@@ -1419,6 +1423,11 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
      part too long for the column breaks inside it. */
   .projects__table td:first-child { min-width: 8em; overflow-wrap: break-word; }
   .issue-row__kind-word { min-width: 0; }
+  /* Figures may wrap between words on phones ("2 h 45 min" / "ago", "Not" / "measured") so the
+     Planning table and the Projects table, with its cost column, keep within their cards. */
+  .planning__table td.num, .projects__table td.num, .projects__table td .spend-slot { white-space: normal; }
+  .projects__table td:first-child { min-width: 6em; }
+  .projects__table td.num { min-width: 3.5em; } /* counts are short; the cost wraps between words */
 }
 
 /* ==== stage 3: chat and microphone ==== */
