@@ -142,6 +142,7 @@ class TimeSlot:
     so_far: bool = False
     segments: tuple[TimeSegment, ...] = ()
     reason: str = ""
+    not_measured_count: int = 0   # features left out of a sum because their time is not measured
 
     @property
     def measured(self) -> bool:

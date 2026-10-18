@@ -23,7 +23,7 @@
           <td class="num">{{ r.in_progress }}</td>
           <td class="num">{{ r.delivered }}</td>
           <td class="num">{{ r.open_issues }}</td>
-          <td>{{ m.spend_slot(r.spend) }}</td>
+          <td>{{ m.spend_slot(r.spend, compact=True) }}</td>
         </tr>
       {% endfor %}
       </tbody>

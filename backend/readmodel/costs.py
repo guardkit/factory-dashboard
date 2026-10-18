@@ -186,8 +186,10 @@ class CostBook:
         if t.unpriced and t.unpriced == t.calls - t.failed:
             return vm.SpendSlot(state="not_measured", label="Not measured",
                                 reason="These calls were made on a model with no price in the list.", **common)  # type: ignore[arg-type]
-        reason = (f"{t.unpriced} of these calls were on a model with no price and are not counted."
-                  if t.unpriced else "")
+        reason = ""
+        if t.unpriced:
+            verb, rest = ("was", "it is") if t.unpriced == 1 else ("were", "they are")
+            reason = f"{t.unpriced} of these calls {verb} on a model with no price, so {rest} not counted."
         return vm.SpendSlot(state="measured", value=vm.fmt_usd(t.cost), label="nominal", amount_usd=t.cost,
                             estimated=t.estimated > 0, reason=reason, **common)  # type: ignore[arg-type]
 

@@ -37,12 +37,15 @@
 </div>
 {%- endmacro %}
 
-{# A cost figure (a SpendSlot), or the reason there is none: never a zero for a gap. #}
-{% macro spend_slot(s) -%}
-<span class="spend-slot" data-state="{{ s.state | replace('_', '-') }}"{% if s.price_label %} title="{{ s.price_label }}"{% endif %}>
+{# A cost figure (a SpendSlot), or the reason there is none: never a zero for a gap. The reason
+   (calls left out for want of a price, "counts calls from 17 October", why it is not measured) and
+   the stale label are always shown; `compact` (a table cell) puts the reason in the tooltip. #}
+{% macro spend_slot(s, compact=False) -%}
+<span class="spend-slot" data-state="{{ s.state | replace('_', '-') }}" title="{{ s.price_label }}{% if compact and s.reason %} {{ s.reason }}{% endif %}">
   {%- if s.value %}{{ s.value }} <span class="est">nominal</span>{% if s.estimated %} <span class="honest-badge honest-badge--estimated">part estimated</span>{% endif %}
   {%- elif s.measured %}{{ s.label }}{% else %}<span class="honest-badge honest-badge--not-measured">{{ s.label }}</span>{% endif %}
-  {%- if s.stale %} <span class="spend-slot__stale">({{ s.stale_text }})</span>{% endif %}</span>
+  {%- if s.reason and not compact %} <span class="stat-tile__sub">{{ s.reason }}</span>{% endif %}
+  {%- if s.stale %} <span class="stat-tile__sub">({{ s.stale_text }})</span>{% endif %}</span>
 {%- endmacro %}
 
 {% macro lagging_note(a) -%}
@@ -67,7 +70,7 @@
       <td>{{ band_chip(r.band) }}</td>
       <td class="num">{{ r.elapsed }}</td>
       <td class="num" title="{{ r.sent_title }}">{{ r.sent_label }}</td>
-      <td>{{ spend_slot(r.spend) }}</td>
+      <td>{{ spend_slot(r.spend, compact=True) }}</td>
     </tr>
   {% endfor %}
   </tbody>

@@ -143,15 +143,13 @@ def data_version(conn: sqlite3.Connection, fr: Freshness, now: datetime) -> str:
 
 
 def cost_banner(conn: sqlite3.Connection, now: datetime) -> Banner | None:
-    """The spend log's own line, apart from Forge's: one can be healthy while the other is stale."""
+    """The spend log's own line, apart from Forge's: one can be healthy while the other is stale.
+    Shown once the last good read is over 10 minutes old (design §3). Before any read succeeds there is
+    no banner: every cost figure itself says "Cost data not available"."""
     cf = cost.cost_freshness(conn)
-    state = cf.state(now)
-    if state == "fresh":
+    if cf.state(now) != "stale":
         return None
-    if state == "never":
-        return Banner(kind="cost_stale", text="Cost data not available: the dashboard has not read LiteLLM's "
-                                               "spend log yet.")
-    return Banner(kind="cost_stale", text=f"Cost data last read at {vm.fmt_wall(cf.read_at, now=now)} — cost "  # type: ignore[arg-type]
+    return Banner(kind="stale", text=f"Cost data last read at {vm.fmt_wall(cf.read_at, now=now)} — cost "  # type: ignore[arg-type]
                                            "figures may be incomplete.")
 
 
@@ -248,22 +246,33 @@ def time_slot(ft: FeatureTime | None) -> TimeSlot:
     """A feature's elapsed, machine and waiting time as display data (requirement 6)."""
     if ft is None:
         return TimeSlot(reason="The record has no time this was sent.")
+    if ft.unmeasured:
+        return TimeSlot(reason=ft.unmeasured, not_measured_count=1)
     return _time_from(ft.elapsed, ft.so_far, [(p.key, p.label, p.kind, p.seconds, p.open) for p in ft.parts])
 
 
 def sum_time(times: Iterable[FeatureTime | None]) -> TimeSlot:
     """Several features' times added together (a project, a week)."""
-    known = [t for t in times if t is not None]
+    given = [t for t in times if t is not None]
+    known = [t for t in given if not t.unmeasured]
+    left_out = len(given) - len(known)
     if not known:
-        return TimeSlot(reason="No features with a recorded start.")
+        return TimeSlot(reason="Not measured: no feature here has time the record can account for."
+                        if left_out else "No features with a recorded start.", not_measured_count=left_out)
     parts: dict[str, list[object]] = {}
     for t in known:
         for p in t.parts:
             row = parts.setdefault(p.key, [p.label, p.kind, 0.0, False])
             row[2] = float(row[2]) + p.seconds  # type: ignore[arg-type]
             row[3] = bool(row[3]) or p.open
-    return _time_from(sum(t.elapsed for t in known), any(t.so_far for t in known),
+    slot = _time_from(sum(t.elapsed for t in known), any(t.so_far for t in known),
                       [(k, str(v[0]), str(v[1]), float(v[2]), bool(v[3])) for k, v in parts.items()])  # type: ignore[arg-type]
+    if not left_out:
+        return slot
+    noun = "feature is" if left_out == 1 else "features are"
+    return replace(slot, not_measured_count=left_out,
+                   reason=f"{left_out} {noun} left out: a build was closed in a later clean-up, so the record does "
+                          "not say how long it ran.")
 
 
 def _time_from(elapsed_secs: float, so_far: bool, parts: list[tuple[str, str, str, float, bool]]) -> TimeSlot:
@@ -848,20 +857,48 @@ def _project_tags(book: CostBook, factory: Factory, project: str) -> set[str]:
     return tags
 
 
-def project_spend(book: CostBook, factory: Factory, project: str, *, lo: datetime | None = None,
-                  hi: datetime | None = None) -> SpendSlot:
-    """Tagged calls of one project, optionally only those that started in [lo, hi)."""
-    if hi is not None and hi <= book.tagging_started():
-        return SpendSlot(state="not_measured", label="Not measured", price_label=book.prices.label,
-                         reason=f"Calls before {cost._day(book.tagging_started())} were not tagged by feature.")
-    hours = book.tag_hours(_project_tags(book, factory, project))
+def _has_work_since_tagging(book: CostBook, factory: Factory, project: str) -> bool:
+    """Whether the project has any feature sent, or mission begun, since calls were tagged."""
+    start = book.tagging_started()
+    return (any(f.project == project and not book.before_tagging(f) for f in factory.features)
+            or any(m.target_repo == project and m.created_at is not None and m.created_at >= start
+                   for m in factory.missions))
+
+
+def _before_tagging_slot(book: CostBook) -> SpendSlot:
+    return SpendSlot(state="not_measured", label="Not measured", price_label=book.prices.label,
+                     reason=f"Calls before {cost._day(book.tagging_started())} were not tagged by feature.")
+
+
+def tagged_spend(book: CostBook, factory: Factory, projects: Iterable[str], *, lo: datetime | None = None,
+                 hi: datetime | None = None) -> SpendSlot:
+    """Tagged calls of some projects, optionally only those that started in [lo, hi).
+
+    "Not measured" (never "no model calls") when the window ended before tagging began, or when none
+    of the projects has had a feature or mission since then: their calls were never tagged."""
+    names = tuple(projects)
+    if book.state == "never":
+        return book.not_available()
+    if (hi is not None and hi <= book.tagging_started()) or not any(
+            _has_work_since_tagging(book, factory, p) for p in names):
+        return _before_tagging_slot(book)
+    tags: set[str] = set()
+    for p in names:
+        tags |= _project_tags(book, factory, p)
+    hours = book.tag_hours(tags)
     t = cost._sum(v for h, v in hours.items()
                   if (lo is None or cost.hour_to_dt(h) >= lo) and (hi is None or cost.hour_to_dt(h) < hi))
     slot = book.slot(t, scope="project")
     if slot.state == "measured" and (lo is None or lo < book.tagging_started()):
-        slot = replace(slot, reason=f"Counts calls from {cost._day(book.tagging_started())}, when calls began to be "
-                                    "tagged by feature.")
+        counts = f"Counts calls from {cost._day(book.tagging_started())}, when calls began to be tagged by feature."
+        slot = replace(slot, reason=f"{counts} {slot.reason}".strip())
     return slot
+
+
+def project_spend(book: CostBook, factory: Factory, project: str, *, lo: datetime | None = None,
+                  hi: datetime | None = None) -> SpendSlot:
+    """Tagged calls of one project, optionally only those that started in [lo, hi)."""
+    return tagged_spend(book, factory, (project,), lo=lo, hi=hi)
 
 
 #: How many weeks a project page lists, newest first.
@@ -1123,17 +1160,7 @@ def weekly_report(
     book = load_cost_book(conn, now)
     names = projects or tuple(sorted({f.project for f in factory.features if f.project}
                                      | {m.target_repo for m in factory.missions if m.target_repo}))
-    tags: set[str] = set()
-    for name in names:
-        tags |= _project_tags(book, factory, name)
-    if hi <= book.tagging_started():
-        spend = project_spend(book, factory, "", hi=hi)
-    else:
-        hours = book.tag_hours(tags)
-        spend = book.slot(cost._sum(v for h, v in hours.items() if lo <= cost.hour_to_dt(h) < hi), scope="project")
-        if lo < book.tagging_started() and spend.measured:
-            spend = replace(spend, reason=f"Counts calls from {cost._day(book.tagging_started())}, when calls "
-                                          "began to be tagged by feature.")
+    spend = tagged_spend(book, factory, names, lo=lo, hi=hi)
     headline = ReportHeadline(
         delivered_count=len(delivered), in_flight_count=len(in_progress), behind_count=behind,
         on_target_count=on_target, ahead_count=ahead, spend=spend, withheld=stale, withheld_since=since,
@@ -1297,7 +1324,7 @@ def time_summary(db_path: Path, *, feature: str | None = None, project: str | No
             chosen = [f for f in chosen
                       if f.sent_at and (lo is None or f.sent_at >= lo) and (hi is None or f.sent_at < hi)]
         times = [(f, feature_time(f, now)) for f in chosen]
-        known: list[tuple[Feature, FeatureTime]] = [(f, t) for f, t in times if t is not None]
+        known: list[tuple[Feature, FeatureTime]] = [(f, t) for f, t in times if t is not None and not t.unmeasured]
         waits: dict[str, float] = {}
         for _f, t in known:
             for p in t.parts:

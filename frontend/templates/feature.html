@@ -72,8 +72,8 @@
   <section class="panel-card feature-spend">
     <header class="panel-card__header"><h2 class="panel-card__title">Cost</h2></header>
     <div class="panel-card__body">{{ m.spend_slot(page.spend) }}
-      {% if page.spend.detail %}<p class="stat-tile__sub">{{ page.spend.detail }}. {{ page.spend.price_label }}.</p>{% elif page.spend.reason %}<p class="stat-tile__sub">{{ page.spend.reason }}</p>{% endif %}
-      {% if page.time.measured %}<p class="stat-tile__sub feature-time">Elapsed {{ page.time.elapsed }}: machine {{ page.time.machine }}, waiting {{ page.time.waiting }}{% for w in page.time.waiting_parts %}{{ ' (' if loop.first else ', ' }}{{ w.label | lower }} {{ w.text }}{{ ')' if loop.last }}{% endfor %}.</p>{% endif %}
+      {% if page.spend.detail %}<p class="stat-tile__sub">{{ page.spend.detail }}. {{ page.spend.price_label }}.</p>{% endif %}
+      {% if page.time.measured %}<p class="stat-tile__sub">Elapsed {{ page.time.elapsed }}: machine {{ page.time.machine }}, waiting {{ page.time.waiting }}{% for w in page.time.waiting_parts %}{{ ' (' if loop.first else ', ' }}{{ w.label | lower }} {{ w.text }}{{ ')' if loop.last }}{% endfor %}.</p>{% elif page.time.reason %}<p class="stat-tile__sub"><span class="honest-badge honest-badge--not-measured">Time not measured</span> {{ page.time.reason }}</p>{% endif %}
     </div>
   </section>
 </div>

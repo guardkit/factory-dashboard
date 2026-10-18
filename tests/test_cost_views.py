@@ -4,9 +4,10 @@ the real feed code over a fake Forge record and a fake spend log."""
 
 from __future__ import annotations
 
+import html as html_lib
 import re
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from backend.projector.cost_import import import_once
 from backend.projector.forge_mirror import mirror_once
 from backend.projector.store import write_heartbeat
 from backend.readmodel import dbread
+from backend.readmodel.norms import Norms, load_norms
+from backend.readmodel.viewmodels import SpendSlot
 from starlette.testclient import TestClient
 
 from tests import forge_fake
@@ -28,6 +31,7 @@ from tests.test_pages import INTERNAL_SHORTHAND
 T = datetime(2026, 10, 18, 9, 0, tzinfo=UTC)    # a Sunday; tagging started on the Saturday
 NOW = T + timedelta(minutes=200)
 TENANTS_TEST = Path(__file__).resolve().parent / "fixtures" / "tenants_test.yaml"
+OLD_PROJECT = "acme/old"       # a project whose only work was before calls were tagged
 
 
 def _cost(prompt: int, completion: int) -> float:
@@ -49,6 +53,8 @@ def factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ForgeFake:
     fake.merged("bA", 152, mission_branch=True)
     fake.planning("old", "An old feature.", start=-48 * 60, end=-48 * 60 + 20)
     fake.build("bOld", "FEAT-0OLD", "old", queued=-48 * 60 + 21, started=-48 * 60 + 21, completed=-48 * 60 + 80)
+    fake.planning("other-old", "Another project's old request.", start=-48 * 60, end=-48 * 60 + 20,
+                  repo=OLD_PROJECT)
     return fake
 
 
@@ -110,6 +116,9 @@ def test_a_mission_part_is_joined_by_its_part_tag(store: Path) -> None:
     _chrome, page = dbread.feature_page(store, "FEAT-000A", NOW)  # type: ignore[misc]
     assert page.spend.calls == 2 and page.spend.amount_usd == pytest.approx(MA)
     assert page.time.so_far and any(s.key == "mission_merge" and s.open for s in page.time.segments)
+    merge_wait = next(s for s in page.time.segments if s.key == "mission_merge")
+    assert merge_wait.seconds == 48 * 60            # joined the branch at 152, now is 200 (M9)
+    assert page.time.waiting_secs == 48 * 60 and page.time.machine_secs == (10 + 40 + 2) * 60
 
 
 def test_a_feature_from_before_tagging_is_not_measured_never_zero(store: Path) -> None:
@@ -209,7 +218,7 @@ def test_before_any_import_every_cost_is_not_available(tmp_path: Path, factory: 
         assert slot.empty and slot.amount_usd is None
     chrome = dbread.chrome_view(path, NOW)
     assert chrome.banner is None                       # the factory's record is fine
-    assert chrome.cost_banner is not None and chrome.cost_banner.text.startswith("Cost data not available")
+    assert chrome.cost_banner is None                  # the figures themselves say "not available"
     assert dbread.health(path, NOW)["cost_feed"] == "never read"
 
 
@@ -292,7 +301,9 @@ def live_pages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tupl
     fake.planning("old", "An old feature.", start=-60 * 24 * 7, end=-60 * 24 * 7 + 20)   # a week ago: untagged
     path = tmp_path / "readmodel.db"
     conn = store_from(fake, path, now)
-    import_once(conn, _calls(t0), now)
+    calls = _calls(t0)
+    calls.add("no-price", 40, None, prompt=800, completion=80, provider_model="openai/coach-ft-v4")
+    import_once(conn, calls, now)
     conn.close()
     app = create_app(db_path=path, tenants_path=TENANTS_TEST)
     with TestClient(app, base_url=LOOPBACK_URL) as client:
@@ -320,3 +331,100 @@ def test_pages_show_the_figures_and_never_a_zero_for_a_gap(live_pages: tuple[Tes
         visible = re.sub(r"<[^>]+>", " ", client.get(url).text)
         for word in (*INTERNAL_SHORTHAND, "x-feature-id", "correlation", "cost_basis", "litellm_spend"):
             assert word not in visible, (url, word)
+
+
+# --- coach round 1 -------------------------------------------------------------------------------------
+
+
+def test_a_project_with_nothing_since_tagging_is_not_measured(store: Path) -> None:
+    view = dbread.project_view(store, OLD_PROJECT, NOW)
+    for slot in (view.spend, view.spend_week):
+        assert slot.state == "not_measured" and slot.empty
+        assert slot.text == "Not measured" and slot.reason == "Calls before 17 October were not tagged by feature."
+    assert all(w.spend.state == "not_measured" for w in view.weeks)
+    row = {r.project: r for r in dbread.projects_view(store, NOW).rows}[OLD_PROJECT]
+    assert row.spend.state == "not_measured" and row.spend.label != "No model calls recorded"
+
+
+def test_a_window_that_ended_before_tagging_is_not_measured(store: Path) -> None:
+    conn = db.connect_ro(store)
+    try:
+        report = dbread.weekly_report(conn, "operator", NOW, window=("2026-10-05", "2026-10-11"))
+    finally:
+        conn.close()
+    assert report.headline.spend.state == "not_measured"
+    assert report.headline.spend.reason == "Calls before 17 October were not tagged by feature."
+
+
+def test_both_feeds_stale_show_both_banners(tmp_path: Path, factory: ForgeFake) -> None:
+    """M10: the factory's record and the spend log are each stale, and each says so."""
+    path = tmp_path / "readmodel.db"
+    db.apply_schema(path)
+    conn = sqlite3.connect(path, isolation_level=None)
+    mirror_once(conn, factory.path, NOW - timedelta(minutes=5))
+    write_heartbeat(conn, NOW)
+    import_once(conn, _calls(T), NOW - timedelta(minutes=11))
+    conn.close()
+    chrome = dbread.chrome_view(path, NOW)
+    assert chrome.banner is not None and chrome.cost_banner is not None
+    app = create_app(db_path=path, tenants_path=TENANTS_TEST)
+    html = app.state.templates.env.get_template("fragments/freshness.html").render(chrome=chrome, standalone=True)
+    assert html.count('class="banner banner--stale"') == 2
+    assert "the dashboard cannot reach the factory's record" in html_lib.unescape(html)
+    assert 'data-feed="cost"' in html and "Cost data last read at 13:09:00" in html
+
+
+def test_the_cost_figures_come_from_the_pages_own_snapshot(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """M12: a cost import commits in the middle of a page (after Forge's record is read, before the
+    cost book is). The page still shows the figures of the moment it started reading."""
+    real_load_norms = load_norms
+
+    def feature_spend() -> SpendSlot:
+        found = dbread.feature_page(store, "FEAT-0001", NOW)
+        assert found is not None
+        return found[1].spend
+
+    views: tuple[Callable[[], SpendSlot], ...] = (
+        feature_spend,
+        lambda: dbread.project_view(store, REPO, NOW).spend,
+        lambda: dbread.home_view(store, NOW).spend_today,
+    )
+    for n, build_view in enumerate(views):
+        before = build_view().calls
+        assert before is not None
+        late = FakeSpend(T)
+        late.add(f"late-{n}", 70, "c-1", prompt=9_000, completion=900)   # inside the 3-hour re-read
+        passes: list[int] = []
+
+        def norms_with_an_import_committing_now(late: FakeSpend = late, passes: list[int] = passes) -> Norms:
+            if not passes:
+                writer = sqlite3.connect(store, isolation_level=None)
+                try:
+                    passes.append(import_once(writer, late, NOW).inserted)
+                finally:
+                    writer.close()
+            return real_load_norms()
+
+        monkeypatch.setattr(dbread, "load_norms", norms_with_an_import_committing_now)
+        during = build_view().calls
+        monkeypatch.setattr(dbread, "load_norms", real_load_norms)
+        after = build_view().calls
+        assert passes == [1]                        # the import did commit a new call mid-view
+        assert during == before                     # but not into this page's read
+        assert after == before + 1
+
+
+def test_each_figures_reason_is_shown_where_the_figure_is(live_pages: tuple[TestClient, Path]) -> None:
+    """M8: calls left out for want of a price, and "counts calls from 17 October", appear beside the
+    figure on the Now, project and report pages, not only on the feature page."""
+    client, _path = live_pages
+    left_out = "1 of these calls was on a model with no price, so it is not counted."
+    assert left_out in client.get("/").text
+    counts = "Counts calls from 17 October, when calls began to be tagged by feature."
+    assert counts in client.get(f"/projects/{REPO}").text
+    today = datetime.now(UTC).date().isoformat()
+    report = client.get(f"/reports?from=2026-10-12&to={today}").text
+    assert counts in report and left_out in report     # the report's "all model calls" figure
+    # In a table cell the reason goes into the tooltip, not the cell.
+    projects = client.get("/projects").text
+    assert f'title="Nominal: OpenRouter price for qwen/qwen3.8-flash on 17 Oct 2026 {counts}"' in projects
