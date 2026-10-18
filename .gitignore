@@ -51,3 +51,8 @@ Temporary Items
 !.env.sample
 !*.env.example
 !*.env.sample
+
+# The board's configuration folder lives outside the repository; never commit a real copy of
+# its files (accounts.example.yaml is the checked-in example).
+accounts.yaml
+session_secret

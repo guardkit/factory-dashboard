@@ -4,16 +4,20 @@ ADR-DASH-003: HTMX-first, server-rendered FastAPI + Jinja. ADR-DASH-007 / fence 
 imports NO NATS anything at S1 (verified by grep at stage close) and holds no write path. Fence 6:
 Jinja autoescape is ON; every event-derived string renders inert.
 
-Tenancy (design §7): the session holds only the username; the tenant is re-read from the DB per
-request (F-2f). Operator-only routes (the whole operator nav) return a clean redirect-to-client-
-layout for a client-tenant session, and 403 for the fragment API — an explicit guard, never an
-incidental DB-open failure (ux §2).
+Sign-in (design 2026-10-17, requirement 2): accounts come from accounts.yaml in the configuration
+folder (backend/accounts.py); the signed cookie holds only the username. The account and its
+tenant are looked up again on every request (F-2f), so removing an account ends its sessions.
+Operator-only routes (the whole operator nav) return a clean redirect-to-client-layout for a
+client-tenant session, and 403 for the fragment API — an explicit guard, never an incidental
+DB-open failure (ux §2). No client tenant is registered today, so no account can be one.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated
@@ -25,7 +29,7 @@ from jinja2 import select_autoescape
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.templating import Jinja2Templates
 
-from backend import auth, db, sse
+from backend import accounts, auth, db, sse
 from backend.config_loader import (
     PLANS_PATH,
     TENANTS_PATH,
@@ -50,6 +54,18 @@ NAV: tuple[tuple[str, str, str], ...] = (
 )
 
 
+SESSION_MAX_AGE = 14 * 24 * 60 * 60  # 14 days
+
+LOGIN_FAILED = "That username and password do not match. Please try again."
+LOGIN_THROTTLED = (
+    "There have been too many failed sign-in attempts for this username. "
+    "Please wait 15 minutes and try again."
+)
+
+
+FormText = Annotated[str, Form()]
+
+
 class _LoginRedirect(Exception):
     """Unauthenticated request to a protected route -> bounce to /login."""
 
@@ -63,13 +79,22 @@ def create_app(
     db_path: Path | None = None,
     tenants_path: Path = TENANTS_PATH,
     plans_path: Path = PLANS_PATH,
-    secret_key: str = "dev-insecure-key-change-me",
+    config_dir: Path | None = None,
+    secure_cookie: bool | None = None,
 ) -> FastAPI:
+    """Build the board. Refuses to start (accounts.ConfigError) without a session secret of at
+    least 32 characters and a usable accounts.yaml in the configuration folder."""
+    config_dir = config_dir or accounts.config_dir()
+    key = accounts.read_session_secret(config_dir)
+    tenants = load_tenants(tenants_path)
+    account_store = accounts.AccountStore(config_dir / accounts.ACCOUNTS_FILE, tenants.keys())
+    if secure_cookie is None:
+        secure_cookie = not accounts.insecure_cookie_allowed()
+
     # The same env contract the projector honours (FACTORY_DASH_DB), so the composed container
     # points BOTH processes at the one mounted read-model; bare/dev runs keep the repo-root default.
     env_db = os.environ.get("FACTORY_DASH_DB")
     db_path = db_path or (Path(env_db) if env_db else BASE_DIR / "readmodel.db")
-    tenants = load_tenants(tenants_path)
     load_plans(plans_path)  # validated at boot; mirrored by the projector at S4
     db.init_db(db_path, tenants.values())
 
@@ -78,11 +103,20 @@ def create_app(
     templates.env.autoescape = select_autoescape(default=True, default_for_string=True)
 
     app = FastAPI(title="factory-dashboard", docs_url=None, redoc_url=None)
-    app.add_middleware(SessionMiddleware, secret_key=secret_key, same_site="lax", https_only=False)
+    # HttpOnly is always set by Starlette; Secure unless FACTORY_DASH_INSECURE_COOKIE=1 (local tests).
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=key,
+        max_age=SESSION_MAX_AGE,
+        same_site="lax",
+        https_only=secure_cookie,
+    )
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     app.state.db_path = db_path
     app.state.tenants = tenants
+    app.state.accounts = account_store
+    app.state.login_throttle = accounts.LoginThrottle()
     app.state.templates = templates
 
     _register_exception_handlers(app)
@@ -105,14 +139,19 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
 
 def _resolve(request: Request) -> auth.ResolvedUser | None:
+    """The signed-in account, looked up again in accounts.yaml (a removed account is signed out)."""
     username = request.session.get("username")
     if not username:
         return None
-    conn = db.connect_ro(request.app.state.db_path)
-    try:
-        return auth.resolve_user(conn, str(username))
-    finally:
-        conn.close()
+    store: accounts.AccountStore = request.app.state.accounts
+    account = store.get(str(username))
+    if account is None:
+        return None
+    user = auth.ResolvedUser(
+        username=account.username, display_name=account.display_name, tenant_slug=account.tenant
+    )
+    request.state.user = user
+    return user
 
 
 async def _sse_stream(
@@ -175,16 +214,36 @@ def _tenant(request: Request, user: auth.ResolvedUser) -> Tenant:
     )
 
 
-def _render(request: Request, name: str, context: dict[str, object]) -> HTMLResponse:
+def _render(
+    request: Request, name: str, context: dict[str, object], status_code: int = 200
+) -> HTMLResponse:
     templates: Jinja2Templates = request.app.state.templates
-    ctx: dict[str, object] = {"nav": NAV, **context}
+    ctx: dict[str, object] = {"nav": NAV, "signed_in": getattr(request.state, "user", None), **context}
     # base.html needs the page chrome (top-bar projector chip + banner slot, ux §3). Most views
     # carry it; surface it uniformly so every operator page renders the chrome without repetition.
     if "chrome" not in ctx:
         view = ctx.get("view")
         if view is not None and hasattr(view, "chrome"):
             ctx["chrome"] = view.chrome
-    return templates.TemplateResponse(request, name, ctx)
+    return templates.TemplateResponse(request, name, ctx, status_code=status_code)
+
+
+def _sign_in(request: Request, username: str, password: str) -> Response:
+    """Check the password against accounts.yaml, behind the per-username throttle. A locked
+    username is refused before its password is checked, even when the password is right."""
+    username = username.strip()
+    throttle: accounts.LoginThrottle = request.app.state.login_throttle
+    if throttle.is_locked(username):
+        return _render(request, "login.html", {"error": LOGIN_THROTTLED}, status_code=429)
+    store: accounts.AccountStore = request.app.state.accounts
+    account = store.authenticate(username, password)
+    if account is None:
+        throttle.record_failure(username)
+        return _render(request, "login.html", {"error": LOGIN_FAILED}, status_code=401)
+    throttle.record_success(username)
+    request.session.clear()  # a fresh session on every sign-in
+    request.session["username"] = account.username
+    return RedirectResponse("/", status_code=303)
 
 
 def _reports_response(
@@ -231,18 +290,10 @@ def _register_routes(app: FastAPI) -> None:
     @app.post("/login")
     def login_submit(
         request: Request,
-        username: Annotated[str, Form()],
-        password: Annotated[str, Form()],
+        username: FormText,
+        password: FormText,
     ) -> Response:
-        conn = db.connect_ro(request.app.state.db_path)
-        try:
-            user = auth.authenticate(conn, username, password)
-        finally:
-            conn.close()
-        if user is None:
-            return _render(request, "login.html", {"error": "Invalid credentials."})
-        request.session["username"] = user.username
-        return RedirectResponse("/", status_code=303)
+        return _sign_in(request, username, password)
 
     @app.get("/logout")
     def logout(request: Request) -> Response:
@@ -400,5 +451,19 @@ _FRAGMENT_TEMPLATES: dict[str, str] = {
 }
 
 
-# The module-level ASGI app for `uvicorn backend.app:app` in production.
-app = create_app()
+# The ASGI app for `uvicorn backend.app:app` in production, built on first access (PEP 562) so
+# importing this module (tests, tools) does not need the configuration folder. A missing or short
+# session secret, or a missing accounts file, stops the board with one plain sentence.
+@functools.cache
+def _production_app() -> FastAPI:
+    try:
+        return create_app()
+    except accounts.ConfigError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from None
+
+
+def __getattr__(name: str) -> FastAPI:
+    if name != "app":
+        raise AttributeError(name)
+    return _production_app()

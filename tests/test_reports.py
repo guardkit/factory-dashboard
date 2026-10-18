@@ -20,6 +20,8 @@ from backend.projector.projections.base import iso
 from backend.readmodel import dbread
 from starlette.testclient import TestClient
 
+from tests.conftest import login
+
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 TENANTS_REPORTS = FIXTURES / "tenants_reports.yaml"
 PLANS_PACK = FIXTURES / "plans_pack.yaml"
@@ -421,5 +423,5 @@ def operator_client_reports(tmp_path: Path):  # type: ignore[no-untyped-def]
     db_path = tmp_path / "readmodel.db"
     app = create_app(db_path=db_path, tenants_path=TENANTS_REPORTS, plans_path=PLANS_PACK)
     with TestClient(app) as client:
-        client.post("/login", data={"username": "operator", "password": "operator"})
+        login(client)
         yield client, db_path

@@ -39,10 +39,10 @@
       {% import 'macros.html' as m %}
       <span class="events-asof">{{ m.asof_chip(chrome.events_as_of) }}</span>
       {% endif %}
-      <details class="user-menu">
-        <summary>{{ tenant.display_name if tenant is defined and tenant else 'session' }}</summary>
-        <ul><li><a href="/logout">Log out</a></li></ul>
-      </details>
+      <span class="user-menu">
+        {% if signed_in %}<span class="user-menu__name">Signed in as {{ signed_in.display_name }}</span>{% endif %}
+        <a href="/logout" class="user-menu__signout">Sign out</a>
+      </span>
     </div>
   </header>
 

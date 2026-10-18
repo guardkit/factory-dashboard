@@ -23,8 +23,18 @@ services:
     user: "${FACTORY_UID:-1000}:${FACTORY_GID:-1000}"
     environment:
       FACTORY_DASH_DB: /data/readmodel.db
+      FACTORY_DASH_CONFIG_DIR: /config
     volumes:
       - ./data:/data
+      # Accounts and the session secret (README "Accounts and access"), outside the repository,
+      # read-only. The board refuses to start without them; compose refuses if the folder is
+      # missing (rather than creating an empty root-owned one).
+      - type: bind
+        source: ${FACTORY_DASH_CONFIG_DIR:-~/.config/factory-dashboard}
+        target: /config
+        read_only: true
+        bind:
+          create_host_path: false
     restart: unless-stopped
 
   projector:

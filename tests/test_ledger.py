@@ -17,6 +17,7 @@ from backend.readmodel import dbread
 from backend.readmodel.viewmodels import PanelState
 from starlette.testclient import TestClient
 
+from tests.conftest import login
 from tests.nats_util import envelope, make_projected_db
 
 TENANTS_TEST = Path(__file__).resolve().parent / "fixtures" / "tenants_test.yaml"
@@ -260,7 +261,7 @@ def test_delivered_page_renders_live_rows_and_leaks_no_ledger_copy(tmp_path: Pat
     dash.close()
 
     with TestClient(app) as c:
-        c.post("/login", data={"username": "operator", "password": "operator"})
+        login(c)
         body = c.get("/delivered?from=2026-07-01&to=2026-07-08").text
 
     assert "Delivered — merged" in body                 # verbatim bar label

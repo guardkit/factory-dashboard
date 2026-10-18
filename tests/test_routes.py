@@ -66,5 +66,11 @@ def test_client_home_is_dark_client_layout(clientco_client: TestClient) -> None:
     assert "A-8" not in body and "IN-4" not in body
 
 
+def test_operator_account_never_sees_the_client_layout(operator_client: TestClient) -> None:
+    body = operator_client.get("/").text
+    assert "being provisioned" not in body
+    assert operator_client.get("/fragments/p1").status_code == 200
+
+
 def test_unknown_fragment_is_404(operator_client: TestClient) -> None:
     assert operator_client.get("/fragments/p9").status_code == 404
