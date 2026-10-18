@@ -17,6 +17,15 @@ Forge's record is the estate's ledger volume (`forge-estate_forge-ledger`), moun
 `./data/suggestions.db` is not: it holds the suggestions people have sent (below), and nothing
 rebuilds it. Delete only `readmodel.db` (and its `-wal` and `-shm` files), never the whole folder.
 
+For the Linear door (18 October 2026): after each pass the feed also rewrites
+`./data/project-summaries.json` (each project's delivered, open and cost figures and health, as
+the pages show them; the door posts them to Linear after a merge). It is rebuilt every 15 seconds.
+The board shows each project's Linear link from the door's own volume
+(`forge-estate_linear-door-state`, or `FACTORY_LINEAR_DOOR_VOLUME`), mounted read-only by
+`docker-compose.linear.yml`. `deploy/dashboard-up.sh` adds that file only when the volume exists,
+because compose refuses to start anything when an external volume is missing; without it the pages
+simply show no Linear links. Run the script again once the door's volume exists.
+
 ## Start, or bring it back after a rollout or reboot
 
 ```sh

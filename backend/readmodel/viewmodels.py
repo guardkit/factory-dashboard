@@ -452,6 +452,14 @@ class ProjectView:
     spend_week: SpendSlot = field(default_factory=SpendSlot)  # this week's tagged calls
     untagged_note: str = ""      # how much factory-wide usage had no feature tag this week
     features_total: int = 0      # every feature of the project on record
+    linear_url: str = ""         # the project's Linear project (https://linear.app/ only), or ""
+
+    @property
+    def open_issues_words(self) -> str:
+        """The open-issues line as the page says it, with the older-failures sentence after it."""
+        n = self.open_issues_total
+        words = f"{n} open {'issue' if n == 1 else 'issues'}." if n else "No open issues for this project."
+        return f"{words} {self.hidden_line}".strip()
 
 
 # --- weekly report ------------------------------------------------------------------------------

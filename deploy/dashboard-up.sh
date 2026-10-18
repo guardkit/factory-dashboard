@@ -35,10 +35,20 @@ for need in session_secret accounts.yaml; do
 done
 export FACTORY_DASH_CONFIG_DIR="$CONFIG"
 
-if [ "${1:-}" = "--build" ]; then
-  docker compose up -d --build
+# The Linear door's state volume (each project's Linear link) is mounted only when it exists:
+# compose refuses to start anything when an external volume is missing (docker-compose.linear.yml).
+FILES=(-f docker-compose.yml)
+LINEAR_VOLUME="${FACTORY_LINEAR_DOOR_VOLUME:-forge-estate_linear-door-state}"
+if docker volume inspect "$LINEAR_VOLUME" >/dev/null 2>&1; then
+  FILES+=(-f docker-compose.linear.yml)
 else
-  docker compose up -d
+  echo "note: the Linear door's volume $LINEAR_VOLUME is not there; starting without Linear links"
+fi
+
+if [ "${1:-}" = "--build" ]; then
+  docker compose "${FILES[@]}" up -d --build
+else
+  docker compose "${FILES[@]}" up -d
 fi
 
 # The feed reads Forge's record within seconds of starting.

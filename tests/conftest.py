@@ -62,6 +62,14 @@ def config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return folder
 
 
+@pytest.fixture(autouse=True)
+def no_linear_door(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Pages read Linear links from an empty folder unless a test writes the door's file into it."""
+    folder = tmp_path / "linear"
+    monkeypatch.setenv("FACTORY_LINEAR_DOOR_STATE_DIR", str(folder))
+    return folder
+
+
 def login(  # type: ignore[no-untyped-def]
     client: TestClient, username: str = TEST_USER, password: str = TEST_PASSWORD, follow: bool = True
 ):

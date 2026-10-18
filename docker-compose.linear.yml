@@ -1,0 +1,31 @@
+# The Linear door's state directory for the board, read-only (design "Linear front door", 11.3).
+#
+# The board shows each project's Linear link from linear-projects.json, which the Linear door writes
+# into its own state volume. That volume belongs to the Forge estate, not to the dashboard, so it is
+# EXTERNAL here (like Forge's ledger) and the dashboard never creates it.
+#
+# It lives in this separate file because compose refuses to start ANY service when an external
+# volume is missing ("external volume ... not found"), and the door may not be installed. So
+# deploy/dashboard-up.sh adds this file only when the volume exists:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.linear.yml up -d
+#
+# Without it the board has no /linear directory and the pages show no Linear links; nothing else
+# changes. Run dashboard-up.sh again after the door's volume first appears, to mount it.
+
+services:
+  board:
+    environment:
+      FACTORY_LINEAR_DOOR_STATE_DIR: /linear
+    volumes:
+      - type: volume
+        source: linear-door-state
+        target: /linear
+        read_only: true
+        volume:
+          nocopy: true
+
+volumes:
+  linear-door-state:
+    external: true
+    name: ${FACTORY_LINEAR_DOOR_VOLUME:-forge-estate_linear-door-state}

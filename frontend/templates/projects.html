@@ -24,7 +24,8 @@
       {% for r in view.rows %}
         {# A zero-width space after the "/" lets a long owner/name wrap there on a phone. #}
         <tr class="project-row">
-          <td><a class="feature-title" href="{{ r.link }}">{{ r.project | replace('/', '/\u200b') }}</a></td>
+          <td><a class="feature-title" href="{{ r.link }}">{{ r.project | replace('/', '/\u200b') }}</a>{% if r.linear_url %}
+            <span class="stat-tile__sub"><a href="{{ r.linear_url }}" rel="noreferrer" aria-label="Linear project for {{ r.project }}">{{ m.icon('external') }}Linear</a></span>{% endif %}</td>
           <td class="num">{{ r.features }}</td>
           <td class="num">{{ r.in_progress }}</td>
           <td class="num">{{ r.delivered }}</td>
