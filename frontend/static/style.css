@@ -967,6 +967,8 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
 
 /* ==== print: only the page's own content ==== */
 
+@page { margin: 16mm; }
+
 @media print {
   .topbar, .tabbar, .chat-drawer, .chat-toggle, .report-toolbar, .no-print, .skip-link { display: none !important; }
   html, body { background: #fff !important; }
