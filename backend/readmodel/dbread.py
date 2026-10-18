@@ -1369,13 +1369,21 @@ def cost_summary(db_path: Path, *, feature: str | None = None, project: str | No
         hours = book.tag_hours(tags)
         t = cost._sum(v for h, v in hours.items()
                  if (lo is None or cost.hour_to_dt(h) >= lo) and (hi is None or cost.hour_to_dt(h) < hi))
-        slot = book.slot(t, scope=scope) if (measured or scope == "project") else (
-            book.feature_slot(chosen[0]) if chosen else SpendSlot(state="not_measured", reason="No such record."))
+        if scope == "project":
+            # The project page's own figure (the same not-measured rules and reason words).
+            slot = project_spend(book, factory, name, lo=lo, hi=hi)
+            t = cost.Totals(calls=slot.calls or 0, tokens_in=slot.tokens_in or 0, tokens_out=slot.tokens_out or 0,
+                            unpriced=slot.unpriced_calls)
+        else:
+            slot = book.slot(t, scope=scope) if measured else (
+                book.feature_slot(chosen[0]) if chosen else SpendSlot(state="not_measured", reason="No such record."))
         return cost.CostSummary(
             scope=scope, name=name, period=cost.period(lo, hi), state=slot.state, reason=slot.reason,
             calls=t.calls, tokens_in=t.tokens_in, tokens_out=t.tokens_out,
             cost_usd=slot.amount_usd if slot.state == "measured" else None, estimated=slot.estimated,
             stale=slot.stale, price_label=book.prices.label, refs=tuple(f.code or f.key for f in chosen),
+            unpriced_calls=slot.unpriced_calls, stale_text=slot.stale_text,
+            left_out=len(chosen) - len(measured) if scope == "project" else 0,
         )
     finally:
         if owned:
