@@ -57,6 +57,13 @@
 <span class="spend-slot" data-state="not-measured">{{ icon('slash') }}{{ s.text }}</span>
 {%- endmacro %}
 
+{# A spend tile's value, from the page's spend slot: the figure once the cost feed carries one
+   (`value`, with the slot's own `label` otherwise), else "Not measured" with the slash icon. No
+   tile writes the words itself, so a measured cost replaces them everywhere at once. #}
+{% macro spend_value(s) -%}
+{%- if s.value is defined and s.value %}{{ s.value }}{% else %}{{ icon('slash') }}{{ s.label if s.label is defined and s.label else 'Not measured' }}{% endif %}
+{%- endmacro %}
+
 {# The card's data is older than it should be: the amber badge, with the age. #}
 {% macro lagging_note(a) -%}
 <p class="lagging-note">{{ icon('clock') }}Showing the last known data ({{ a.prefix }} {{ a.label }}).</p>

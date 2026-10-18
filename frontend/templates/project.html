@@ -26,8 +26,8 @@
     <span class="stat-tile__value num">{{ view.open_issues_total }}</span>
     <span class="stat-tile__label">Open issues</span>
   </div>
-  <div class="stat-tile stat-tile--empty">
-    <span class="stat-tile__value">{{ m.icon('slash') }}Not measured</span>
+  <div class="stat-tile{% if not (view.spend.value is defined and view.spend.value) %} stat-tile--empty{% endif %}">
+    <span class="stat-tile__value">{{ m.spend_value(view.spend) }}</span>
     <span class="stat-tile__label">Spend to date</span>
     <span class="stat-tile__sub">{{ view.spend.text }}</span>
   </div>

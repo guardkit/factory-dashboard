@@ -558,7 +558,7 @@ a.feature-title:hover { text-decoration: underline; }
 .stat-tile--key .stat-tile__sub strong { color: var(--on-dark); }
 /* A tile whose figure we do not have: never a zero. */
 .stat-tile--empty { --bar: var(--line-strong); }
-.stat-tile--empty .stat-tile__value { font-size: 20px; line-height: 44px; color: var(--text-dim); }
+.stat-tile--empty .stat-tile__value { display: flex; align-items: center; gap: 8px; font-size: 20px; line-height: 44px; color: var(--text-dim); }
 
 /* ==== figures: estimates, bars, splits, sparklines (for part B; nothing uses them yet) ==== */
 

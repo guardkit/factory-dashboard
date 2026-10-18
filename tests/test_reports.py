@@ -157,3 +157,22 @@ def test_the_weekly_report_shows_spend_as_not_measured_never_a_figure(store: sql
     assert "Not measured" in tile and "Spend" in tile
     assert "£" not in html
     assert f'<strong class="key-figure">{report.headline.delivered_count} features merged and checked</strong>' in html
+
+
+def test_no_spend_tile_writes_its_own_words() -> None:
+    """Each tile shows its page's spend slot through one macro, so a measured cost replaces "Not
+    measured" everywhere at once. (Now's view carries no spend slot yet; the cost feed adds one.)"""
+    for name, slot in (("reports.html", "h.spend"), ("feature.html", "page.spend"), ("project.html", "view.spend")):
+        source = (TEMPLATES / name).read_text(encoding="utf-8")
+        assert f"m.spend_value({slot})" in source, name
+        assert "Not measured" not in source, name
+    env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=select_autoescape(default=True))
+    macros = env.get_template("macros.html").module
+    gap = str(macros.spend_value(dbread.SpendSlot()))
+    assert gap.endswith("Not measured") and "#i-slash" in gap
+
+    class Measured:  # the shape the cost feed gives a slot
+        value = "$2.20"
+        label = ""
+
+    assert str(macros.spend_value(Measured())) == "$2.20"

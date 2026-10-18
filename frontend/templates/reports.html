@@ -61,7 +61,7 @@
   {% if has_plan %}
   <div class="stat-tile{% if h.behind_count %} report-stats__tile--behind{% endif %}"><span class="stat-tile__value num">{{ h.behind_count }}</span><span class="stat-tile__label">Milestones behind</span></div>
   {% endif %}
-  <div class="stat-tile stat-tile--empty" data-state="not-measured"><span class="stat-tile__value">Not measured</span><span class="stat-tile__label">Spend</span></div>
+  <div class="stat-tile{% if not (h.spend.value is defined and h.spend.value) %} stat-tile--empty{% endif %}" data-state="{{ (h.spend.state if h.spend.state is defined else 'not_measured') | replace('_', '-') }}"><span class="stat-tile__value">{{ m.spend_value(h.spend) }}</span><span class="stat-tile__label">Spend</span></div>
 </section>
 {% endif %}
 

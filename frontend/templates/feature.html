@@ -39,8 +39,8 @@
     <span class="stat-tile__value num">{{ page.attempts | length }}</span>
     <span class="stat-tile__label">Build attempts</span>
   </div>
-  <div class="stat-tile stat-tile--empty">
-    <span class="stat-tile__value">{{ m.icon('slash') }}Not measured</span>
+  <div class="stat-tile{% if not (page.spend.value is defined and page.spend.value) %} stat-tile--empty{% endif %}">
+    <span class="stat-tile__value">{{ m.spend_value(page.spend) }}</span>
     <span class="stat-tile__label">Cost so far</span>
     <span class="stat-tile__sub">{{ page.spend.text }}</span>
   </div>
