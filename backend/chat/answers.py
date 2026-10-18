@@ -34,6 +34,13 @@ def _join(items: Sequence[str]) -> str:
     return "; ".join(items[:-1]) + "; and " + items[-1]
 
 
+def _join_or(items: Sequence[str]) -> str:
+    items = [i for i in items if i]
+    if len(items) <= 1:
+        return "".join(items)
+    return "; ".join(items[:-1]) + "; or " + items[-1]
+
+
 def _plural(count: str, one: str, many: str) -> str:
     return f"{count} {one if count == '1' else many}"
 
@@ -188,13 +195,19 @@ def render(result: Result) -> str:
     if result.status == "not_found":
         kind = _s(fields, "kind") or "record"
         name = _s(fields, "name")
-        return (f"I have no record of a {kind} called “{name}”." if name else f"I have no record of that {kind}.")
+        # "couldn't find", not "there is no": the search can miss a record the user named differently.
+        return (f"I couldn't find a {kind} matching “{name}”." if name else f"I couldn't find that {kind}.")
     if result.status == "ambiguous":
         listed = [str(x) for x in _list(fields, "listed")]
         more = _s(fields, "more")
         tail = f" (and {more} more)" if more and more != "0" else ""
         name = _s(fields, "name")
         what = f"“{name}”" if name else "that name"
+        if _s(fields, "partial"):
+            kind = _s(fields, "kind") or "record"
+            head = (f"I couldn't find a {kind} matching “{name}” exactly." if name
+                    else f"I couldn't find a {kind} matching that exactly.")
+            return f"{head} Did you mean {_join_or(listed)}{tail}?"
         return (f"{_s(fields, 'count')} {_s(fields, 'kind')}s match {what}: "
                 f"{_join(listed)}{tail}. Which one do you mean?")
     if result.status == "bad_period":

@@ -8,8 +8,11 @@ question. `parse_reply` holds it to exactly that:
   status in free text is refused);
 - the query must be one of the registered ones, and its arguments the ones that query takes, as
   short strings; ``{"query": "none"}`` (the model saying the records cannot answer) is refused;
-- a clarifying question must be one short question with no digits, no feature codes and no status
-  words, so the model cannot state a fact while asking.
+- a clarifying question must be one short question with no numerals (digits, Roman numerals,
+  fractions: any character Python calls numeric), no number words, no money words or currency
+  symbols, no feature codes and no status words, so the model cannot state a fact while asking.
+  This is a plain word check, so it errs towards refusing: a refused question gets the fixed
+  sentence, which is safe.
 
 Anything else becomes a `Rejection`, which the chat answers with the one fixed sentence.
 
@@ -22,6 +25,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
@@ -52,16 +56,45 @@ Reply = Choice | Clarify | Rejection
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 _THINK_RE = re.compile(r"^<think>.*?</think>\s*", re.DOTALL)
-_DIGIT_RE = re.compile(r"\d")
 _CODE_RE = re.compile(r"(?i:\bfeat-)|\b[A-Z]{2,}-[A-Z0-9]+\b")
 _STATUS_WORDS = (
-    "delivered", "merged", "merge", "merging", "failed", "failing", "failure", "building", "built",
-    "waiting", "stalled", "stuck", "cancelled", "canceled", "interrupted", "queued", "approved",
-    "declined", "rejected", "complete", "completed", "finished", "passed", "blocked", "running", "paused",
-    "planning", "planned", "late", "behind", "ahead", "on track", "at risk", "off track", "in progress",
-    "on target", "done", "shipped", "broken", "succeeded", "successful",
+    "delivered", "deliver", "delivering", "merged", "merge", "merging", "fail", "fails", "failed", "failing",
+    "failure", "error", "errors", "errored", "crash", "crashed", "crashes", "abandoned", "abandon", "aborted",
+    "stopped", "stop", "stops", "killed", "timed out", "hung", "dead", "died", "building", "built",
+    "waiting", "stalled", "stuck", "cancelled", "canceled", "interrupted", "queued", "pending", "approved",
+    "accepted", "signed off", "sign off", "declined", "rejected", "complete", "completed", "finished",
+    "passed", "blocked", "running", "paused", "started", "planning", "planned", "late", "overdue", "delayed",
+    "slipped", "behind", "ahead", "early", "on track", "at risk", "off track", "in progress", "on target",
+    "done", "shipped", "deployed", "deploy", "deploying", "released", "release", "live", "rolled back",
+    "reverted", "retried", "broken", "succeeded", "success", "successful",
 )
 _STATUS_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in _STATUS_WORDS) + r")\b", re.IGNORECASE)
+#: Number words. "one" is left out on purpose: it is nearly always the pronoun ("the follow-up one",
+#: "which one"), and every other count it could state is a number word refused here.
+_NUMBER_WORDS = (
+    "zero", "nil", "none", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+    "twenty", "thirty", "forty", "fourty", "fifty", "sixty", "seventy", "eighty", "ninety",
+    "hundred", "hundreds", "thousand", "thousands", "million", "millions", "billion", "billions",
+    "dozen", "dozens", "half", "halves", "quarter", "double", "twice", "triple", "percent", "per cent",
+)
+_NUMBER_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in _NUMBER_WORDS) + r")\b", re.IGNORECASE)
+_MONEY_WORDS = (
+    "pound", "pounds", "quid", "dollar", "dollars", "euro", "euros", "pence", "penny", "cent", "cents",
+    "cost", "costs", "costed", "costing", "costly", "spent", "spend", "spends", "spending", "price", "prices",
+    "priced", "paid", "fee", "fees", "budget", "expensive", "cheap", "cheaper",
+)
+_MONEY_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in _MONEY_WORDS) + r")\b", re.IGNORECASE)
+
+
+def _numeral(text: str) -> str:
+    """The first numeral in `text` (a digit, a Roman numeral, a fraction…), or ""."""
+    return next((c for c in text if c.isnumeric()), "")
+
+
+def _currency(text: str) -> str:
+    """The first currency symbol in `text` (£, $, €, ¥…), or ""."""
+    return next((c for c in text if unicodedata.category(c) == "Sc"), "")
 
 
 def _strip(raw: str) -> str:
@@ -81,11 +114,18 @@ def clarify_problem(question: object) -> str:  # noqa: PLR0911 (one return per r
         return "clarifying question is too long"
     if not q.endswith("?") or q.count("?") != 1:
         return "clarifying question is not one question"
-    if _DIGIT_RE.search(q):
-        return "clarifying question contains a digit"
     if _CODE_RE.search(q):
         return "clarifying question contains a feature code"
-    if m := _STATUS_RE.search(q):
+    if c := _numeral(q):
+        return f"clarifying question contains the numeral {c!r}"
+    if c := _currency(q):
+        return f"clarifying question contains the currency symbol {c!r}"
+    words = q.replace("-", " ")   # "ninety-nine", "signed-off" read as words
+    if m := _NUMBER_RE.search(words):
+        return f"clarifying question contains the number word {m.group(1).lower()!r}"
+    if m := _MONEY_RE.search(words):
+        return f"clarifying question contains the money word {m.group(1).lower()!r}"
+    if m := _STATUS_RE.search(words):
         return f"clarifying question contains the status word {m.group(1).lower()!r}"
     if "<" in q or ">" in q:
         return "clarifying question contains markup"

@@ -95,7 +95,7 @@ def test_feature_status_by_code_matches_the_feature_page(ctx: tools.Context) -> 
     found = dbread.feature_page(ctx.db_path, "FEAT-0001", NOW)
     assert found is not None
     _chrome, page = found
-    assert r.fields["label"] == "Search box that filters notes by title. (FEAT-0001)"
+    assert r.fields["label"] == "Search box that filters notes by title (FEAT-0001)"
     assert r.fields["status_text"] == page.status_text
     assert r.fields["elapsed"] == page.elapsed
     assert r.fields["verdict"] == page.verdict.label
@@ -134,7 +134,54 @@ def test_feature_status_lists_every_feature_with_the_same_name(ctx: tools.Contex
 def test_feature_status_not_found_says_so(ctx: tools.Context) -> None:
     r = tools.feature_status(ctx, "a rocket launcher")
     assert r.status == "not_found"
-    assert answers.render(r) == "I have no record of a feature called “a rocket launcher”."
+    assert answers.render(r) == "I couldn't find a feature matching “a rocket launcher”."
+    # One shared word ("notes") out of three is not close enough to offer.
+    assert tools.feature_status(ctx, "rocket notes launcher").status == "not_found"
+
+
+def test_a_near_name_offers_the_closest_features(ctx: tools.Context) -> None:
+    r = tools.feature_status(ctx, "the box that searches notes")
+    assert (r.status, r.fields["partial"]) == ("ambiguous", "yes")
+    assert [c.href for c in r.candidates] == ["/features/FEAT-0001"]
+    assert answers.render(r) == ("I couldn't find a feature matching “the box that searches notes” exactly. "
+                                 "Did you mean Search box that filters notes by title (FEAT-0001), "
+                                 "sent today at 10:00:00?")
+
+
+def _trim_ledger(tmp_path: Path) -> Path:
+    fake = ForgeFake(tmp_path / "forge.db")
+    delivered_feature(fake, 1, text="Search box that filters notes by title.")
+    fake.planning("c2", "Trim spaces from a note's title.")
+    fake.build("b2", "FEAT-6F2C", "c2", status="RUNNING", queued=100, started=100, completed=None)
+    store = tmp_path / "readmodel.db"
+    store_from(fake, store, now=NOW).close()
+    return store
+
+
+def test_a_feature_asked_for_in_other_words_is_offered_not_denied(tmp_path: Path) -> None:
+    """The coach's case: "trims spaces from a note's title" once got "no record" while FEAT-6F2C
+    ("Trim spaces from a note's title.") was on record."""
+    store = _trim_ledger(tmp_path)
+    r = tools.feature_status(tools.Context(store, NOW), "trims spaces from a note's title")
+    assert (r.status, r.fields["partial"]) == ("ambiguous", "yes")
+    assert [c.href for c in r.candidates] == ["/features/FEAT-6F2C"]   # the search box shares too few words
+    # Only the word endings differ here, so this one needs them read loosely.
+    assert [c.href for c in tools.feature_status(tools.Context(store, NOW), "trimming titles").candidates] == \
+        ["/features/FEAT-6F2C"]
+    model = FakeModel('{"query": "feature_status", "args": {"feature": "trims spaces from a note\'s title"}}')
+    a = _chat(store, model).ask("Where is the feature that trims spaces from a note's title up to?", OPERATOR)
+    assert a.kind == "clarify" and a.follow_up is not None
+    assert a.text.startswith("I couldn't find a feature matching “trims spaces from a note's title” exactly. "
+                             "Did you mean Trim spaces from a note's title (FEAT-6F2C), sent ")
+    assert "no record" not in a.text
+    assert [ref.href for ref in a.refs] == ["/features/FEAT-6F2C"]
+
+
+def test_word_endings_read_loosely() -> None:
+    assert {tools._stem(w) for w in ("trim", "trims", "trimming", "trimmed")} == {"trim"}
+    assert tools._stem("spaces") == tools._stem("space")
+    assert tools._stem("titles") == tools._stem("title")
+    assert tools._stems("a note's title") == tools._stems("notes titles")
 
 
 def test_project_summary_matches_the_project_page(ctx: tools.Context) -> None:
@@ -173,7 +220,7 @@ def test_delivered_matches_the_delivered_page(ctx: tools.Context) -> None:
     panel = dbread.delivered_view(ctx.db_path, ("2026-10-12", "2026-10-18"), NOW).panel
     assert r.fields["count"] == str(panel.delivered_count) == "2"
     assert [row["label"] for row in _rows(r)] == [
-        "Search box that filters notes by title. (FEAT-0001)", "Export notes as a file. (FEAT-0007)"]
+        "Search box that filters notes by title (FEAT-0001)", "Export notes as a file (FEAT-0007)"]
     assert r.refs[-1].href == "/delivered?from=2026-10-12&to=2026-10-18"
     assert tools.delivered(ctx, "last week").fields["count"] == "0"
     assert tools.delivered(ctx, "this week", "other/notes").fields["count"] == "0"
@@ -228,7 +275,8 @@ def _every_result(ctx: tools.Context) -> list[tools.Result]:
         tools.feature_status(ctx, "FEAT-0001"), tools.feature_status(ctx, "FEAT-0003"),
         tools.feature_status(ctx, "FEAT-0004"), tools.feature_status(ctx, "FEAT-0006"),
         tools.feature_status(ctx, "sort the notes"), tools.feature_status(ctx, "export notes as a file"),
-        tools.feature_status(ctx, "zzz"), tools.project_summary(ctx, "acme/notes", "last 30 days"),
+        tools.feature_status(ctx, "zzz"), tools.feature_status(ctx, "the box that searches notes"),
+        tools.project_summary(ctx, "acme/notes", "last 30 days"),
         tools.project_summary(ctx, "notes"), tools.open_issues(ctx), tools.open_issues(ctx, "acme/notes-api"),
         tools.delivered(ctx), tools.delivered(ctx, "last month"), tools.delivered(ctx, "bad"),
         tools.weekly_report(ctx), tools.weekly_report(ctx, "this week", "acme/notes"),
@@ -291,38 +339,90 @@ def test_a_well_formed_choice_and_clarify_pass() -> None:
     assert isinstance(grounding.parse_reply('{"clarify": "Do you mean the follow-up one?"}', Q), grounding.Clarify)
 
 
-@pytest.mark.parametrize("raw", [
-    "", "Three features were delivered this week.", "[1, 2]", '"text"', "{not json",
-    '{"query": "delivered", "answer": "3 features were delivered"}',
-    '{"answer": "FEAT-0001 is delivered"}',
-    '{"query": "delivered", "clarify": "Which week?"}',
-    '{"query": "deploy_now"}', '{"query": "none"}', '{"query": 7}',
-    '{"query": "delivered", "args": {"period": "this week", "colour": "green"}}',
-    '{"query": "feature_status", "args": {}}',
-    '{"query": "feature_status", "args": {"feature": 12}}',
-    '{"query": "feature_status", "args": ["x"]}',
-    '{"query": "feature_status", "args": {"feature": "' + "x" * 200 + '"}}',
+@pytest.mark.parametrize(("raw", "reason"), [
+    ("", "empty reply"),
+    ("Three features were delivered this week.", "reply is not JSON"),
+    ("[1, 2]", "reply is not a JSON object"),
+    ('"text"', "reply is not a JSON object"),
+    ("{not json", "reply is not JSON"),
+    ('{"query": "delivered", "answer": "3 features were delivered"}', "reply has the wrong keys ['answer', 'query']"),
+    ('{"answer": "FEAT-0001 is delivered"}', "reply has the wrong keys ['answer']"),
+    ('{"query": "delivered", "clarify": "Which week?"}', "reply has the wrong keys ['clarify', 'query']"),
+    ('{"query": "deploy_now"}', "unknown query 'deploy_now'"),
+    # Arguments another query would take must not carry an unknown query through.
+    ('{"query": "deploy_now", "args": {"feature": "x"}}', "unknown query 'deploy_now'"),
+    ('{"query": "none"}', "the model says the records cannot answer this"),
+    ('{"query": 7}', "query name is not text"),
+    ('{"query": "delivered", "args": {"period": "this week", "colour": "green"}}',
+     "unknown argument(s) ['colour'] for delivered"),
+    ('{"query": "feature_status", "args": {}}', "missing argument(s) ['feature'] for feature_status"),
+    ('{"query": "feature_status", "args": {"feature": 12}}', "argument feature is not text"),
+    ('{"query": "feature_status", "args": ["x"]}', "args is not an object"),
+    ('{"query": "feature_status", "args": {"feature": "' + "x" * 200 + '"}}', "argument feature is too long"),
 ])
-def test_replies_outside_the_schema_are_refused(raw: str) -> None:
-    assert isinstance(grounding.parse_reply(raw, Q), grounding.Rejection), raw
+def test_replies_outside_the_schema_are_refused(raw: str, reason: str) -> None:
+    assert grounding.parse_reply(raw, Q) == grounding.Rejection(reason), raw
+
+
+@pytest.mark.parametrize(("question", "reason"), [
+    ("Do you mean the one from 16 October?", "the numeral '1'"),
+    ("Do you mean Ⅸ or Ⅹ?", "the numeral 'Ⅸ'"),
+    ("Do you mean the one half done, ½ of it?", "the numeral '½'"),
+    ("Do you mean the one that cost £40?", "the numeral '4'"),
+    ("Do you mean the one that cost £ forty?", "the currency symbol '£'"),
+    ("Do you mean the $ one?", "the currency symbol '$'"),
+    ("Do you mean the € one?", "the currency symbol '€'"),
+    ("Do you mean FEAT-0001?", "a feature code"),
+    ("Do you mean feat-2555?", "a feature code"),
+    ("Do you mean feat-abcd?", "a feature code"),
+    ("Do you mean one of the ninety-nine features James signed off?", "the number word 'ninety'"),
+    ("Do you mean the one numbered ninety nine?", "the number word 'ninety'"),
+    ("Do you mean the twelve features?", "the number word 'twelve'"),
+    ("Do you mean the hundred or so features?", "the number word 'hundred'"),
+    ("Do you mean the dozen tagged ones?", "the number word 'dozen'"),
+    ("Do you mean the one half finished?", "the number word 'half'"),
+    ("Do you mean the ten percent?", "the number word 'ten'"),
+    ("Do you mean the one using a lot of percent?", "the number word 'percent'"),
+    ("Do you mean the twenty-first?", "the number word 'twenty'"),
+    ("Do you mean the search feature that cost about forty pounds?", "the number word 'forty'"),
+    ("Do you mean the search feature that cost a lot?", "the money word 'cost'"),
+    ("Do you mean the one worth pounds?", "the money word 'pounds'"),
+    ("Do you mean the one we spent most on?", "the money word 'spent'"),
+    ("Do you mean the dollars one?", "the money word 'dollars'"),
+    ("Did the build fail, or do you mean the plan?", "the status word 'fail'"),
+    ("Was it the one that crashed and was abandoned?", "the status word 'crashed'"),
+    ("Was it the abandoned one?", "the status word 'abandoned'"),
+    ("Do you mean the feature deployed yesterday?", "the status word 'deployed'"),
+    ("Do you mean the one released on Friday?", "the status word 'released'"),
+    ("Do you mean the one that errored?", "the status word 'errored'"),
+    ("Do you mean the one that stopped?", "the status word 'stopped'"),
+    ("Do you mean the one James signed-off?", "the status word 'signed off'"),
+    ("Do you mean the one that was delivered?", "the status word 'delivered'"),
+    ("Do you mean the feature that failed?", "the status word 'failed'"),
+    ("Do you mean the one that is on track?", "the status word 'on track'"),
+    ("Is it the one still in progress?", "the status word 'in progress'"),
+    ("Which project? Which week?", "not one question"),
+    ("Tell me which project", "not one question"),
+    ("Which <b>project</b>?", "markup"),
+    ("", "empty"),
+])
+def test_clarifying_questions_cannot_state_facts(question: str, reason: str) -> None:
+    reply = grounding.parse_reply(json.dumps({"clarify": question}), Q)
+    assert isinstance(reply, grounding.Rejection), question
+    assert reply.reason.endswith(reason), (question, reply.reason)
 
 
 @pytest.mark.parametrize("question", [
-    "Do you mean the one from 16 October?",          # a digit
-    "Do you mean FEAT-0001?",                       # a feature code
-    "Do you mean feat-2555?",
-    "Do you mean the one that was delivered?",      # status words
-    "Do you mean the feature that failed?",
-    "Do you mean the one that is on track?",
-    "Is it the one still in progress?",
-    "Which project? Which week?",                   # two questions
-    "Tell me which project",                        # not a question
-    "Which <b>project</b>?",
-    "",
+    "Do you mean the tags feature or the search feature?",
+    "Which project do you mean?",
+    "Do you mean acme/notes or other/notes?",
+    "Which week do you mean?",
+    "Do you mean the follow-up one?",
+    "Do you mean the export feature or the import feature?",
+    "Which one do you mean, the search box or the clear button?",
 ])
-def test_clarifying_questions_cannot_state_facts(question: str) -> None:
-    reply = grounding.parse_reply(json.dumps({"clarify": question}), Q)
-    assert isinstance(reply, grounding.Rejection), question
+def test_plain_clarifying_questions_still_pass(question: str) -> None:
+    assert grounding.parse_reply(json.dumps({"clarify": question}), Q) == grounding.Clarify(question)
 
 
 def test_queries_for_a_client_tenant_are_none() -> None:
@@ -368,7 +468,7 @@ def test_ask_runs_the_chosen_query_and_writes_the_template(store: Path) -> None:
     model = FakeModel('{"query": "feature_status", "args": {"feature": "search box"}}')
     a = _chat(store, model).ask("Where is the search box feature?", OPERATOR)
     assert a.kind == "answer" and a.query == "feature_status"
-    assert a.text.startswith("Search box that filters notes by title. (FEAT-0001), in acme/notes: "
+    assert a.text.startswith("Search box that filters notes by title (FEAT-0001), in acme/notes: "
                              "merged and checked on 16 Oct 2026. On track.")
     assert a.refs[0].href == "/features/FEAT-0001"
     assert len(model.calls) == 1
@@ -378,9 +478,14 @@ def test_ask_runs_the_chosen_query_and_writes_the_template(store: Path) -> None:
     assert 0 < timeout <= QUESTION_SECONDS
 
 
-def test_an_unknown_query_gets_the_plain_refusal_with_links(store: Path) -> None:
-    a = _chat(store, FakeModel('{"query": "restart_the_factory"}')).ask("Restart it", OPERATOR)
-    assert a.kind == "refused"
+@pytest.mark.parametrize("raw", ['{"query": "restart_the_factory"}',
+                                 '{"query": "deploy_now", "args": {"feature": "x"}}'])
+def test_an_unknown_query_gets_the_plain_refusal_with_links(store: Path, raw: str,
+                                                             caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("INFO", logger="factory_dashboard.chat"):
+        a = _chat(store, FakeModel(raw)).ask("Restart it", OPERATOR)
+    assert (a.kind, a.query) == ("refused", "")
+    assert "model reply refused: unknown query" in caplog.text
     assert a.text == answers.CANT_ANSWER
     assert a.refs == REFUSAL_REFS
     assert {r.href for r in a.refs} == {"/features", "/delivered", "/issues", "/reports"}
@@ -460,7 +565,7 @@ def test_a_not_found_name_is_echoed_only_when_the_user_said_it(store: Path) -> N
     assert "“rocket”" in said.ask("Where is the rocket?", OPERATOR).text
     invented = _chat(store, FakeModel('{"query": "feature_status", "args": {"feature": "delivered 3 times"}}'))
     a = invented.ask("Where is the rocket?", OPERATOR)
-    assert a.text == "I have no record of that feature."
+    assert a.text == "I couldn't find that feature."
     assert "3" not in a.text
 
 

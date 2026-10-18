@@ -7,7 +7,9 @@ period) as links to the pages. The answer text is written from these fields by a
 (`backend/chat/answers.py`); the model never writes a figure, a status or a name.
 
 A name that matches nothing says so; a name that matches more than one record lists them all and
-asks which (status ``ambiguous``), never a guess.
+asks which (status ``ambiguous``), never a guess. A feature name whose words do not all match
+any feature falls back to a looser match (word endings and small words ignored) and lists the
+closest features as "did you mean" (also ``ambiguous``, with ``partial`` set), never as an answer.
 
 Cost and time are not measured yet (they arrive with part B). `cost_summary` and `time_summary` are
 registered so a question about them gets a plain "not measured yet", never a made-up number.
@@ -78,6 +80,13 @@ _CODE_RE = re.compile(r"^feat-[0-9a-z]+$", re.IGNORECASE)
 _WORD_RE = re.compile(r"[a-z0-9]+")
 _STOP = frozenset({"the", "a", "an", "of", "for", "to", "and", "that", "feature", "called", "named", "one",
                    "with", "in", "on", "by", "is", "it", "its", "which", "this", "about", "project"})
+#: Further small words ignored by the looser match only (the every-word match keeps its old list).
+_LOOSE_STOP = _STOP | frozenset({"from", "as", "at", "into", "onto", "up", "so", "or", "but", "not", "be", "are",
+                                 "was", "were", "has", "have", "had", "do", "does", "did", "can", "could", "will",
+                                 "would", "should", "you", "your", "me", "my", "we", "our", "us", "they", "their",
+                                 "where", "what", "when", "how", "who", "there", "these", "those", "some", "any",
+                                 "all", "thing", "things", "something"})
+_ENDINGS = ("ing", "es", "ed", "s")
 MAX_LISTED = 5
 
 
@@ -89,8 +98,37 @@ def _words(text: str) -> set[str]:
     return {w for w in _WORD_RE.findall((text or "").lower()) if w not in _STOP and len(w) > 1}
 
 
+def _stem(word: str) -> str:
+    """A word with a plain ending taken off, so "trims", "trimming" and "trimmed" all read "trim",
+    and "spaces" and "space" both read "spac". Short words are left alone."""
+    for ending in _ENDINGS:
+        if word.endswith(ending) and len(word) - len(ending) >= 3:
+            word = word[: -len(ending)]
+            if ending in ("ing", "ed") and len(word) > 3 and word[-1] == word[-2]:
+                word = word[:-1]      # "trimming" -> "trimm" -> "trim"
+            break
+    return word[:-1] if word.endswith("e") and len(word) > 3 else word
+
+
+def _stems(text: str) -> set[str]:
+    # "note's" splits into "note" and "s"; the lone "s" is dropped with the other one-letter words.
+    return {_stem(w) for w in _WORD_RE.findall((text or "").lower()) if w not in _LOOSE_STOP and len(w) > 1}
+
+
+def title_with_code(title: str, code: str, fallback: str = "") -> str:
+    """Title first, code after, without the title's full stop: "Export notes as a file (FEAT-0006)"."""
+    title = (title or "").rstrip(" .")
+    if code and title and title != code:
+        return f"{title} ({code})"
+    return title or code or fallback
+
+
+def _label(f: Feature) -> str:
+    return title_with_code(f.title, f.code, f.key)
+
+
 def _feature_ref(f: Feature) -> Ref:
-    return Ref("feature", f.label, f.link)
+    return Ref("feature", _label(f), f.link)
 
 
 def _project_ref(project: str) -> Ref:
@@ -126,6 +164,20 @@ def find_features(factory: Factory, name: str) -> list[Feature]:  # noqa: PLR091
     if not words:
         return []
     return [f for f in factory.features if words <= _words(f.title) | _words(f.request_text)]
+
+
+def suggest_features(factory: Factory, name: str) -> list[Feature]:
+    """The closest features when `find_features` finds none: those sharing the most of the name's
+    words, read loosely (endings such as -s, -es, -ing, -ed taken off, small words ignored), and
+    sharing at least half of them. Offered as "did you mean", never taken as the answer."""
+    wanted = _stems(name)
+    if not wanted:
+        return []
+    scored = [(len(wanted & (_stems(f.title) | _stems(f.request_text))), f) for f in factory.features]
+    best = max((n for n, _f in scored), default=0)
+    if best == 0 or best * 2 < len(wanted):
+        return []
+    return [f for n, f in scored if n == best]
 
 
 def projects_on_record(factory: Factory) -> list[str]:
@@ -253,11 +305,12 @@ def _stale_note(ctx: Context) -> str:
     return chrome.banner.text if chrome.banner else ""
 
 
-def _ambiguous(query: str, kind: str, name: str, refs: Iterable[Ref]) -> Result:
+def _ambiguous(query: str, kind: str, name: str, refs: Iterable[Ref], *, partial: bool = False) -> Result:
     refs = tuple(refs)
     shown = refs[:MAX_LISTED]
     return Result(query, "ambiguous", {"kind": kind, "name": name, "count": str(len(refs)),
-                                       "listed": [r.label for r in shown], "more": str(len(refs) - len(shown))},
+                                       "listed": [r.label for r in shown], "more": str(len(refs) - len(shown)),
+                                       "partial": "yes" if partial else ""},
                   candidates=shown)
 
 
@@ -290,17 +343,22 @@ def feature_status(ctx: Context, feature: str) -> Result:
     def read(_conn: sqlite3.Connection, factory: Factory) -> Result:
         found = find_features(factory, feature)
         if not found:
-            return Result("feature_status", "not_found", {"kind": "feature", "name": feature})
+            close = suggest_features(factory, feature)
+            if not close:
+                return Result("feature_status", "not_found", {"kind": "feature", "name": feature})
+            return _ambiguous("feature_status", "feature", feature,
+                              (Ref("feature", f"{_label(f)}, sent {_sent(f, ctx.now)}", f.link) for f in close),
+                              partial=True)
         if len(found) > 1:
             return _ambiguous("feature_status", "feature", feature,
-                              (Ref("feature", f"{f.label}, sent {_sent(f, ctx.now)}", f.link) for f in found))
+                              (Ref("feature", f"{_label(f)}, sent {_sent(f, ctx.now)}", f.link) for f in found))
         f = found[0]
         page = dbread.feature_page(ctx.db_path, f.key, ctx.now)
         assert page is not None
         _chrome, fp = page
         open_issues = [i for i in fp.issues if not i.closed_label]
         fields: dict[str, object] = {
-            "label": f.label, "project": fp.project, "status_text": fp.status_text, "station": _station(f),
+            "label": _label(f), "project": fp.project, "status_text": fp.status_text, "station": _station(f),
             # Finished without being delivered: the journey marks this step "stopped", not reached.
             "stopped": "yes" if not f.in_progress and not f.delivered_at else "",
             "verdict": fp.verdict.label, "verdict_reason": fp.verdict_reason, "elapsed": fp.elapsed,
@@ -400,13 +458,13 @@ def delivered(ctx: Context, period: str | None = None, project: str | None = Non
         fields: dict[str, object] = {
             "project": name or "", "period_label": p.label, "count": str(len(rows)),
             "more": str(len(rows) - len(shown)),
-            "rows": [{"label": f"{r.title} ({r.code})" if r.code else r.title, "on": r.delivered_date}
+            "rows": [{"label": title_with_code(r.title, r.code), "on": r.delivered_date}
                      for r in shown],
             # Factory-wide, so only when no project was asked for.
             "other_endings": "" if name else panel.other_endings,
             "stale_note": _stale_note(ctx),
         }
-        refs = [Ref("feature", f"{r.title} ({r.code})" if r.code else r.title, r.link) for r in shown]
+        refs = [Ref("feature", title_with_code(r.title, r.code), r.link) for r in shown]
         refs.append(_period_ref(p, "delivered"))
         if name:
             refs.append(_project_ref(name))
@@ -437,7 +495,7 @@ def weekly_report(ctx: Context, period: str | None = None, project: str | None =
             "project": name or "", "period_label": p.label,
             "withheld": "yes" if h.withheld else "", "withheld_since": h.withheld_since,
             "delivered_count": str(len(delivered_rows)), "in_flight_count": str(len(in_flight_rows)),
-            "delivered": [f"{r.title} ({r.code})" if r.code else r.title for r in delivered_rows[:MAX_LISTED]],
+            "delivered": [title_with_code(r.title, r.code) for r in delivered_rows[:MAX_LISTED]],
             "more_delivered": str(max(0, len(delivered_rows) - MAX_LISTED)),
             "plan_agreed": "yes" if milestones else "",
             "behind": str(h.behind_count), "on_target": str(h.on_target_count), "ahead": str(h.ahead_count),
@@ -447,7 +505,7 @@ def weekly_report(ctx: Context, period: str | None = None, project: str | None =
         refs = [Ref("period", f"Weekly report, {p.label}",
                     "/reports?" + urlencode({"from": p.window[0], "to": p.window[1]}))]
         if not h.withheld:
-            refs += [Ref("feature", f"{r.title} ({r.code})" if r.code else r.title, r.link)
+            refs += [Ref("feature", title_with_code(r.title, r.code), r.link)
                      for r in delivered_rows[:MAX_LISTED]]
         if name:
             refs.append(_project_ref(name))
