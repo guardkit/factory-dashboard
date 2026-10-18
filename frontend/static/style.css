@@ -1129,49 +1129,145 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 }
 
 /* ==== stage 2b: Reports, export, Fleet, Login, Client ==== */
-/* Part A's own rules for these pages, carried over on the new tokens until stage 2b replaces them. */
+/* Names used here (besides the shared ones above): report-toolbar, report-toolbar__end,
+   report-rendering(__active, __link), report-engagements(__active), report-headline(__line),
+   report-stats, report-stats__tile--behind, report-delivered(__list, __row, __commit),
+   report-issues(__counts, __list, __row, __row--closed), report-plan, plan-list,
+   plan-row(--ahead, --on_target, --behind, --no_baseline), plan-row__id, plan-row__detail,
+   report-inflight, report-export(__head, __brand, __section, __foot), deliv-list, service-list,
+   service-row(--ok, --fail, --unknown), service-row__name, __detail, __models, __resident,
+   feed__heartbeat, feed__heartbeat-text, feed__read, feed__error, login-layout, login-brand,
+   login-brand__mark, login-brand__site, login-panel, login-card(__title, __error, __note),
+   login-form, content--client, client-dark, client-dark__lead. */
 
-.report-head { display: flex; gap: 16px; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; }
-.report-toolbar { display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; line-height: 18px; color: var(--text-dim); }
-.report-rendering__active { font-weight: 700; color: var(--heading); }
-.report-rendering__link, .report-engagements a { color: var(--accent-text); text-decoration: none; }
-.report-engagements__active { font-weight: 700; }
-.report-headline__line { font-size: 15px; color: var(--heading); margin: 0 0 8px; }
-.plan-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.plan-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.plan-row__id { font-weight: 600; color: var(--heading); }
-.plan-row__detail, .plan-row__target { color: var(--text-dim); font-size: 13px; }
-.plan-row--withheld { color: var(--text-dim); }
-.report-delivered__list, .report-issues__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.report-delivered__row, .report-issues__row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.report-issues__counts { color: var(--text-dim); font-size: 13px; margin: 0 0 8px; }
-.report-issues__row--closed { color: var(--text-dim); text-decoration: line-through; }
+/* Reports: the toolbar with its segmented switches (one level each, side by side). */
+.report-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-12); }
+.report-toolbar__end { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+.report-rendering, .report-engagements {
+  display: inline-flex; flex-wrap: wrap; padding: 3px; gap: 2px;
+  border-radius: var(--radius-md); background: var(--surface-sunken); border: 1px solid var(--line);
+}
+.report-rendering > a, .report-rendering > span, .report-engagements > a {
+  padding: 7px 14px; border-radius: 6px; font-size: 14px; line-height: 16px; font-weight: 600;
+  color: var(--text-dim); text-decoration: none; white-space: nowrap;
+}
+.report-rendering > a:hover, .report-engagements > a:hover { color: var(--heading); }
+.report-rendering > .report-rendering__active, .report-engagements > a[aria-current="page"] {
+  background: var(--surface); color: var(--heading); box-shadow: var(--shadow-card);
+}
 
-.report-export { max-width: 860px; width: 100%; overflow-x: auto; }
-.report-export__back { display: inline-block; color: var(--accent-text); text-decoration: none; font-size: 14px; }
-.report-export__head h1 { margin: 0 0 4px; font-family: var(--font-heading); color: var(--heading); }
-.report-export__meta { display: flex; gap: 16px; align-items: center; color: var(--text-dim); font-size: 13px; flex-wrap: wrap; }
-.report-export__section h2 { font-family: var(--font-heading); font-size: 20px; line-height: 26px; color: var(--heading); border-bottom: 1px solid var(--line); padding-bottom: 4px; }
-.report-export__foot { color: var(--text-dim); font-size: 13px; }
+/* The headline: the Deep Green kicker band. The count is the screen's one Luminous Green moment. */
+.report-headline { background: var(--kicker); border-color: var(--kicker); color: var(--on-dark); }
+.report-headline .panel-card__title { color: var(--on-dark-accent); font-size: 13px; line-height: 16px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; }
+.report-headline .panel-card__header .asof-chip { color: var(--on-dark-dim); }
+.report-headline .panel-card__body { color: var(--on-dark); }
+.report-headline__line { margin: 0; font-size: 16px; line-height: 24px; color: var(--on-dark); }
+.report-headline__line strong { font-family: var(--font-heading); font-weight: 700; }
+.report-headline :focus-visible { outline-color: var(--on-dark-accent); }
+.report-stats__tile--behind { --bar: var(--status-fail); }
 
-.service-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.service-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-.service-row__name { font-weight: 600; color: var(--heading); }
-.service-row__resident { color: var(--text-dim); font-size: 12px; }
-.status-dot--ok { color: var(--status-done); }
-.status-dot--idle { color: var(--text-dim); }
-.status-dot--fail { color: var(--status-fail); }
-.status-dot--unknown { color: var(--text-dim); font-weight: 700; }
-.feed__heartbeat { color: var(--text); }
+/* Lists in the signal look: delivered, plan against actual, issues. */
+.report-delivered__row .signal-row__name a, .report-issues__row .signal-row__name a,
+.plan-row .signal-row__name a { color: var(--heading); text-decoration: none; }
+.report-delivered__row .signal-row__name a:hover, .report-issues__row .signal-row__name a:hover,
+.plan-row .signal-row__name a:hover { text-decoration: underline; }
+.report-delivered__row .signal-row__text, .report-issues__row .signal-row__text {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px;
+}
+.report-delivered__commit { white-space: nowrap; }
+.plan-row--no_baseline .band-chip { border-style: dashed; }
+/* The no-plan chip already says it; the detail beside it reads as plain words, not a second badge. */
+.plan-row--no_baseline .named-gap { padding: 0; border: 0; background: none; color: var(--text-dim); font-weight: 500; font-size: 14px; line-height: 20px; }
+.panel-card__body > .report-issues__counts { margin: 0 0 var(--space-12); font-size: 13px; line-height: 18px; color: var(--text-dim); }
+.report-issues__row--closed .signal-row__name, .report-issues__row--closed .signal-row__name a { color: var(--text-dim); font-weight: 500; }
 
-.layout-login { display: flex; min-height: 100vh; align-items: center; justify-content: center; padding: var(--space-16); }
-.login-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-card); padding: var(--space-24); width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 14px; }
-.login-card__title { margin: 0; font-family: var(--font-heading); font-size: 22px; line-height: 28px; color: var(--heading); }
-.login-card__note { margin: 0; color: var(--text-dim); font-size: 13px; line-height: 18px; }
-.login-form { display: flex; flex-direction: column; gap: 14px; }
+/* The in-progress table: times and the not-measured cell stay whole (the shared table lets long
+   words break anywhere, which split them mid-word at this width). */
+.report-inflight .dense-table td.num, .report-inflight .dense-table td .spend-slot { overflow-wrap: normal; white-space: nowrap; }
 
-.content--client { max-width: 900px; width: 100%; margin: 0 auto; }
-.client-dark__lead { margin: 0; font-size: 18px; line-height: 28px; color: var(--text-dim); }
+/* The client-safe document: a white page, light even in dark mode (data-theme on the article). */
+.report-export {
+  width: 100%; max-width: 860px; margin: 0 auto;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-card);
+  padding: 48px 56px; display: flex; flex-direction: column; gap: var(--space-32);
+}
+.report-export__brand {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-16);
+  padding-bottom: var(--space-24); border-bottom: 2px solid var(--deep-green);
+}
+.report-export__brand img { height: 26px; width: auto; display: block; }
+.report-export__brand span { font-size: 13px; line-height: 18px; color: var(--text-dim); text-align: right; }
+.report-export__section h2 { margin: 0 0 var(--space-12); font-family: var(--font-heading); font-size: 20px; line-height: 26px; font-weight: 700; color: var(--heading); }
+.report-export__foot {
+  padding-top: var(--space-16); border-top: 1px solid var(--line);
+  font-size: 13px; line-height: 18px; color: var(--text-dim);
+  display: flex; justify-content: space-between; gap: var(--space-16); flex-wrap: wrap;
+}
+.report-export .page-head__meta { margin-top: var(--space-8); }
+.deliv-list { list-style: none; margin: 0; padding: 0; }
+.deliv-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--space-16); padding: 12px 0; border-top: 1px solid var(--line); }
+.deliv-list li:first-child { border-top: 0; padding-top: 0; }
+.deliv-list b { font-family: var(--font-heading); font-size: 16px; line-height: 22px; font-weight: 600; color: var(--heading); }
+.deliv-list p { grid-column: 1; margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; line-height: 20px; color: var(--text-dim); }
+.deliv-list li > .status-pill, .deliv-list li > .band-chip { grid-column: 2; grid-row: 1 / span 2; align-self: center; justify-self: end; }
+
+/* Fleet: services and the data feed. */
+.service-row__detail { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.service-row__models { grid-column: 1 / -1; margin-top: 8px; }
+.service-row__models summary {
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; line-height: 18px; font-weight: 600; color: var(--accent-text);
+}
+.service-row__resident { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.feed__heartbeat { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; color: var(--text); }
+.feed__read { color: var(--text-dim); }
+.panel-card__body > .feed__error { margin-top: var(--space-12); }
+
+/* Sign in: the dark brand panel with its soft circles, then the form. */
+.layout-login { margin: 0; min-height: 100vh; background: var(--bg); }
+.login-layout { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+.login-brand {
+  position: relative; overflow: hidden; isolation: isolate;
+  background: var(--deep-green); color: var(--text);
+  padding: 40px 56px; display: flex; flex-direction: column; justify-content: space-between; gap: var(--space-48);
+}
+.login-brand::before, .login-brand::after { content: ""; position: absolute; z-index: -1; border-radius: 50%; }
+.login-brand::before { width: 640px; height: 640px; right: -240px; top: -260px; background: #24402F; }
+.login-brand::after { width: 460px; height: 460px; right: -60px; bottom: -300px; background: #213A2B; }
+.login-brand__mark { display: flex; align-items: center; gap: 10px; }
+.login-brand .page-title { font-size: 46px; line-height: 52px; max-width: 13em; }
+.login-brand__site { margin: 0; font-size: 14px; line-height: 20px; color: var(--text-dim); }
+.login-panel { display: flex; align-items: center; justify-content: center; padding: var(--space-48) var(--space-24); background: var(--bg); }
+.login-card { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 18px; }
+.login-card__title { margin: 0; font-family: var(--font-heading); font-size: 26px; line-height: 32px; font-weight: 700; color: var(--heading); }
+.login-card__note { margin: 0; font-size: 13px; line-height: 18px; color: var(--text-dim); }
+.login-form { display: flex; flex-direction: column; gap: 18px; }
+
+/* Client home: the project page is not set up yet. */
+.client-dark { gap: var(--space-12); }
+.client-dark__lead { margin: 0; max-width: 56ch; font-size: 18px; line-height: 28px; color: var(--text); }
+
+@media (max-width: 720px) {
+  .report-toolbar { align-items: flex-start; }
+  .report-headline { padding: var(--space-16); }
+  .report-stats.stat-grid--3 > :last-child { grid-column: 1 / -1; }
+  .report-export { padding: 24px 18px; gap: var(--space-24); }
+  .report-export__brand { flex-direction: column; align-items: flex-start; }
+  .report-export__brand span { text-align: left; }
+  .deliv-list li { grid-template-columns: minmax(0, 1fr); }
+  .deliv-list li > .status-pill, .deliv-list li > .band-chip { grid-column: 1; grid-row: auto; justify-self: start; margin-top: 6px; }
+  .login-layout { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .login-brand { padding: 24px 20px 32px; gap: var(--space-24); }
+  .login-brand .page-title { font-size: 30px; line-height: 36px; }
+  .login-brand .page-lead, .login-brand__site { display: none; }
+  .login-panel { padding: var(--space-32) var(--space-16) var(--space-48); align-items: flex-start; }
+  .client-dark__lead { font-size: 16px; line-height: 24px; }
+}
+
+@media print {
+  .report-export { border: 0; box-shadow: none; padding: 0; max-width: none; }
+}
 
 /* ==== stage 3: Features, Delivered, Issues ==== */
 /* Part A's own rules for these pages, carried over on the new tokens until stage 3 replaces them. */
