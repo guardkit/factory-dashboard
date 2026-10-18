@@ -8,8 +8,7 @@
     {% for exchange in exchanges %}{% with question = exchange.question, answer = exchange.answer %}{% include "fragments/chat_exchange.html" %}{% endwith %}{% endfor %}
   </div>
   <form class="chat__form" method="post" action="/chat"
-        hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-disabled-elt="find button"
-        hx-on::after-request="if (event.detail.successful) this.reset()">
+        hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-disabled-elt="find button">
     <label for="chat-question" class="chat__label">Your question</label>
     <textarea id="chat-question" class="chat__input" name="question" rows="2" maxlength="500" required></textarea>
     <button type="submit" class="chat__ask">Ask</button>

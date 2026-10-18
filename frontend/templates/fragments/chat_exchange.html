@@ -10,8 +10,7 @@
     {% endif %}
     {% if answer.follow_up %}
     <form class="chat-exchange__reply" method="post" action="/chat"
-          hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-disabled-elt="find button"
-          hx-on::after-request="if (event.detail.successful) this.remove()">
+          hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-disabled-elt="find button">
       <input type="hidden" name="prior_question" value="{{ answer.follow_up.question }}">
       <input type="hidden" name="prior_clarify" value="{{ answer.follow_up.clarify }}">
       <label class="chat__label">Your reply <input class="chat__input" name="question" maxlength="500" required></label>

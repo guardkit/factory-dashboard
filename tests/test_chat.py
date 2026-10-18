@@ -752,24 +752,35 @@ def test_a_reply_larger_than_the_cap_is_stopped() -> None:
 
 
 class _SlowServer:
-    """A real HTTP server on loopback that sends its reply one byte every `gap` seconds for up to
-    `lasts` seconds and then hangs up: each byte arrives well inside the per-read timeout, and the
-    whole takes far longer than the chat's limit (the hang-up only stops a broken client waiting
-    forever)."""
+    """A real HTTP server on loopback that is slow in one of three ways: it trickles one byte every
+    `gap` seconds; or it sends one byte `one_byte_at` seconds after its headers and then goes
+    silent; or it stays silent `head_after` seconds before its headers. It gives up after `lasts`
+    seconds (that only stops a broken client waiting forever); every way takes far longer than
+    the chat's limit, while each wait it makes is inside the per-read timeout or ends after it."""
 
-    def __init__(self, gap: float, lasts: float = 6.0) -> None:
+    def __init__(self, *, gap: float | None = None, one_byte_at: float | None = None, head_after: float = 0.0,
+                 lasts: float = 6.0) -> None:
         stop = self.stop = threading.Event()
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self) -> None:
                 self.rfile.read(int(self.headers.get("Content-Length", "0")))
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", "100000")
-                self.end_headers()
-                until = time.monotonic() + lasts
                 try:
-                    while not stop.wait(gap) and time.monotonic() < until:
+                    if stop.wait(head_after):
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", "100000")
+                    self.end_headers()
+                    self.wfile.flush()
+                    if one_byte_at is not None:
+                        if not stop.wait(one_byte_at):
+                            self.wfile.write(b" ")
+                            self.wfile.flush()
+                            stop.wait(lasts)         # and then nothing
+                        return
+                    until = time.monotonic() + lasts
+                    while gap is not None and not stop.wait(gap) and time.monotonic() < until:
                         self.wfile.write(b" ")
                         self.wfile.flush()
                 except OSError:
@@ -793,20 +804,48 @@ class _SlowServer:
         self.server.server_close()
 
 
-def test_a_slow_real_server_cannot_hold_the_chat_past_its_deadline(store: Path,
-                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(service, "QUESTION_SECONDS", 1.0)
-    with _SlowServer(gap=0.1) as server:
-        model = llm.LiteLLMChat(server.url, "test-key-not-real")
-        chat = Chat(store, model, now=lambda: NOW)
+def _model_calls_running() -> int:
+    return sum(1 for t in threading.enumerate() if t.name == "chat-model-call" and t.is_alive())
+
+
+def _calls_end_soon(within: float = 0.5) -> bool:
+    end = time.monotonic() + within
+    while _model_calls_running() and time.monotonic() < end:
+        time.sleep(0.02)
+    return _model_calls_running() == 0
+
+
+@pytest.mark.parametrize(("limit", "slowness"), [
+    (1.0, {"gap": 0.1}),                    # trickles a byte every tenth of a second
+    (2.0, {"one_byte_at": 1.5}),            # one byte just before the limit, then silence
+    (1.0, {"head_after": 30.0}),            # silent before its headers, as a slow model is
+])
+def test_a_slow_real_server_cannot_hold_the_chat_past_its_deadline(
+        store: Path, monkeypatch: pytest.MonkeyPatch, limit: float, slowness: dict[str, float]) -> None:
+    """The answer comes within the limit (plus a small margin), the request is cut off at once
+    rather than left to its read timeout, and the one-at-a-time slot is free for the next question."""
+    monkeypatch.setattr(service, "QUESTION_SECONDS", limit)
+    with _SlowServer(**slowness) as server:
+        chat = Chat(store, llm.LiteLLMChat(server.url, "test-key-not-real"), now=lambda: NOW)
         started = time.monotonic()
         a = chat.ask("What was delivered?", OPERATOR)
         took = time.monotonic() - started
         assert (a.kind, a.text) == ("unavailable", llm.TIMED_OUT)
-        assert 0.9 < took < 2.5, took          # the one-second limit, not the never-ending reply
-        # The one-at-a-time slot was given back: the next question is asked, not refused as busy.
+        assert limit - 0.1 < took < limit + 0.4, took
+        assert _calls_end_soon(), "the cut-off request was left running"
         again = chat.ask("And now?", OPERATOR)
         assert again.text != BUSY and again.kind == "unavailable"
+        assert _calls_end_soon()
+
+
+def test_a_worker_never_reports_after_the_asker_gave_up() -> None:
+    call = llm._Call()
+    assert call.give_up()
+    call.finish(text='{"query": "delivered"}')
+    assert (call.done, call.text, call.error) == (False, "", None)
+    finished = llm._Call()
+    finished.finish(text="x")
+    assert not finished.give_up() and finished.text == "x"
 
 
 def test_a_malformed_body_is_an_empty_reply_and_then_refused(store: Path) -> None:
@@ -892,6 +931,26 @@ def test_chat_page_and_drawer_for_operators(chat_client: tuple[TestClient, FakeM
     assert page.text.count('id="chat-log"') == 1     # the page's panel, no second drawer
     home = client.get("/").text
     assert 'class="chat-drawer"' in home and 'href="/chat"' in home
+
+
+TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "frontend" / "templates"
+
+
+def test_the_chat_templates_carry_no_inline_handlers() -> None:
+    """The redesign refuses inline handlers: what the forms do after a request is in chat.js."""
+    for template in TEMPLATES_DIR.rglob("*.html"):
+        text = template.read_text()
+        assert "hx-on" not in text, template
+        assert not re.search(r"\son[a-z]+\s*=", text), template
+
+
+def test_the_chat_page_title_and_script(chat_client: tuple[TestClient, FakeModel]) -> None:
+    client, _ = chat_client
+    page = client.get("/chat").text
+    assert "<title>Ask about the factory · Appmilla Factory</title>" in page
+    assert '<script src="/static/chat.js" defer></script>' in page
+    script = client.get("/static/chat.js")
+    assert script.status_code == 200 and "htmx:afterRequest" in script.text
 
 
 def test_chat_requires_an_operator_session(client: TestClient, clientco_client: TestClient) -> None:
