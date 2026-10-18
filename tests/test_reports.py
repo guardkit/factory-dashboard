@@ -115,6 +115,45 @@ def test_export_shows_only_deliveries_and_the_four_plan_fields(store: sqlite3.Co
     assert "Clear button." not in html               # work in progress stays internal
     assert "OPERATOR_ONLY_ERROR_TEXT" not in html and "Secret failing request" not in html
     assert "U1" not in html                          # nobody's identity
-    assert "Cost reporting is being set up." in html
+    # Rich's approved brief: the client report carries no costs (the coordinator's decision of
+    # 18 October 2026). No cost section, column or wording at all.
+    for word in ("cost", "spend", "£"):
+        assert word not in html.lower(), word
     assert {m.milestone_id for m in export.milestones} == {"M1", "M2", "M3"}
     assert "behind" in html and "ahead" in html
+
+
+class _Operator:
+    display_name = "SIGNED_IN_OPERATOR_NAME"
+    tenant_slug = "operator"
+
+
+def test_export_heading_names_the_reports_client_and_week_not_the_signed_in_account(
+    store: sqlite3.Connection,
+) -> None:
+    export = dbread.export_report(store, "acme", NOW, window=WEEK)
+    env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=select_autoescape(default=True))
+    html = env.get_template("reports_export.html").render(report=export, report_tenant="acme", tenant=_Operator())
+    assert "SIGNED_IN_OPERATOR_NAME" not in html
+    assert f"Weekly summary for {export.tenant_display}" in html
+    assert f"Week {export.window_from} to {export.window_to}" in html
+
+
+def test_export_prints_through_the_shared_script_without_an_inline_handler() -> None:
+    text = (TEMPLATES / "reports_export.html").read_text(encoding="utf-8")
+    assert "data-print" in text and "Save as PDF" in text
+    assert "onclick" not in text and "window.print" not in text
+    # The page's own controls stay out of the printed document.
+    assert '<div class="report-toolbar no-print">' in text and '<p class="hint no-print">' in text
+
+
+def test_the_weekly_report_shows_spend_as_not_measured_never_a_figure(store: sqlite3.Connection) -> None:
+    report = dbread.weekly_report(store, "operator", NOW, window=WEEK)
+    assert not report.headline.withheld
+    env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=select_autoescape(default=True))
+    html = env.get_template("reports.html").render(report=report, report_tenant="operator")
+    tile = html[html.index('class="stat-tile stat-tile--empty" data-state="not-measured"'):]
+    tile = tile[: tile.index("</div>")]
+    assert "Not measured" in tile and "Spend" in tile
+    assert "£" not in html
+    assert f'<strong class="key-figure">{report.headline.delivered_count} features merged and checked</strong>' in html

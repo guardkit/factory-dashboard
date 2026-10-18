@@ -1,12 +1,16 @@
 {% extends "client_base.html" %}
+{% import 'macros.html' as m %}
 {% block title %}{{ tenant.display_name }} · Appmilla Factory{% endblock %}
 {% block content %}
-<h1 class="page-title">Delivery</h1>
+<div class="page-head">
+  <p class="page-eyebrow">{{ tenant.display_name }} · Your project</p>
+  <h1 class="page-title">Your project page is being set up</h1>
+  <p class="page-lead">This is where you will see what has been delivered and what is in progress. It updates as the work moves.</p>
+</div>
 {# ux §7.2 — plain-language dark state; NEVER cites internal ask ids (operator surfaces do). #}
-<section class="panel-card state-pending client-dark" data-state="pending">
-  <div class="panel-card__body">
-    <p class="client-dark__lead">Your delivery feed is being provisioned — delivered work will
-      appear here automatically.</p>
-  </div>
+<section class="true-empty true-empty--circles state-pending client-dark" data-state="pending">
+  <span class="honest-badge honest-badge--not-measured">{{ m.icon('slash') }}Nothing to show yet</span>
+  <p class="client-dark__lead">Your delivery feed is being provisioned — delivered work will
+    appear here automatically.</p>
 </section>
 {% endblock %}
