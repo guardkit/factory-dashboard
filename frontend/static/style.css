@@ -1554,7 +1554,9 @@ textarea.chat__input { min-height: 68px; }
 .chat-mic .icon { width: 24px; height: 24px; stroke-width: 1.8; }
 .chat-mic--listening { background: var(--bright-green); color: var(--surface); box-shadow: 0 0 0 6px var(--tint-green-strong); }
 .chat-mic--thinking { background: var(--surface-sunken); color: var(--heading); box-shadow: inset 0 0 0 1px var(--line-strong); }
-.chat-mic--speaking { background: var(--deep-green); color: var(--on-dark-accent); box-shadow: 0 0 0 6px var(--tint-green); }
+/* The inset Luminous ring keeps the disc visible on the dark theme's ground (Deep Green on #223A2D
+   alone is about 1.2:1). */
+.chat-mic--speaking { background: var(--deep-green); color: var(--on-dark-accent); box-shadow: inset 0 0 0 2px var(--on-dark-accent), 0 0 0 6px var(--tint-green); }
 /* Not in the design: no permission, or the capture failed. The words are in the status line. */
 .chat-mic--error {
   background: var(--surface); color: var(--status-fail);
@@ -1571,7 +1573,10 @@ textarea.chat__input { min-height: 68px; }
 .chat__form:has(> .chat-mic:not(.chat-mic--listening, .chat-mic--thinking, .chat-mic--speaking, .chat-mic--error)) .chat-voice__text {
   font-size: 13px; line-height: 18px; font-weight: 500; color: var(--text-dim);
 }
-.chat__form:has(> .chat-mic--error) .chat-voice { color: var(--status-fail-text); }
+.chat__form:has(> .chat-mic--error) .chat-voice {
+  justify-self: start; padding: 4px 8px; border-radius: var(--radius-sm);
+  background: var(--status-fail-tint); color: var(--status-fail-text); /* 5.5:1 light, 5.4:1 dark */
+}
 /* Listening: seven bars, each height set inline as a fraction (--h) of 22px. */
 .chat-voice__wave { display: inline-flex; align-items: center; gap: 3px; height: 22px; flex: none; }
 .chat-voice__bar { display: block; width: 3px; height: calc(var(--h, 0.5) * 22px); border-radius: 2px; background: var(--bright-green); }
