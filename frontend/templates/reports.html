@@ -88,58 +88,69 @@
   </div>
 </section>
 
-<div class="report-two-col">
-  <section class="panel-card report-plan state-{{ 'lagging' if report.plan.withheld else 'live' }}">
-    <header class="panel-card__header">
-      <h2 class="panel-card__title">Plan against actual</h2>
-    </header>
-    <div class="panel-card__body">
-      {% if report.plan.withheld %}
-        <p class="report-withheld">{{ m.icon('x') }}Plan status withheld: the factory's record was last read at {{ report.plan.withheld_since }}.</p>
-      {% elif report.plan.milestones %}
-        <ul class="plan-list signal-list">
-          {% for ms in report.plan.milestones %}
-            <li class="plan-row plan-row--{{ ms.deviation }} signal-row">
-              {% if ms.milestone_id %}
-                <b class="plan-row__id signal-row__name">{{ ms.title }}</b>
-                <p class="plan-row__detail signal-row__text">{{ ms.detail }}</p>
-              {% else %}
-                <b class="signal-row__name"><a class="plan-row__id" href="{{ ms.feature_link }}">{{ ms.title }}</a></b>
-                <p class="signal-row__text"><span class="plan-row__detail named-gap">{{ ms.detail }}</span></p>
-              {% endif %}
-              {{ m.band_chip(ms.band) }}
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="true-empty">No plan agreed, and nothing delivered or in progress this week.</p>
-      {% endif %}
-    </div>
-  </section>
+<section class="panel-card report-plan state-{{ 'lagging' if report.plan.withheld else 'live' }}">
+  <header class="panel-card__header">
+    <h2 class="panel-card__title">Plan against actual</h2>
+  </header>
+  <div class="panel-card__body">
+    {% if report.plan.withheld %}
+      <p class="report-withheld">{{ m.icon('x') }}Plan status withheld: the factory's record was last read at {{ report.plan.withheld_since }}.</p>
+    {% elif report.plan.milestones %}
+      <ul class="plan-list signal-list">
+        {% for ms in report.plan.milestones %}
+          <li class="plan-row plan-row--{{ ms.deviation }} signal-row">
+            {% if ms.milestone_id %}
+              <b class="plan-row__id signal-row__name">{{ ms.title }}</b>
+              <p class="plan-row__detail signal-row__text">{{ ms.detail }}</p>
+            {% else %}
+              <b class="signal-row__name"><a class="plan-row__id" href="{{ ms.feature_link }}">{{ ms.title }}</a></b>
+              <p class="signal-row__text"><span class="plan-row__detail named-gap">{{ ms.detail }}</span></p>
+            {% endif %}
+            {{ m.band_chip(ms.band) }}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="true-empty">No plan agreed, and nothing delivered or in progress this week.</p>
+    {% endif %}
+  </div>
+</section>
 
-  <section class="panel-card report-issues">
-    <header class="panel-card__header"><h2 class="panel-card__title">Issues this week</h2></header>
-    <div class="panel-card__body">
-      <p class="report-issues__counts">
-        {{ report.issues.opened }} opened · {{ report.issues.closed }} closed{% if report.issues.oldest_open_age %} · oldest still open: {{ report.issues.oldest_open_age }}{% endif %}
-      </p>
-      {% if report.issues.rows %}
-        <ul class="report-issues__list signal-list">
-          {% for it in report.issues.rows %}
-            <li class="report-issues__row signal-row{% if not it.is_open %} report-issues__row--closed{% endif %}">
-              <b class="signal-row__name"><a href="{{ it.scope_link }}">{{ it.headline }}</a></b>
-              {% if it.is_open and it.kind.startswith('Waiting') %}{{ m.status_pill('wait', 'Waiting') }}
-              {% elif it.is_open %}{{ m.band_chip(it.band) }}
-              {% else %}{{ m.status_pill('neutral', 'Closed') }}{% endif %}
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="true-empty">No issues opened or closed this week.</p>
+{# Issues have their own full-width card, as in the design: open ones first, the closed ones behind
+   a disclosure that says how many there are. #}
+{% set open_issues = report.issues.rows | selectattr('is_open') | list %}
+{% set closed_issues = report.issues.rows | rejectattr('is_open') | list %}
+{% macro report_issue_list(rows) -%}
+<ul class="report-issues__list signal-list">
+  {% for it in rows %}
+    <li class="report-issues__row signal-row{% if not it.is_open %} report-issues__row--closed{% endif %}">
+      <b class="signal-row__name"><a href="{{ it.scope_link }}">{{ it.headline }}</a></b>
+      {% if it.is_open and it.kind.startswith('Waiting') %}{{ m.status_pill('wait', 'Waiting') }}
+      {% elif it.is_open %}{{ m.band_chip(it.band) }}
+      {% else %}{{ m.status_pill('neutral', 'Closed') }}{% endif %}
+    </li>
+  {% endfor %}
+</ul>
+{%- endmacro %}
+<section class="panel-card report-issues">
+  <header class="panel-card__header"><h2 class="panel-card__title">Issues this week</h2></header>
+  <div class="panel-card__body">
+    <p class="report-issues__counts">
+      {{ report.issues.opened }} opened · {{ report.issues.closed }} closed{% if report.issues.oldest_open_age %} · oldest still open: {{ report.issues.oldest_open_age }}{% endif %}
+    </p>
+    {% if report.issues.rows %}
+      {% if open_issues %}{{ report_issue_list(open_issues) }}{% else %}<p class="true-empty">No open issues.</p>{% endif %}
+      {% if closed_issues %}
+      <details class="report-issues__closed">
+        <summary>{{ closed_issues | length }} closed this week</summary>
+        {{ report_issue_list(closed_issues) }}
+      </details>
       {% endif %}
-    </div>
-  </section>
-</div>
+    {% else %}
+      <p class="true-empty">No issues opened or closed this week.</p>
+    {% endif %}
+  </div>
+</section>
 
 <section class="panel-card panel-card--flush report-inflight state-{{ 'lagging' if h.withheld else 'live' }}">
   <header class="panel-card__header"><h2 class="panel-card__title">In progress now</h2></header>

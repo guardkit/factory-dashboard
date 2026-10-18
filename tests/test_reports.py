@@ -165,6 +165,29 @@ def test_the_weekly_report_shows_spend_as_not_measured_never_a_figure(store: sql
     assert f'<strong class="key-figure">{report.headline.delivered_count} features merged and checked</strong>' in html
 
 
+def test_issues_have_their_own_card_with_the_closed_ones_behind_a_count(store: sqlite3.Connection) -> None:
+    """On real data the week's issues ran to some 70 rows beside the short plan card, leaving a long
+    empty column; they now fill their own card, open ones first, closed ones behind "N closed"."""
+    report = dbread.weekly_report(store, "operator", NOW, window=WEEK)
+    env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=select_autoescape(default=True))
+    html = env.get_template("reports.html").render(report=report, report_tenant="operator")
+    assert "report-two-col" not in html
+    card = html[html.index('<section class="panel-card report-issues">'):]
+    card = card[:card.index("</section>")]
+    rows = report.issues.rows
+    assert rows
+    closed = [r for r in rows if not r.is_open]
+    if closed:
+        before, details = card.split('<details class="report-issues__closed">')
+        assert f"<summary>{len(closed)} closed this week</summary>" in details
+        assert details.count("report-issues__row--closed") == len(closed)  # every closed row, behind the count
+        assert "report-issues__row--closed" not in before                 # and only open rows above it
+        assert before.count('<li class="report-issues__row') == len(rows) - len(closed)
+    else:
+        assert "<details" not in card
+    assert card.count('<li class="report-issues__row') == len(rows)
+
+
 def test_no_spend_tile_writes_its_own_words() -> None:
     """Each tile shows its page's spend slot through one macro, so a measured cost replaces "Not
     measured" everywhere at once. (Now's view carries no spend slot yet; the cost feed adds one.)"""

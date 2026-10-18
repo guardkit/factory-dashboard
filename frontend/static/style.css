@@ -1200,7 +1200,7 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 /* Names used here (besides the shared ones above): report-toolbar, report-toolbar__end,
    report-rendering(__active, __link), report-engagements(__active), report-headline(__line),
    report-stats, report-stats__tile--behind, report-delivered(__list, __row, __commit),
-   report-issues(__counts, __list, __row, __row--closed), report-plan, plan-list,
+   report-issues(__counts, __list, __row, __row--closed, __closed), report-plan, plan-list,
    plan-row(--ahead, --on_target, --behind, --no_baseline), plan-row__id, plan-row__detail,
    report-inflight, report-export(__head, __brand, __section, __foot, __date), deliv-list, service-list,
    service-row(--ok, --fail, --unknown), service-row__name, __detail, __models, __resident,
@@ -1249,6 +1249,13 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 .plan-row--no_baseline .named-gap { padding: 0; border: 0; background: none; color: var(--text-dim); font-weight: 500; font-size: 14px; line-height: 20px; }
 .panel-card__body > .report-issues__counts { margin: 0 0 var(--space-12); font-size: 13px; line-height: 18px; color: var(--text-dim); }
 .report-issues__row--closed .signal-row__name, .report-issues__row--closed .signal-row__name a { color: var(--text-dim); font-weight: 500; }
+/* The week's closed issues wait behind "N closed this week", under the open ones. */
+.report-issues__closed { margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--line); }
+.report-issues__closed > summary {
+  cursor: pointer; min-height: 32px; padding-top: 6px;
+  font-size: 14px; line-height: 20px; font-weight: 600; color: var(--accent-text);
+}
+.report-issues__closed > .signal-list { margin-top: var(--space-12); }
 
 /* The in-progress table: times stay whole; "Not measured" may wrap between its words, so the
    table fits its card (see the shared table section). */
