@@ -3,6 +3,7 @@ and a client-safe version that shows nothing internal."""
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import timedelta
 from pathlib import Path
@@ -136,7 +137,12 @@ def test_export_heading_names_the_reports_client_and_week_not_the_signed_in_acco
     html = env.get_template("reports_export.html").render(report=export, report_tenant="acme", tenant=_Operator())
     assert "SIGNED_IN_OPERATOR_NAME" not in html
     assert f"Weekly summary for {export.tenant_display}" in html
-    assert f"Week {export.window_from} to {export.window_to}" in html
+    words = re.sub(r"<[^>]+>", "", html)
+    assert f"Week {export.window_from} to {export.window_to}" in words
+    # Each date is one unbreakable piece, and the time is in plain words, not the record's chip.
+    assert f'<span class="report-export__date">{export.window_from}</span>' in html
+    assert "factory record" not in words and "asof-chip" not in html
+    assert "Prepared <time" in html
 
 
 def test_export_prints_through_the_shared_script_without_an_inline_handler() -> None:

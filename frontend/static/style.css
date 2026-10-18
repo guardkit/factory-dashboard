@@ -1202,7 +1202,7 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
    report-stats, report-stats__tile--behind, report-delivered(__list, __row, __commit),
    report-issues(__counts, __list, __row, __row--closed), report-plan, plan-list,
    plan-row(--ahead, --on_target, --behind, --no_baseline), plan-row__id, plan-row__detail,
-   report-inflight, report-export(__head, __brand, __section, __foot), deliv-list, service-list,
+   report-inflight, report-export(__head, __brand, __section, __foot, __date), deliv-list, service-list,
    service-row(--ok, --fail, --unknown), service-row__name, __detail, __models, __resident,
    feed__heartbeat, feed__heartbeat-text, feed__read, feed__error, login-layout, login-brand,
    login-brand__mark, login-brand__site, login-panel, login-card(__title, __error, __note),
@@ -1266,6 +1266,8 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
   padding-bottom: var(--space-24); border-bottom: 2px solid var(--deep-green);
 }
 .report-export__brand img { height: 26px; width: auto; display: block; }
+/* A date never breaks at its hyphens ("2026-" over "10-18" at 390). */
+.report-export__date { white-space: nowrap; }
 .report-export__brand span { font-size: 13px; line-height: 18px; color: var(--text-dim); text-align: right; }
 .report-export__section h2 { margin: 0 0 var(--space-12); font-family: var(--font-heading); font-size: 20px; line-height: 26px; font-weight: 700; color: var(--heading); }
 .report-export__foot {

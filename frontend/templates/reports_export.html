@@ -21,13 +21,14 @@
 <article class="report-export" data-theme="light" aria-labelledby="export-title">
   <header class="report-export__head report-export__brand">
     <img src="/static/logos/appmilla-wordmark-deepgreen-on-light.png" alt="appmilla" width="100" height="26">
-    <span>Weekly summary for {{ report.tenant_display }}<br>Week {{ report.window_from }} to {{ report.window_to }}</span>
+    <span>Weekly summary for {{ report.tenant_display }}<br>Week <span class="report-export__date">{{ report.window_from }}</span> to <span class="report-export__date">{{ report.window_to }}</span></span>
   </header>
 
   <div class="page-head">
     <p class="page-eyebrow">{{ report.tenant_display }} · Weekly summary</p>
-    <h1 class="page-title" id="export-title">Week {{ report.window_from }} to {{ report.window_to }}</h1>
-    <p class="page-head__meta">{{ m.asof_chip(report.as_of, source='factory') }}</p>
+    <h1 class="page-title" id="export-title">Week <span class="report-export__date">{{ report.window_from }}</span> to <span class="report-export__date">{{ report.window_to }}</span></h1>
+    {# The time in plain words: a client document names no record or machinery. #}
+    <p class="page-head__meta"><span>{% if report.as_of.title_iso %}Prepared <time datetime="{{ report.as_of.title_iso }}">{{ report.as_of.label }}</time>{% else %}No data has been read yet.{% endif %}</span></p>
   </div>
 
   <section class="report-export__section">
