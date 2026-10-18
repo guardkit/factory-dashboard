@@ -473,9 +473,19 @@ def _in_window(t: datetime | None, lo: datetime, hi: datetime) -> bool:
     return t is not None and lo <= t < hi
 
 
-def delivered_in(factory: Factory, lo: datetime, hi: datetime, projects: tuple[str, ...] = ()) -> list[Feature]:
+#: Projects in scope: None means every project (only the operator's own view asks for that); a tuple
+#: means exactly those projects, so an empty tuple matches nothing.
+Scope = tuple[str, ...] | None
+
+
+def in_scope(project: str, projects: Scope) -> bool:
+    """True when `project` is in scope: every project for None, else only the ones named."""
+    return projects is None or project in projects
+
+
+def delivered_in(factory: Factory, lo: datetime, hi: datetime, projects: Scope = None) -> list[Feature]:
     out = [f for f in factory.features if f.outcome is Outcome.DELIVERED and _in_window(f.delivered_at, lo, hi)
-           and (not projects or f.project in projects)]
+           and in_scope(f.project, projects)]
     out.sort(key=lambda f: f.delivered_at or lo)
     return out
 
@@ -838,7 +848,15 @@ def fleet_view(db_path: Path, now: datetime | None = None) -> FleetView:
 _TARGET_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 
-def _tenant_projects(conn: sqlite3.Connection, tenant: str) -> tuple[str, ...]:
+OPERATOR_TENANT = "operator"
+
+
+def _tenant_projects(conn: sqlite3.Connection, tenant: str) -> Scope:
+    """The projects a report covers. Only the operator's own view covers every project (None).
+    A client tenant covers exactly the projects configured for it: when they are missing, empty
+    or unreadable that is NO project, never every project, so one client never sees another's."""
+    if tenant == OPERATOR_TENANT:
+        return None
     row = conn.execute("SELECT projects_json FROM tenants WHERE tenant_slug=?", (tenant,)).fetchone()
     if not row or not row[0]:
         return ()
@@ -846,7 +864,9 @@ def _tenant_projects(conn: sqlite3.Connection, tenant: str) -> tuple[str, ...]:
         data = json.loads(row[0])
     except (ValueError, TypeError):
         return ()
-    return tuple(str(p) for p in data) if isinstance(data, list) else ()
+    if not isinstance(data, list):
+        return ()
+    return tuple(p for p in data if isinstance(p, str) and p)
 
 
 def _tenant_display(conn: sqlite3.Connection, tenant: str) -> str:
@@ -879,11 +899,11 @@ def _deviation(*, tracked: set[str], delivered: dict[str, datetime], target_star
 
 
 def _plan_rows(
-    conn: sqlite3.Connection, tenant: str, factory: Factory, projects: tuple[str, ...],
+    conn: sqlite3.Connection, tenant: str, factory: Factory, projects: Scope,
     active: list[Feature], ref: date,
 ) -> tuple[list[MilestoneRow], int, int, int]:
     delivered = {f.code: f.delivered_at for f in factory.features
-                 if f.delivered_at and f.code and (not projects or f.project in projects)}
+                 if f.delivered_at and f.code and in_scope(f.project, projects)}
     milestones = conn.execute(
         "SELECT milestone_id, title, feature_ids_json, project, target_window FROM plan_milestones "
         "WHERE tenant=? ORDER BY milestone_id", (tenant,),
@@ -891,12 +911,24 @@ def _plan_rows(
     rows: list[MilestoneRow] = []
     covered: set[str] = set()
     behind = on_target = ahead = 0
+    if projects == ():
+        milestones = []          # a client with no projects in scope has no plan to show
+    on_record = {f.code: f for f in factory.features if f.code}
     for mid, title, ids_json, project, target_window in milestones:
+        if project and not in_scope(str(project), projects):
+            continue             # a milestone of a project this view does not cover
         try:
             ids = {str(x) for x in json.loads(ids_json or "[]")}
         except (ValueError, TypeError):
             ids = set()
-        tracked = ids or {f.code for f in factory.features if project and f.project == project and f.code}
+        # A feature on record outside the scope is dropped. A code with no record yet (planned, not
+        # started) carries nothing from any project, so it stays: it is this tenant's own plan.
+        mine = {c for c in ids if c in on_record and in_scope(on_record[c].project, projects)}
+        if not project and projects is not None and not mine:
+            continue             # no project of its own and none of its features in scope
+        tracked = ({c for c in ids if c not in on_record or c in mine} if ids
+                   else {f.code for f in factory.features
+                         if project and f.project == project and f.code and in_scope(f.project, projects)})
         covered |= tracked
         dev, band = _deviation(tracked=tracked, delivered={k: v for k, v in delivered.items() if v},
                                target_start=_target_start(target_window), ref=ref)
@@ -918,12 +950,12 @@ def _plan_rows(
 
 
 def _report_issues(factory: Factory, norms: Norms, lo: datetime, hi: datetime, now: datetime,
-                   projects: tuple[str, ...]) -> IssuesEncountered:
+                   projects: Scope) -> IssuesEncountered:
     opened = closed = 0
     oldest = 0.0
     rows: list[ReportIssueRow] = []
     for i in find_issues(factory, norms, now):
-        if projects and i.project not in projects:
+        if not in_scope(i.project, projects):
             continue
         o_in, c_in = _in_window(i.opened_at, lo, hi), _in_window(i.closed_at, lo, hi)
         if not (o_in or c_in):
@@ -947,7 +979,7 @@ def _report_parts(conn: sqlite3.Connection, tenant: str, now: datetime, window: 
     projects = _tenant_projects(conn, tenant)
     factory, norms = load_factory(conn, now), load_norms()
     delivered = delivered_in(factory, lo, hi, projects)
-    in_progress = [f for f in factory.features if f.in_progress and (not projects or f.project in projects)]
+    in_progress = [f for f in factory.features if f.in_progress and in_scope(f.project, projects)]
     stale = not freshness(conn).fresh(now)
     fr = freshness(conn)
     since = vm.fmt_wall(fr.read_at, now=now) if fr.read_at else "the dashboard started"

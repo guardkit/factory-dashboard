@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Not found · Factory dashboard{% endblock %}
+{% block title %}Not found · Appmilla Factory{% endblock %}
 {% block content %}
-<h1 class="page-title">No feature called {{ feature_id }}</h1>
-<section class="panel-card">
-  <div class="panel-card__body">
-    <p class="true-empty">The factory's record has no feature or request with this name. It appears here once
-      the factory records it. <a href="/features">See all features</a>.</p>
-  </div>
-</section>
+<header class="page-head">
+  <p class="page-eyebrow">Features</p>
+  <h1 class="page-title">No feature called {{ feature_id }}</h1>
+</header>
+<p class="true-empty feature-missing"><b>Nothing on record with this name</b>
+  <span>The factory's record has no feature or request with this name. It appears here once
+  the factory records it. <a href="/features">See all features</a>.</span></p>
 {% endblock %}

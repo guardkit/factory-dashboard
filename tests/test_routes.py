@@ -30,7 +30,9 @@ def test_reports_renders_the_weekly_report(operator_client: TestClient) -> None:
     body = operator_client.get("/reports").text
     assert "Weekly report" in body
     assert "Plan against actual" in body
-    assert "Client-safe version" in body
+    # The all-projects report says how to get a client-safe version (choose a client), but has no
+    # link to one: a client-safe version is only ever for one client (Codex R3).
+    assert "client-safe version" in body and "view=export" not in body
 
 
 def test_an_unread_store_says_so(operator_client: TestClient) -> None:

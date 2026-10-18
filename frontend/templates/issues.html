@@ -1,35 +1,46 @@
 {% extends "base.html" %}
 {% import 'macros.html' as m %}
-{% block title %}Issues · Factory dashboard{% endblock %}
+{% block title %}Issues · Appmilla Factory{% endblock %}
 {% block content %}
-<h1 class="page-title">Issues</h1>
-<p class="page-lead">{{ view.note }}</p>
-{% if view.hidden_line %}<p class="page-lead issues-hidden">{{ view.hidden_line }}</p>{% endif %}
+<header class="page-head issues-head">
+  <p class="page-eyebrow">Issues</p>
+  <h1 class="page-title">{{ view.open_rows | length }} open</h1>
+  <p class="page-lead">{{ view.note }}</p>
+  {% if view.hidden_line %}<p class="page-lead issues-hidden">{{ view.hidden_line }}</p>{% endif %}
+</header>
+
+{# The kind as a pill: waiting for a person is purple; a stall or a cancelled or interrupted build
+   is amber; a failure is red. The severity word (low, moderate, serious) has its own column. #}
+{% macro kind_pill(r) -%}
+{% if r.kind.startswith('Waiting') %}{{ m.status_pill('wait', r.kind) }}{% elif r.kind == 'Stalled' or r.band.band != 'R' %}{{ m.status_pill('risk', r.kind) }}{% else %}{{ m.status_pill('fail', r.kind) }}{% endif %}
+{%- endmacro %}
 
 {% macro issue_table(rows, closed=False) -%}
 <table class="dense-table issues__table">
   <thead>
     <tr><th scope="col">Issue</th><th scope="col">Feature</th><th scope="col">Project</th>
-      <th scope="col">Since</th><th scope="col">{{ 'Closed' if closed else 'For' }}</th><th scope="col">Detail</th></tr>
+      <th scope="col" class="num">Since</th><th scope="col"{% if not closed %} class="num"{% endif %}>{{ 'Closed' if closed else 'For' }}</th>
+      <th scope="col">Severity</th><th scope="col">Detail</th></tr>
   </thead>
   <tbody>
   {% for r in rows %}
     <tr class="issue-row {% if closed %}issue-row--closed{% endif %}">
-      <td>{{ m.band_chip(r.band) }} {{ r.kind }}</td>
-      <td>{% if r.link and r.link != '/issues' %}<a href="{{ r.link }}">{{ r.subject }}</a>{% else %}{{ r.subject }}{% endif %}</td>
+      <td class="issue-row__kind">{% if closed %}<span class="issue-row__kind-word">{{ r.kind }}</span>{% else %}{{ kind_pill(r) }}{% endif %}</td>
+      <td>{% if r.link and r.link != '/issues' %}<a class="feature-title" href="{{ r.link }}">{{ r.subject }}</a>{% else %}{{ r.subject }}{% endif %}</td>
       <td>{{ r.project }}</td>
       <td class="num" title="{{ r.opened_title }}">{{ r.opened_label }}</td>
-      <td class="num">{{ r.closed_label if closed else r.age }}</td>
-      <td>{{ r.detail }}</td>
+      {% if closed %}<td>{{ m.status_pill('neutral', 'Closed', r.closed_label) }}</td>{% else %}<td class="num">{{ r.age }}</td>{% endif %}
+      <td>{% if closed %}<span class="issue-row__severity">{{ r.band.label | capitalize }}</span>{% else %}{{ m.band_chip(r.band) }}{% endif %}</td>
+      <td class="issue-row__detail">{{ r.detail }}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
 {%- endmacro %}
 
-<section class="panel-card issues-open">
+<section class="panel-card panel-card--flush issues-open" aria-labelledby="issues-open-title">
   <header class="panel-card__header">
-    <h2 class="panel-card__title">Open ({{ view.open_rows | length }})</h2>
+    <h2 class="panel-card__title" id="issues-open-title">Open ({{ view.open_rows | length }})</h2>
     {{ m.asof_chip(view.chrome.read_as_of, source='factory') }}
   </header>
   <div class="panel-card__body">
@@ -37,8 +48,8 @@
   </div>
 </section>
 
-<section class="panel-card issues-closed">
-  <header class="panel-card__header"><h2 class="panel-card__title">Closed in the last 7 days ({{ view.closed_rows | length }})</h2></header>
+<section class="panel-card panel-card--flush issues-closed" aria-labelledby="issues-closed-title">
+  <header class="panel-card__header"><h2 class="panel-card__title" id="issues-closed-title">Closed in the last 7 days ({{ view.closed_rows | length }})</h2></header>
   <div class="panel-card__body">
     {% if view.closed_rows %}{{ issue_table(view.closed_rows, closed=True) }}{% else %}<p class="true-empty">Nothing closed in the last 7 days.</p>{% endif %}
   </div>

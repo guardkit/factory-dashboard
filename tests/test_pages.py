@@ -198,7 +198,8 @@ def test_the_delivered_window_survives_a_live_update(world: tuple[TestClient, Pa
     """17 October evaluation: the date window was ignored. The page's live-update refetch dropped it."""
     client, _, _ = world
     body = client.get("/fragments/p7?from=2026-01-01&to=2026-01-31").text
-    assert "0 features merged and checked from 2026-01-01 to 2026-01-31." in body
+    words = re.sub(r"<[^>]+>", "", body)  # each date sits in a no-wrap span
+    assert "0 features merged and checked from 2026-01-01 to 2026-01-31." in words
 
 
 SSE_JS = Path(__file__).resolve().parent.parent / "frontend" / "static" / "sse.js"
@@ -354,7 +355,9 @@ def test_the_paused_banner_gives_way_to_the_stale_banner() -> None:
     assert result["staleLater"] == ["banner banner--stale"]
     # And if the stale banner arrives through the poll while the paused one shows, the page hides it.
     css = (SSE_JS.parent / "style.css").read_text(encoding="utf-8")
-    assert ".banner-slot:has(.banner--stale) .banner--sse_paused { display: none; }" in css
+    rule = next(line for line in css.splitlines() if ".banner--sse_paused { display: none; }" in line)
+    assert rule.startswith(".banner-slot:has(.banner--stale")
+    assert ':not([data-feed="cost"])' in rule  # a stale cost feed never hides "live updates paused"
 
 
 # --- Codex round 1, R3: a project page never hides its older unresolved failures ------------------
@@ -561,3 +564,15 @@ def test_factory_read_times_are_marked_and_other_sources_are_not(world: tuple[Te
     read_at = re.search(r'id="freshness"[^>]*data-read-at="([^"]+)"', fragment)
     top = re.search(r'data-source="factory"[^>]*data-asof="([^"]+)"', fragment)
     assert read_at is not None and top is not None and read_at.group(1) == top.group(1)
+
+
+# --- Codex round 1, R3: the all-projects report has no client-safe document ----------------------
+
+
+def test_the_operator_export_url_shows_no_document(world: tuple[TestClient, Path, ForgeFake]) -> None:
+    client, _, _ = world
+    body = client.get("/reports?view=export").text   # no client chosen: the all-projects report
+    assert "Choose a client first" in body
+    assert 'class="report-export"' not in body and "data-print" not in body
+    assert "Search box that filters notes by title." not in body
+    assert "view=export" not in client.get("/reports").text

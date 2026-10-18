@@ -1,7 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Fleet · Factory dashboard{% endblock %}
+{% block title %}Fleet · Appmilla Factory{% endblock %}
 {% block content %}
-<h1 class="page-title">Fleet and machinery</h1>
+<div class="page-head">
+  <p class="page-eyebrow">Machinery · Fleet</p>
+  <h1 class="page-title">Services and the data feed</h1>
+  <p class="page-lead">The services the factory calls, and the feed this dashboard reads, each with when it was last checked.</p>
+</div>
 <div class="fleet-grid">
   {% with panel = view.serving %}{% include "fragments/services.html" %}{% endwith %}
   {% with panel = view.feed %}{% include "fragments/feed.html" %}{% endwith %}

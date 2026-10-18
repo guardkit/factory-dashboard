@@ -1,11 +1,17 @@
 {% extends "base.html" %}
-{% block title %}Delivered · Factory dashboard{% endblock %}
+{% block title %}Delivered · Appmilla Factory{% endblock %}
 {% block content %}
-<h1 class="page-title">Delivered</h1>
-<form class="window-form" method="get" action="/delivered">
-  <label>From <input type="date" name="from" value="{{ panel.window_from }}"></label>
-  <label>to <input type="date" name="to" value="{{ panel.window_to }}"></label>
-  <button type="submit">Show</button>
-</form>
+<header class="page-head page-head--split delivered-head">
+  <div>
+    <p class="page-eyebrow">Delivered</p>
+    <h1 class="page-title">What was merged and checked</h1>
+    <p class="page-lead">A feature counts as delivered once the merge step passed and named the commit it checked and published.</p>
+  </div>
+  <form class="window-form" method="get" action="/delivered">
+    <label>From <input type="date" name="from" value="{{ panel.window_from }}"></label>
+    <label>to <input type="date" name="to" value="{{ panel.window_to }}"></label>
+    <button type="submit">Show</button>
+  </form>
+</header>
 {% include "fragments/delivered.html" %}
 {% endblock %}
