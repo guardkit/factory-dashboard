@@ -77,7 +77,7 @@
       <td><a class="feature-title" href="{{ r.link }}">{{ r.title }}</a>{% if r.code %} <span class="feature-id">({{ r.code }})</span>{% endif %}</td>
       {% if show_project %}<td>{% if r.project_link %}<a href="{{ r.project_link }}">{{ r.project }}</a>{% else %}—{% endif %}</td>{% endif %}
       <td>{{ journey_bar(r.journey, mini=True) }}</td>
-      <td>{{ r.status_text }}</td>
+      <td class="dense-table__text">{{ r.status_text }}</td>
       <td>{{ band_chip(r.band) }}</td>
       <td class="num">{{ r.elapsed }}</td>
       <td class="num" title="{{ r.sent_title }}">{{ r.sent_label }}</td>

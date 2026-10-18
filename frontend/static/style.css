@@ -41,6 +41,7 @@
        decide-in-slack
      interaction: button--primary, button--secondary, button--compact, button--block, hint,
        signal-list, signal-row, signal-row__name, signal-row__text
+     tables (integration): dense-table__text (a cell of free text from the record)
      Names reserved for stages 2a and 2b (styled in their own sections below, which list any
        further names they add): build-list, build-list__head, build-row(__head, __detail, __stage,
        __phone-line), needs-you__subject, needs-you__age-word, panel-card--hero,
@@ -806,11 +807,22 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
 .dense-table thead + tbody tr:first-child td { border-top: 1px solid var(--line); }
 /* Figures align right; a time in the first column is a row label and stays left. */
 .dense-table td.num:not(:first-child), .dense-table th.num:not(:first-child) { text-align: right; }
-.feature-list td:first-child { min-width: 12em; }
+.feature-list td:first-child { min-width: 10em; }
 /* Words and figures never break mid-way: a table wider than its card scrolls inside the card
    (.panel-card__body). No overflow-wrap here: in a table, Chrome lets even break-word shrink a
    column below its longest word, which split "mission's" and "12:28:50" at 1440. */
 .dense-table td.num, td .spend-slot { white-space: nowrap; }
+/* So that every table fits its card at laptop width, the widest things in a row may wrap between
+   words: a column heading, a pill's words ("built, no merge recorded"), "Not measured". Free text
+   from the record (dense-table__text, an issue's detail) can carry a path or a command with no
+   spaces at all; there, and only there, a too-long run may break anywhere, but the column keeps
+   12em, so an ordinary word never does. */
+.dense-table .band-chip, .dense-table .status-pill, .dense-table td .spend-slot { white-space: normal; }
+.dense-table .dense-table__text, .dense-table .issue-row__detail { overflow-wrap: anywhere; min-width: 12em; }
+/* Below the width where the chat sits beside the page, cells tighten to the phone padding. */
+@media (max-width: 1279px) {
+  .dense-table th, .dense-table td { padding-left: 8px; padding-right: 8px; }
+}
 .dense-table tfoot td { font-weight: 700; border-top: 2px solid var(--line-strong); }
 .feature-list__row--finished td { color: var(--text-dim); }
 .feature-list__row--finished .feature-title { color: var(--text-dim); }
@@ -911,6 +923,10 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
   .journey-bar:not(.journey-bar--mini) .journey-station__name { font-size: 15px; line-height: 20px; }
 
   .dense-table th, .dense-table td { padding-left: 8px; padding-right: 8px; }
+  /* On a phone a figure may wrap between its words ("17 Oct" over "10:41"), and free text keeps
+     8em, still wider than any ordinary word. Each page hides its less important columns. */
+  .dense-table td.num { white-space: normal; }
+  .dense-table .dense-table__text, .dense-table .issue-row__detail { min-width: 8em; }
   .signal-list > .signal-row { grid-template-columns: minmax(0, 1fr); }
   .signal-list > .signal-row > .band-chip, .signal-list > .signal-row > .status-pill,
   .signal-list > .signal-row > .honest-badge, .signal-list > .signal-row > .decide-in-slack {
@@ -1044,6 +1060,8 @@ a.build-row:hover .feature-title { text-decoration: underline; }
 .feature-history td.num, .activity__result { white-space: nowrap; }
 /* Words wrap between words, not inside them (a long table scrolls inside its card instead). */
 .activity__table td, .planning__table td, .feature-attempts td, .feature-waits td, .feature-history td { overflow-wrap: break-word; }
+/* A build record's id may wrap at its hyphens, so the attempts table fits its half-width card. */
+.feature-attempts .feature-id { white-space: normal; }
 /* With a freshness line between the top bar and the dark band, the line takes the top bar's ground. */
 body:has(.panel-card--hero) .freshness .read-asof { background: var(--topbar); }
 body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-dark-dim); }
@@ -1122,7 +1140,6 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
   /* The project's feature table keeps Feature, Where it stands and On track. */
   .project-features .feature-list th:nth-child(2), .project-features .feature-list td:nth-child(2),
   .project-features .feature-list th:nth-child(n+5), .project-features .feature-list td:nth-child(n+5) { display: none; }
-  .project-features .feature-list td:first-child { min-width: 0; }
   .project-features .feature-list .band-chip { white-space: normal; }
 }
 @media (min-width: 721px) {
@@ -1200,9 +1217,9 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 .panel-card__body > .report-issues__counts { margin: 0 0 var(--space-12); font-size: 13px; line-height: 18px; color: var(--text-dim); }
 .report-issues__row--closed .signal-row__name, .report-issues__row--closed .signal-row__name a { color: var(--text-dim); font-weight: 500; }
 
-/* The in-progress table: times and the not-measured cell stay whole (the shared table lets long
-   words break anywhere, which split them mid-word at this width). */
-.report-inflight .dense-table td.num, .report-inflight .dense-table td .spend-slot { overflow-wrap: normal; white-space: nowrap; }
+/* The in-progress table: times stay whole; "Not measured" may wrap between its words, so the
+   table fits its card (see the shared table section). */
+.report-inflight .dense-table td.num { overflow-wrap: normal; white-space: nowrap; }
 
 /* The client-safe document: a white page, light even in dark mode (data-theme on the article). */
 .report-export {
@@ -1274,6 +1291,9 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
   .report-export { padding: 24px 18px; gap: var(--space-24); }
   .report-export__brand { flex-direction: column; align-items: flex-start; }
   .report-export__brand span { text-align: left; }
+  /* The in-progress table keeps Feature, On track and Elapsed, like the Features page. */
+  .report-inflight .feature-list th:nth-child(-n+4):not(:first-child), .report-inflight .feature-list td:nth-child(-n+4):not(:first-child),
+  .report-inflight .feature-list th:nth-child(n+7), .report-inflight .feature-list td:nth-child(n+7) { display: none; }
   .deliv-list li { grid-template-columns: minmax(0, 1fr); }
   .deliv-list li > .status-pill, .deliv-list li > .band-chip { grid-column: 1; grid-row: auto; justify-self: start; margin-top: 6px; }
   .login-layout { grid-template-columns: minmax(0, 1fr); min-height: 0; }
@@ -1296,14 +1316,8 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 /* The period switch and the date form sit on the right of the page head. */
 .features-head > .window-links, .delivered-head > .window-form { flex: none; }
 
-/* Times, figures and project names do not break mid-word here (the shared table lets any cell
-   break, so a table fits a narrow card); they still wrap at spaces, and the free text columns
-   keep breaking long words, so the table fits its card. */
-.features .dense-table td.num, .delivered .dense-table td.num, .issues__table td.num, .projects__table td.num,
-.features .feature-list td:nth-child(2), .delivered__table td:nth-child(3), .projects__table td:first-child,
-.issues__table td:nth-child(3) { overflow-wrap: normal; }
-.features .feature-list .spend-slot, .delivered__table .spend-slot { white-space: nowrap; }
-.features .dense-table th, .delivered__table th, .issues__table th, .projects__table th { white-space: nowrap; }
+/* Times and figures stay whole (the shared table rules); headings, titles and pills wrap between
+   words, so each table fits its card at laptop width (see the shared table section). */
 
 /* Delivered: the summary sentence is the answer, so it reads first in the card. */
 .delivered__summary { font-size: 15px; line-height: 22px; font-weight: 600; color: var(--heading); }
@@ -1315,7 +1329,7 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 /* Issues: the hidden-failures line is a second, quieter lead line. */
 .issues-head .issues-hidden { margin-top: var(--space-4); font-size: 15px; line-height: 22px; }
 .issues__table td.num { white-space: nowrap; }
-.issues__table .issue-row__detail { min-width: 14em; color: var(--text); }
+.issues__table .issue-row__detail { color: var(--text); }
 /* Closed issues are dimmed: kind and severity are plain words, and the Closed pill says when. */
 .issue-row--closed td, .issue-row--closed .feature-title, .issues__table .issue-row--closed .issue-row__detail { color: var(--text-dim); }
 .issue-row__kind-word { font-weight: 600; display: inline-block; min-width: 8em; }
@@ -1323,8 +1337,24 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 /* Projects. */
 .projects__table td:first-child { min-width: 12em; }
 
+/* Phones: each table keeps its title, its state and one key figure, and hides the rest on
+   purpose (the feature's own page has everything).
+   Features: Feature, On track, Elapsed (hidden: project, how far, where it stands, sent, cost).
+   Delivered: Delivered, Feature (hidden: project, commit, cost).
+   Issues: Issue, Feature, For or Closed (hidden: project, since, severity, detail).
+   Projects: Project, In progress, Open issues (hidden: features, merged and checked). */
 @media (max-width: 720px) {
-  .issues__table td:nth-child(2), .issues__table .issue-row__detail { min-width: 12em; }
+  .features .feature-list th:nth-child(-n+4):not(:first-child), .features .feature-list td:nth-child(-n+4):not(:first-child),
+  .features .feature-list th:nth-child(n+7), .features .feature-list td:nth-child(n+7) { display: none; }
+  .delivered__table th:nth-child(n+3), .delivered__table td:nth-child(n+3) { display: none; }
+  .issues__table th:nth-child(3), .issues__table td:nth-child(3), .issues__table th:nth-child(4), .issues__table td:nth-child(4),
+  .issues__table th:nth-child(n+6), .issues__table td:nth-child(n+6) { display: none; }
+  .projects__table th:nth-child(2), .projects__table td:nth-child(2), .projects__table th:nth-child(4), .projects__table td:nth-child(4) { display: none; }
+  /* Titles and project names keep 8em; only a run longer than that (a path in a title, a project
+     name like owner/a_long_name) breaks, at the edge of the column. */
+  .feature-list td:first-child, .delivered__table td:nth-child(2), .issues__table td:nth-child(2),
+  .projects__table td:first-child { min-width: 8em; overflow-wrap: anywhere; }
+  .issue-row__kind-word { min-width: 0; }
 }
 
 /* ==== stage 3: chat and microphone ==== */

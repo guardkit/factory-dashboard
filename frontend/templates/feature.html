@@ -113,7 +113,7 @@
         <tbody>
         {% for a in page.attempts %}
           <tr><td class="num" title="{{ a.queued_title }}">{{ a.queued_label }}</td><td>{{ a.started_by }}</td>
-            <td>{{ a.status_text }}</td><td><span class="feature-id">{{ a.build_id }}</span></td></tr>
+            <td class="dense-table__text">{{ a.status_text }}</td><td><span class="feature-id">{{ a.build_id }}</span></td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -147,7 +147,7 @@
       <thead><tr><th scope="col" class="num">When</th><th scope="col">Step</th><th scope="col">Result</th></tr></thead>
       <tbody>
       {% for e in page.activity %}
-        <tr><td class="num" title="{{ e.time_title }}">{{ e.time_label }}</td><td>{{ e.step }}</td><td>{{ e.result }}</td></tr>
+        <tr><td class="num" title="{{ e.time_title }}">{{ e.time_label }}</td><td>{{ e.step }}</td><td class="dense-table__text">{{ e.result }}</td></tr>
       {% endfor %}
       </tbody>
     </table>
