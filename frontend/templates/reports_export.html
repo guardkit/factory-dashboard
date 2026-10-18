@@ -42,7 +42,14 @@
        only when it carries one. #}
     {% set iso = report.as_of.title_iso %}
     {% set months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] %}
-    <p class="page-head__meta"><span>{% if iso and iso | length >= 16 and iso[4] == '-' and iso[10] == 'T' %}Prepared <time datetime="{{ iso }}">{{ iso[8:10] | int }} {{ months[(iso[5:7] | int) - 1] }} {{ iso[0:4] }}, {{ iso[11:16] }}</time>{% else %}No data has been read yet.{% endif %}</span></p>
+    {% set has_time = iso and iso | length >= 16 and iso[4] == '-' and iso[10] == 'T' %}
+    {# Fresh only when the delivery information was read within its threshold; otherwise the document
+       says so in words that print, and the empty sentence below is qualified. #}
+    {% set fresh = has_time and report.as_of.dot_state in ('live', 'empty') %}
+    <p class="page-head__meta"><span>{% if has_time %}Prepared <time datetime="{{ iso }}">{{ iso[8:10] | int }} {{ months[(iso[5:7] | int) - 1] }} {{ iso[0:4] }}, {{ iso[11:16] }}</time>{% else %}No delivery information has been read yet.{% endif %}</span></p>
+    {% if not fresh %}
+    <p class="honest-badge honest-badge--stale report-export__freshness" role="note">{{ m.icon('clock') }}This summary may be out of date: the delivery information could not be brought up to date{% if has_time %} after the time above{% endif %}.</p>
+    {% endif %}
   </div>
 
   <section class="report-export__section">
@@ -58,7 +65,7 @@
         {% endfor %}
       </ul>
     {% else %}
-      <p class="true-empty">No features were delivered in this week.</p>
+      <p class="true-empty">{% if fresh %}No features were delivered in this week.{% else %}No deliveries are shown for this week, but this summary may be out of date.{% endif %}</p>
     {% endif %}
   </section>
 

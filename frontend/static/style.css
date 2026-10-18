@@ -1282,6 +1282,7 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 .report-export__brand img { height: 26px; width: auto; display: block; }
 /* A date never breaks at its hyphens ("2026-" over "10-18" at 390). */
 .report-export__date { white-space: nowrap; }
+.report-export__freshness { margin-top: var(--space-8); white-space: normal; }
 .report-export__brand span { font-size: 13px; line-height: 18px; color: var(--text-dim); text-align: right; }
 .report-export__section h2 { margin: 0 0 var(--space-12); font-family: var(--font-heading); font-size: 20px; line-height: 26px; font-weight: 700; color: var(--heading); }
 .report-export__foot {

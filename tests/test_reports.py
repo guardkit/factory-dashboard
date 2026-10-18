@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -269,3 +270,28 @@ def test_no_spend_tile_writes_its_own_words() -> None:
         label = ""
 
     assert str(macros.spend_value(Measured())) == "$2.20"
+
+
+def test_client_export_says_when_its_delivery_information_may_be_out_of_date(store: sqlite3.Connection) -> None:
+    """Codex round 2 (R4): the client document keeps the honesty of the freshness chip, in words
+    that print, and an empty delivery list is qualified when the information is not fresh."""
+    export = dbread.export_report(store, "acme", NOW, window=WEEK)
+    env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=select_autoescape(default=True))
+
+    def render(dot_state: str, title_iso: str, rows: bool = True) -> str:
+        as_of = replace(export.as_of, dot_state=dot_state, title_iso=title_iso)
+        rep = replace(export, as_of=as_of, delivered_rows=export.delivered_rows if rows else ())
+        return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", env.get_template("reports_export.html").render(
+            report=rep, report_tenant="acme")))
+
+    iso = "2026-10-18T16:55:13+01:00"
+    fresh = render("live", iso)
+    assert "may be out of date" not in fresh and "Prepared 18 Oct 2026, 16:55" in fresh
+    for state in ("lagging", "stale"):
+        words = render(state, iso)
+        assert "This summary may be out of date" in words, state
+        empty = render(state, iso, rows=False)
+        assert "No deliveries are shown for this week, but this summary may be out of date." in empty
+    unread = render("stale", "")
+    assert "No delivery information has been read yet." in unread and "This summary may be out of date" in unread
+    assert "No features were delivered in this week." in render("live", iso, rows=False)
