@@ -62,8 +62,9 @@ const T = { timeout: 15000 };
 async function ask(page, panel, how) {
   const mic = panel + ' .chat-mic';
   const out = { visible: await page.isVisible(mic) };
-  await page.locator(mic).scrollIntoViewIfNeeded();
-  const box = await page.locator(mic).boundingBox();
+  const box = await page.locator(mic).boundingBox();     // no scrolling: it must already be on screen
+  const view = page.viewportSize();
+  out.onScreen = box.y >= 0 && box.x >= 0 && box.y + box.height <= view.height && box.x + box.width <= view.width;
   out.hit = await page.evaluate(([x, y]) => { const e = document.elementFromPoint(x, y);
     return e ? (e.closest('.chat-mic') ? 'mic' : e.tagName + '.' + e.className) : 'none'; },
     [box.x + box.width / 2, box.y + box.height / 2]);
@@ -137,7 +138,7 @@ def test_a_person_asks_by_voice_on_the_chat_page_and_in_the_drawer(
     page, drawer = got["chatPage"], got["drawer"]
     assert page["drawerShown"] is False and drawer["drawerShown"] is True
     for where in (page, drawer):
-        assert where["visible"] and where["hit"] == "mic", where  # shown, and nothing covers it
+        assert where["visible"] and where["onScreen"] and where["hit"] == "mic", where  # shown, unscrolled
         assert "Any issues?" in where["question"]                # the transcript, in the question bubble
         assert "open issue" in where["answer"]
         assert where["how"] == "Read aloud"
