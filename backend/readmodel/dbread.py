@@ -911,13 +911,24 @@ def _plan_rows(
     rows: list[MilestoneRow] = []
     covered: set[str] = set()
     behind = on_target = ahead = 0
+    if projects == ():
+        milestones = []          # a client with no projects in scope has no plan to show
+    on_record = {f.code: f for f in factory.features if f.code}
     for mid, title, ids_json, project, target_window in milestones:
+        if project and not in_scope(str(project), projects):
+            continue             # a milestone of a project this view does not cover
         try:
             ids = {str(x) for x in json.loads(ids_json or "[]")}
         except (ValueError, TypeError):
             ids = set()
-        tracked = ids or {f.code for f in factory.features
-                          if project and f.project == project and f.code and in_scope(f.project, projects)}
+        # A feature on record outside the scope is dropped. A code with no record yet (planned, not
+        # started) carries nothing from any project, so it stays: it is this tenant's own plan.
+        mine = {c for c in ids if c in on_record and in_scope(on_record[c].project, projects)}
+        if not project and projects is not None and not mine:
+            continue             # no project of its own and none of its features in scope
+        tracked = ({c for c in ids if c not in on_record or c in mine} if ids
+                   else {f.code for f in factory.features
+                         if project and f.project == project and f.code and in_scope(f.project, projects)})
         covered |= tracked
         dev, band = _deviation(tracked=tracked, delivered={k: v for k, v in delivered.items() if v},
                                target_start=_target_start(target_window), ref=ref)
