@@ -1,327 +1,966 @@
-/* factory-dashboard — the one stylesheet (ux §8 / arch §6). Hand-written, CSS custom properties,
-   no framework, no build step, no CDN. §7.4 design-portability contract: EVERY visual decision is
-   expressible as a custom property; the class names below are a stable, semantic PUBLIC contract
-   (panel-card, asof-chip, journey-bar, band-chip, state-pending, …) — a redesign round-trips
-   tokens/layout/copy through these names and can never delete the honesty surfaces.
-   Status colours (--ok/--warn/--bad/--pending) are reserved EXCLUSIVELY for status semantics. */
+/* factory-dashboard — the one stylesheet. Hand-written, CSS custom properties, no framework, no
+   build step, no CDN. The look is the approved Appmilla Factory design (18 October 2026).
+
+   THE CONTRACT. Every visual decision is a custom property, and the class names below are a
+   stable, semantic, PUBLIC contract. A redesign restyles through these names and can never delete
+   the honesty surfaces (as-of chips, lagging notes, not-measured slots, withheld figures, waits).
+
+   Names from before the redesign (keep them in the templates):
+     frame: topbar, topbar__brand, topbar__cluster, topnav, topnav__item(--active), user-menu,
+       user-menu__name, user-menu__form, user-menu__signout, sse-dot, read-asof, banner-slot,
+       banner, banner--stale, banner--sse_paused, frame, content, chat-toggle, chat-drawer,
+       skip-link, visually-hidden
+     cards: panel-card, panel-card__header, __title, __sub, __body, panel-card--updated (sse.js),
+       state-live, state-lagging, state-empty (from the panel state), home-grid(__main, __rail),
+       rail-title, feature-lower, report-two-col, fleet-grid
+     status: band-chip(--g, --a, --r, --none), journey-bar(--mini), journey-bar__stations,
+       journey-bar__meta, journey-bar__current, journey-station(--passed, --current, --future,
+       --stopped, --pending), journey-station__glyph, journey-station__name
+     honesty: asof-chip(--live, --lagging, --stale, --empty), asof-chip__label, asof-dot(--…),
+       lagging-note, true-empty, spend-slot, state-pending, named-gap, report-withheld,
+       provenance-badge, signal-row--unmeasured, observes-only
+     text and tables: page-title, page-lead, feature-title, feature-id, num, dense-table,
+       feature-list, feature-list__row(--finished), feature-request, window-form, login-form
+
+   Names added by the redesign, stage 1:
+     base: icon (an inline <svg class="icon"><use href="#i-…"/></svg> from icon_sprite.html),
+       dim, hide-phone, no-print
+     frame: topbar__logo, topbar__wordmark, topbar__product, theme-switch, theme-switch__label, theme-switch__mode,
+       user-menu__avatar, org-chip, banner__text, tabbar, tabbar__item
+     headline: page-head(--split), page-head__meta, page-eyebrow, key-figure, section-head,
+       section-title
+     cards: panel-card__foot, panel-card--bar, --wait, --risk, --fail, --done, --info,
+       panel-card--flush, stat-grid(--3)
+     figures: stat-tile, stat-tile__value, __label, __sub, stat-tile--key, stat-tile--empty, est,
+       bar, bar__seg--plan/--build/--review/--machine/--wait/--none, bar-legend, spend-split,
+       spend-split__bar, week-bar, sparkline, swatch, kv-list
+     status: status-pill(--done, --wait, --info, --neutral, --fail, --risk, --ok),
+       status-pill__time, band-chip__word, journey-station__time (no data yet: never rendered)
+     honesty: honest-badge(--not-measured, --stale, --stopped, --estimated, --no-baseline),
+       asof-chip__word(--live, --lagging, --stale), true-empty--circles, error-block,
+       decide-in-slack
+     interaction: button--primary, button--secondary, button--compact, button--block, hint,
+       signal-list, signal-row, signal-row__name, signal-row__text
+     Names reserved for later stages (styled in their own sections below): build-list,
+       build-list__head, build-row(__head, __detail, __stage, __phone-line), needs-you__subject,
+       needs-you__age-word, panel-card--hero, report-toolbar__end, report-export__brand,
+       deliv-list, login-layout, login-brand, login-panel, and Part E's microphone: chat-mic
+       (--listening, --thinking, --speaking, --error), chat-voice, chat-voice__wave,
+       chat-voice__dots, chat-exchange__how, chat-send.
+
+   How the as-of states map onto the design (freshness.js swaps the classes on the chip and dot):
+     live and empty  = green dot, "up to date"
+     lagging         = amber dot (the design's "stale"), "a little old"
+     stale           = red dot (the design's "stopped"), "out of date"
+
+   CONTRAST RULES (WCAG AA; from the design's brand book):
+   - Bright Green (--bright-green, 3.8:1 on the page) is never text on a light ground. It is for
+     bars, stripes, step dots, progress and icons. Green words (eyebrows, links) use --accent-text.
+   - Status colours (--status-*) are for dots, bars and icons only. Words in pills, badges and
+     stage times use --status-*-text on the matching tint.
+   - Luminous Green (--luminous) is text only on Deep Green: the Needs-you band, a key tile or the
+     kicker band. On a light ground it may only be a fill or a bar. Once per screen.
+   - --line is decoration only (about 1.2:1). Control borders, dashed outlines and the hatch edge
+     use --line-strong (3:1 or better).
+   - Waiting for a person is purple (--status-wait), never amber or red. It becomes a fault only
+     when it is old, and then the age says so.
+   - In dark mode, eyebrows and links still use --accent-text, which is redefined there.
+   - Every status has a word as well as a colour. Focus is always visible (--focus).
+
+   THEMES. The token blocks use attribute selectors, so data-theme="dark" on any element (the
+   Needs-you band, the sign-in brand panel) re-resolves every token inside it. Do not change them
+   to :root only. The old names below are aliases, and they are declared on the same selectors so
+   that they re-resolve inside a dark section too.
+
+   Stages 2a, 2b and 3 write only inside their own labelled section at the end of this file. */
+
+/* ==== tokens (copied in full from the design's tokens.css) ==== */
+
+:root, [data-theme="light"] {
+  --deep-green: #1C2D24;
+  --bright-green: #3F8C43;
+  --accent-text: #2F7A34;
+  --luminous: #42FF8A;
+  --bg: #F5F5F5;
+  --surface: #FFFFFF;
+  --surface-sunken: #EEF3EF;
+  --topbar: #1C2D24;
+  --kicker: #1C2D24;
+  --line: #E4E7E4;
+  --line-strong: #7A8C81;
+  --heading: #1C2D24;
+  --text: #22312A;
+  --text-dim: #5E6E64;
+  --on-dark: #FFFFFF;
+  --on-dark-dim: #A6B3AB;
+  --on-dark-accent: #5FD98C;
+  --focus: #2F7A34;
+  --tint-green: #EAF4EC;
+  --tint-green-strong: #CDE6D2;
+  --tint-neutral: #EEF3EF;
+  --status-done: #16A34A;
+  --status-done-text: #166534;
+  --status-risk: #B45309;
+  --status-risk-text: #92400E;
+  --status-risk-tint: #FBEFD5;
+  --status-fail: #DC2626;
+  --status-fail-text: #B91C1C;
+  --status-fail-tint: #FDE8E8;
+  --status-wait: #6D28D9;
+  --status-wait-text: #6D28D9;
+  --status-wait-tint: #EDE7FB;
+  --status-info: #0891B2;
+  --status-info-text: #0E7490;
+  --status-info-tint: #E0F4F8;
+  --shadow-card: 0 1px 2px rgba(28,45,36,0.06), 0 4px 14px rgba(28,45,36,0.06);
+  --shadow-raised: 0 12px 32px rgba(28,45,36,0.16);
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --deep-green: #1C2D24;
+  --bright-green: #5FD98C;
+  --accent-text: #5FD98C;
+  --luminous: #42FF8A;
+  --bg: #1C2D24;
+  --surface: #223A2D;
+  --surface-sunken: #18271F;
+  --topbar: #13201A;
+  --kicker: #13201A;
+  --line: #36513F;
+  --line-strong: #6E8C7B;
+  --heading: #FFFFFF;
+  --text: #E6ECE8;
+  --text-dim: #A6B3AB;
+  --on-dark: #FFFFFF;
+  --on-dark-dim: #A6B3AB;
+  --on-dark-accent: #5FD98C;
+  --focus: #42FF8A;
+  --tint-green: #1F3A2A;
+  --tint-green-strong: #2A4D38;
+  --tint-neutral: #2A3F33;
+  --status-done: #4ADE80;
+  --status-done-text: #4ADE80;
+  --status-risk: #FBBF24;
+  --status-risk-text: #FBBF24;
+  --status-risk-tint: #3A2E14;
+  --status-fail: #F87171;
+  --status-fail-text: #F87171;
+  --status-fail-tint: #3D1E1E;
+  --status-wait: #C4B5FD;
+  --status-wait-text: #C4B5FD;
+  --status-wait-tint: #2E2547;
+  --status-info: #67E8F9;
+  --status-info-text: #67E8F9;
+  --status-info-tint: #123540;
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.35);
+  --shadow-raised: 0 12px 32px rgba(0,0,0,0.5);
+  color-scheme: dark;
+}
 
 :root {
-  /* palette — paper/ink neutrals (light theme v1; a dark block is a later variable swap) */
-  --bg: #fafaf8;
-  --card: #ffffff;
-  --ink: #1a1d21;
-  --muted: #5c6570;
-  --line: #e2e4e8;
-  --accent: #2456a4;
-  /* semantic status — never decorative */
-  --ok: #1a7f37;
-  --warn: #b58a00;
-  --bad: #c62828;
-  --pending: #6b7280;
-  --pending-hatch: repeating-linear-gradient(45deg, #eceef1 0 4px, #f6f7f9 4px 8px);
+  --space-4: 4px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-48: 48px;
+  --space-64: 64px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+  --content-max: 1240px;
+  --topbar-height: 60px;
+  --accent-bar: 4px;
+  --font-heading: Urbanist, "Public Sans", system-ui, sans-serif;
+  --font-body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, "Courier New", monospace;
 
-  /* type */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* the dashboard's own structure (not in the design's tokens) */
   --fs-base: 16px;
   --fs-operator: 14px;
   --lh: 1.5;
-
-  /* structure */
-  --radius: 6px;
-  --pad-card: 14px;
   --pad-cell-operator: 8px;
   --pad-cell-client: 12px;
-  --content-max: 1440px;
   --rail-width: 340px;
-  --chat-width: 400px;
+  --chat-width: 440px;
 }
 
-* { box-sizing: border-box; }
+/* ==== self-hosted fonts (SIL Open Font Licence; texts beside the files) ==== */
 
-html { font-size: var(--fs-base); }
+@font-face { font-family: "Urbanist"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("/static/fonts/urbanist-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Urbanist"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("/static/fonts/urbanist-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "Public Sans"; font-style: normal; font-weight: 300; font-display: swap;
+  src: url("/static/fonts/public-sans-latin-300-normal.woff2") format("woff2"); }
+@font-face { font-family: "Public Sans"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("/static/fonts/public-sans-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Public Sans"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("/static/fonts/public-sans-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Public Sans"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("/static/fonts/public-sans-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Public Sans"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("/static/fonts/public-sans-latin-700-normal.woff2") format("woff2"); }
+
+/* ==== the old names, kept as aliases of the new tokens ==== */
+/* On the theme selectors too, so that they re-resolve inside a data-theme="dark" section. */
+
+:root, [data-theme="light"], [data-theme="dark"] {
+  --card: var(--surface);
+  --ink: var(--text);
+  --muted: var(--text-dim);
+  --accent: var(--accent-text);
+  --ok: var(--status-done-text);
+  --warn: var(--status-risk-text);
+  --bad: var(--status-fail-text);
+  --pending: var(--text-dim);
+  --pending-hatch: repeating-linear-gradient(135deg, var(--tint-neutral) 0 5px, var(--surface) 5px 10px);
+  --font-sans: var(--font-body);
+  --radius: var(--radius-md);
+  --pad-card: var(--space-24);
+}
+
+/* ==== base ==== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { font-size: var(--fs-base); background: var(--bg); }
 
 body {
   margin: 0;
-  font-family: var(--font-sans);
-  line-height: var(--lh);
-  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 24px;
+  color: var(--text);
   background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Headings take a line height relative to their own size (the body's 24px would overlap them). */
+h1, h2, h3, h4 { line-height: 1.25; }
+
+a { color: var(--accent-text); text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.icon {
+  width: 16px; height: 16px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round;
 }
 
 .num, .num * { font-variant-numeric: tabular-nums; }
-
-a { color: var(--accent); }
-a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
+.dim { color: var(--text-dim); }
 
 .visually-hidden {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
-.skip-link {
-  position: absolute; left: -999px;
+.skip-link { position: absolute; left: -999px; z-index: 30; }
+.skip-link:focus {
+  left: var(--space-8); top: var(--space-8);
+  background: var(--surface); color: var(--heading);
+  padding: 6px 10px; border-radius: var(--radius-sm); box-shadow: var(--shadow-raised);
 }
-.skip-link:focus { left: 8px; top: 8px; background: var(--card); padding: 6px 10px; z-index: 10; }
 
-/* ---- top bar (ux §3) ---------------------------------------------------- */
+/* Identifiers: feature ids, commit ids, build ids. A soft code chip. */
+.feature-id {
+  font-family: var(--font-mono); font-size: 12px; line-height: 16px; font-weight: 500;
+  color: var(--text-dim); background: var(--surface-sunken);
+  padding: 1px 6px; border-radius: var(--radius-sm); white-space: nowrap; text-decoration: none;
+}
+td.feature-id { background: none; }
+
+.feature-title { font-weight: 600; color: var(--heading); }
+a.feature-title { color: var(--heading); text-decoration: none; }
+a.feature-title:hover { text-decoration: underline; }
+.feature-title--missing { font-weight: 600; color: var(--text-dim); font-style: italic; }
+
+/* ==== frame: top bar, nav, cluster ==== */
+
 .topbar {
-  display: flex; align-items: center; gap: 16px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--line);
-  background: var(--card);
-  font-size: var(--fs-operator);
+  display: flex; align-items: center; gap: var(--space-24);
+  height: var(--topbar-height); padding: 0 var(--space-32);
+  background: var(--topbar); color: var(--on-dark);
 }
-.topbar__brand { font-weight: 700; }
-.topnav ul { list-style: none; display: flex; gap: 14px; margin: 0; padding: 0; }
-.topnav__item { text-decoration: none; color: var(--muted); }
-.topnav__item--active { color: var(--ink); font-weight: 600; border-bottom: 2px solid var(--accent); }
-.topbar__cluster { margin-left: auto; display: flex; align-items: center; gap: 12px; }
-.user-menu { display: inline-flex; gap: 10px; align-items: baseline; color: var(--muted); }
+.topbar :focus-visible, .tabbar :focus-visible { outline-color: var(--on-dark-accent); }
+.topbar__brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--on-dark); flex: none; }
+.topbar__logo { height: 24px; width: auto; display: block; }
+.topbar__wordmark { height: 19px; width: auto; display: block; }
+.topbar__product {
+  font-family: var(--font-heading); font-size: 17px; font-weight: 600; line-height: 20px;
+  color: var(--on-dark-accent); padding-left: 10px; margin-left: 2px;
+  border-left: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.topnav { height: 100%; }
+.topnav ul { list-style: none; display: flex; align-items: center; gap: 2px; height: 100%; margin: 0; padding: 0; }
+.topnav li { height: 100%; }
+.topnav__item {
+  position: relative; display: flex; align-items: center; height: 100%;
+  padding: 0 12px; font-size: 14px; font-weight: 600; text-decoration: none;
+  color: var(--on-dark-dim);
+}
+.topnav__item:hover, .topnav__item[aria-current="page"] { color: var(--on-dark); }
+.topnav__item[aria-current="page"]::after {
+  content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px;
+  border-radius: 3px 3px 0 0; background: var(--on-dark-accent);
+}
+
+.topbar__cluster { margin-left: auto; display: flex; align-items: center; gap: var(--space-16); }
+
+/* Live-update connection dot (sse.js sets data-sse-state; the title gives the word). */
+.sse-dot { display: inline-flex; align-items: center; }
+.sse-dot > [aria-hidden="true"] {
+  display: block; width: 8px; height: 8px; border-radius: 50%; font-size: 0;
+  background: var(--on-dark-dim);
+}
+.sse-dot[data-sse-state="open"] > [aria-hidden="true"] { background: var(--status-done); }
+.sse-dot[data-sse-state="reconnecting"] > [aria-hidden="true"] { background: var(--status-risk); }
+.sse-dot[data-sse-state="down"] > [aria-hidden="true"] { background: var(--status-fail); }
+
+.read-asof .asof-chip { color: var(--on-dark-dim); }
+
+/* The theme switch: an on-dark outline pill. theme.js shows it and keeps its label right. */
+.theme-switch {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0;
+  height: 36px; padding: 0 14px; border-radius: var(--radius-pill);
+  border: 1px solid rgba(255, 255, 255, 0.22); background: transparent;
+  color: var(--on-dark); font: 600 14px/16px var(--font-body); cursor: pointer; white-space: nowrap;
+}
+.theme-switch:hover { background: rgba(255, 255, 255, 0.08); }
+.theme-switch[hidden] { display: none; }
+.theme-switch__mode { margin-left: 0.3em; }
+
+.user-menu { display: inline-flex; align-items: center; gap: 10px; color: var(--on-dark-dim); font-size: 14px; line-height: 20px; }
+.user-menu__avatar {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 34px; height: 34px; border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.12); color: var(--on-dark);
+  font: 700 13px/1 var(--font-heading); letter-spacing: 0.02em;
+}
+.user-menu__name { white-space: nowrap; }
 .user-menu__form { display: inline; margin: 0; }
-.user-menu__signout { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }
-.user-menu summary { cursor: pointer; color: var(--muted); }
+.user-menu__signout {
+  background: none; border: 0; padding: 0; font: inherit; font-weight: 600; color: var(--on-dark);
+  text-decoration: underline; text-underline-offset: 2px; cursor: pointer; white-space: nowrap;
+}
+.user-menu__signout:hover { color: var(--on-dark-accent); }
 
-.sse-dot { color: var(--muted); }
-.projector-chip { font-size: 12px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; }
-.projector-chip--live { color: var(--ok); }
-.projector-chip--stale { color: var(--bad); font-weight: 700; }
+.org-chip {
+  display: inline-flex; align-items: center; padding: 5px 12px; border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.1); color: var(--on-dark);
+  font-size: 13px; line-height: 16px; font-weight: 600; white-space: nowrap;
+}
 
-/* ---- banner slot (§3 / §5.6) ------------------------------------------- */
-.banner-slot:empty { display: none; }
-.banner { padding: 8px 16px; font-weight: 600; }
-/* The freshness element: the read time, and the stale banner when the record is not being read. */
-.freshness .read-asof { display: block; text-align: right; padding: 2px 16px; }
-/* Never two banners: the stale banner wins over "updates paused" whichever arrived first. */
+/* ==== frame: banner slot (at most one banner) ==== */
+
+.banner {
+  display: flex; align-items: flex-start; gap: var(--space-12);
+  padding: 12px var(--space-32); font-size: 14px; line-height: 20px; font-weight: 600;
+}
+.banner .icon { width: 18px; height: 18px; margin-top: 1px; stroke-width: 1.9; }
+/* The server's banner: it is raised only after two minutes, so it reads as stopped (red). */
+.banner--stale { background: var(--status-fail-tint); color: var(--status-fail-text); }
+.banner--stale .icon { color: var(--status-fail); }
+/* Live updates paused (created by sse.js, text only): the amber stale look. */
+.banner--sse_paused { background: var(--status-risk-tint); color: var(--status-risk-text); cursor: pointer; }
+/* Never two banners: the stale banner wins over "updates paused", whichever arrived first. */
 .banner-slot:has(.banner--stale) .banner--sse_paused { display: none; }
-.banner--sse_paused { background: #fdf5e3; color: var(--warn); border-bottom: 2px solid var(--warn); }
+/* The freshness element (fragments/freshness.html): the read time under the top bar, then the banner. */
+.freshness .read-asof { display: block; text-align: right; padding: var(--space-4) var(--space-32); }
 
-/* ---- frame (content + chat drawer grid) -------------------------------- */
+/* ==== frame: page grid, content and the chat slot ==== */
+
 .frame {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 0;
   max-width: var(--content-max);
   margin: 0 auto;
 }
-.content { padding: 16px; min-width: 0; }
+.content {
+  min-width: 0; padding: var(--space-32);
+  display: flex; flex-direction: column; gap: var(--space-24);
+}
 .chat-drawer[hidden], .chat-toggle[hidden] { display: none; }
-/* The chat drawer column is reserved; it opens (D4) to var(--chat-width) at >=1280px. */
 
-.site-footer {
-  display: flex; gap: 16px; justify-content: space-between;
-  padding: 10px 16px; border-top: 1px solid var(--line); color: var(--muted);
-  font-size: 12px; max-width: var(--content-max); margin: 0 auto;
+/* The phone tab bar: shown under 720px, in place of the top nav. */
+.tabbar { display: none; }
+
+/* ==== headline ==== */
+
+.page-head { display: flex; flex-direction: column; }
+.page-head--split { flex-direction: row; align-items: flex-end; justify-content: space-between; gap: var(--space-24); }
+.page-eyebrow {
+  margin: 0 0 var(--space-8);
+  font-family: var(--font-heading); font-size: 12px; line-height: 16px; font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent-text);
+}
+.page-title {
+  margin: 0; font-family: var(--font-heading); font-size: 32px; line-height: 38px;
+  font-weight: 700; letter-spacing: -0.015em; color: var(--heading);
+}
+.page-lead { margin: var(--space-8) 0 0; font-size: 18px; line-height: 28px; color: var(--text-dim); max-width: 64ch; }
+.panel-card__body .page-lead { font-size: 14px; line-height: 20px; margin: 0 0 var(--space-12); }
+.page-head__meta, .feature-header__meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-12);
+  margin-top: var(--space-12); font-size: 13px; line-height: 18px; color: var(--text-dim);
+}
+/* The one Luminous Green word on a screen. Only on a dark ground. */
+.key-figure { color: var(--luminous); }
+
+.section-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-16); margin: 0 0 var(--space-12); }
+.section-title, .rail-title {
+  font-family: var(--font-heading); font-size: 22px; line-height: 28px; font-weight: 700;
+  letter-spacing: -0.01em; color: var(--heading); margin: 0;
 }
 
-.page-title { font-size: 20px; margin: 4px 0 12px; }
-.page-lead, .placeholder-note { color: var(--muted); }
+/* ==== cards ==== */
 
-/* ---- panel card (the §5 surface) --------------------------------------- */
 .panel-card {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  margin-bottom: 14px;
+  position: relative; overflow: hidden;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: var(--pad-card);
 }
 .panel-card__header {
-  display: flex; align-items: baseline; gap: 10px;
-  padding: var(--pad-card); border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: var(--space-8) var(--space-12); margin-bottom: var(--space-12);
 }
-.panel-card__title { font-size: 13px; letter-spacing: 0.02em; margin: 0; }
+.panel-card__title {
+  margin: 0; font-family: var(--font-heading); font-size: 17px; line-height: 24px; font-weight: 600;
+  color: var(--heading);
+}
+.panel-card__sub, .panel-card__header .asof-chip { font-family: var(--font-body); font-size: 12px; line-height: 16px; font-weight: 500; color: var(--text-dim); }
 .panel-card__header .asof-chip { margin-left: auto; }
-.panel-card__body { padding: var(--pad-card); font-size: var(--fs-operator); }
+.panel-card__body { margin: 0; font-size: 14px; line-height: 20px; color: var(--text-dim); overflow-x: auto; }
+.panel-card__body > p { margin: 0 0 var(--space-8); }
+.panel-card__body > p:last-child { margin-bottom: 0; }
+.panel-card__foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-12); margin-top: var(--space-16); font-size: 13px; line-height: 18px; color: var(--text-dim); }
 
-/* LAGGING: dim content 55%, amber/red dot. TRUE-EMPTY: plain text. FEED-PENDING: hatch. */
-.state-lagging .panel-card__body { opacity: 0.55; }
-.lagging-note { color: var(--warn); font-style: italic; margin: 0 0 8px; }
-.true-empty { color: var(--muted); }
-
-/* ---- as-of chip (§5.1) -------------------------------------------------- */
-.asof-chip { font-size: 12px; color: var(--muted); white-space: nowrap; display: inline-flex; gap: 4px; align-items: center; }
-.asof-dot { font-size: 10px; }
-.asof-dot--live, .asof-chip--live .asof-dot { color: var(--ok); }
-.asof-dot--lagging, .asof-chip--lagging .asof-dot { color: var(--warn); }
-.asof-dot--stale, .asof-chip--stale .asof-dot { color: var(--bad); }
-.asof-dot--empty, .asof-chip--empty .asof-dot { color: var(--ok); }
-.asof-dot--pending, .asof-chip--pending .asof-dot { color: var(--pending); }
-
-/* ---- band chip (§5.5) — colour + letter always together ---------------- */
-.band-chip { font-size: 12px; font-weight: 700; padding: 0 4px; border-radius: 3px; }
-.band-chip--g { color: var(--ok); }
-.band-chip--a { color: var(--warn); }
-.band-chip--r { color: var(--bad); }
-.band-chip--none { color: var(--muted); }
-
-/* ---- journey bar (§5.3) ------------------------------------------------- */
-.journey-bar__stations { list-style: none; display: flex; gap: 6px; margin: 0; padding: 0; flex-wrap: wrap; }
-.journey-station { display: inline-flex; flex-direction: column; align-items: center; font-size: 11px; color: var(--muted); }
-.journey-station__glyph { font-size: 14px; }
-.journey-station--passed .journey-station__glyph { color: var(--ok); }
-.journey-station--current .journey-station__glyph { color: var(--accent); font-weight: 700; }
-.journey-station--future .journey-station__glyph { color: var(--muted); }
-.journey-station--waiting .journey-station__glyph { color: var(--warn); font-weight: 700; }
-.journey-station--pending .journey-station__glyph { color: var(--pending); }
-.journey-bar--mini .journey-station__glyph { font-size: 12px; }
-.journey-bar__meta { display: flex; gap: 10px; margin-top: 4px; font-size: 12px; }
-.journey-bar__current { font-weight: 600; }
-.journey-bar__progress { color: var(--muted); }
-
-/* ---- provenance badge (§5.4) ------------------------------------------- */
-.provenance-badge { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
-
-/* ---- feed-pending / spend slot (§5.2 / §7.3) --------------------------- */
-.state-pending, .spend-slot {
-  background: var(--pending-hatch);
-  border: 1px dashed var(--pending);
-  border-radius: 4px;
-  padding: 6px 8px;
-  color: var(--muted);
-  font-size: 12px;
-  display: inline-flex; flex-direction: column; gap: 2px;
+.panel-card--bar { padding-left: calc(var(--pad-card) + var(--accent-bar)); }
+.panel-card--bar::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+  width: var(--accent-bar); background: var(--bar, var(--bright-green));
 }
-.state-pending__label, .spend-slot__label { font-weight: 700; color: var(--pending); }
+.panel-card--done { --bar: var(--status-done); }
+.panel-card--risk { --bar: var(--status-risk); }
+.panel-card--fail { --bar: var(--status-fail); }
+.panel-card--wait { --bar: var(--status-wait); }
+.panel-card--info { --bar: var(--status-info); }
 
-/* ---- feature naming (§5.8) — titles lead, ids follow ------------------- */
-.feature-title { font-weight: 600; }
-.feature-title--missing { font-weight: 600; color: var(--muted); font-style: italic; }
-.feature-id { font-size: 12px; color: var(--muted); text-decoration: none; }
+/* For cards holding a table: the table runs to the card's edges. */
+.panel-card--flush { padding: 0; }
+.panel-card--flush > .panel-card__header { padding: var(--space-16) var(--space-24) 0; }
+.panel-card--flush > .panel-card__body > :not(table) { margin: 0 var(--space-24) var(--space-16); }
+.panel-card--flush > .panel-card__foot { margin: 0; padding: var(--space-12) var(--space-24) var(--space-16); }
 
-/* ---- home grid ---------------------------------------------------------- */
-.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) var(--rail-width); gap: 16px; }
-.home-grid__main { min-width: 0; }
-.rail-title { font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+/* sse.js marks a card it has just refreshed for 600 ms: a short tint, no layout change. */
+.panel-card--updated { background-color: var(--tint-green); }
+@media (prefers-reduced-motion: no-preference) {
+  .panel-card { transition: background-color 0.6s ease-out; }
+}
 
-/* ---- needs-you strip ---------------------------------------------------- */
+/* A card whose data is old: the content dims, the lagging note stays readable. */
+.state-lagging .panel-card__body > :not(.lagging-note) { opacity: 0.6; }
+
+/* ==== layout grids ==== */
+
+.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) var(--rail-width); gap: var(--space-24); align-items: start; }
+.home-grid__main { min-width: 0; display: flex; flex-direction: column; gap: var(--space-32); }
+.home-grid__rail { min-width: 0; display: flex; flex-direction: column; gap: var(--space-16); }
+.feature-lower, .report-two-col, .fleet-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-16); align-items: start; }
+.stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-16); }
+.stat-grid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* ==== figures: stat tiles ==== */
+
+.stat-tile {
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; gap: 4px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: 18px 20px 18px calc(20px + var(--accent-bar));
+}
+.stat-tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--accent-bar); background: var(--bar, var(--bright-green)); }
+.stat-tile__label { order: -1; font-size: 13px; line-height: 16px; font-weight: 600; color: var(--text-dim); }
+.stat-tile__value { font-family: var(--font-heading); font-size: 40px; line-height: 44px; font-weight: 700; letter-spacing: -0.02em; color: var(--heading); }
+.stat-tile__value small { font-size: 22px; font-weight: 700; letter-spacing: 0; margin: 0 2px; }
+.stat-tile__sub { font-size: 13px; line-height: 18px; color: var(--text-dim); }
+.stat-tile__sub .status-pill, .stat-tile__sub .band-chip, .stat-tile__sub .honest-badge { margin-top: 4px; }
+.stat-tile__sub .honest-badge { white-space: normal; }
+/* The key tile: the screen's one Luminous Green moment, on Deep Green. At most one per screen. */
+.stat-tile--key { background: var(--kicker); border-color: var(--kicker); --bar: var(--luminous); }
+.stat-tile--key .stat-tile__label { color: var(--on-dark-dim); }
+.stat-tile--key .stat-tile__value { color: var(--luminous); }
+.stat-tile--key .stat-tile__sub { color: var(--on-dark-dim); }
+.stat-tile--key .stat-tile__sub strong { color: var(--on-dark); }
+/* A tile whose figure we do not have: never a zero. */
+.stat-tile--empty { --bar: var(--line-strong); }
+.stat-tile--empty .stat-tile__value { font-size: 20px; line-height: 44px; color: var(--text-dim); }
+
+/* ==== figures: estimates, bars, splits, sparklines (for part B; nothing uses them yet) ==== */
+
+.est { text-decoration: underline dotted var(--status-info); text-decoration-thickness: 2px; text-underline-offset: 4px; }
+.est::before { content: "≈ "; color: var(--status-info-text); font-weight: 600; }
+.stat-tile__value .est::before { font-size: 0.55em; vertical-align: 0.35em; }
+
+.bar { display: flex; gap: 2px; height: 10px; border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-sunken); }
+.bar > span { display: block; height: 100%; background: var(--seg, var(--bright-green)); }
+.bar--thin { height: 6px; }
+.bar__seg--plan { --seg: var(--bright-green); }
+.bar__seg--build { --seg: var(--heading); }
+.bar__seg--review { --seg: var(--text-dim); }
+.bar__seg--machine { --seg: var(--bright-green); }
+.bar__seg--wait { --seg: var(--status-wait); }
+.bar__seg--none { --seg: repeating-linear-gradient(135deg, var(--line-strong) 0 3px, transparent 3px 6px); background: var(--seg); }
+.bar-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; line-height: 18px; color: var(--text-dim); }
+.bar-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.bar-legend li::before { content: ""; width: 10px; height: 10px; border-radius: 2px; background: var(--seg); }
+.bar-legend b { color: var(--heading); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.spend-split { list-style: none; margin: 8px 0 2px; padding: 0; display: flex; flex-direction: column; gap: 7px; font-size: 13px; line-height: 16px; }
+.spend-split li { display: grid; grid-template-columns: minmax(0, 1fr) 72px 52px; align-items: center; gap: 10px; color: var(--text-dim); }
+.spend-split a, .spend-split span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spend-split a { color: var(--text); text-decoration: none; }
+.spend-split a:hover { text-decoration: underline; }
+.spend-split__bar { display: block; height: 6px; border-radius: 3px; background: var(--surface-sunken); overflow: hidden; }
+.spend-split__bar i { display: block; height: 100%; background: var(--bright-green); }
+.spend-split b { color: var(--heading); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.week-bar { display: grid; grid-template-columns: minmax(0, 1fr) 60px; align-items: center; gap: 10px; }
+.week-bar .spend-split__bar { height: 8px; }
+.week-bar b { text-align: right; font-weight: 600; color: var(--heading); font-variant-numeric: tabular-nums; }
+
+.sparkline { width: 96px; height: 28px; overflow: visible; }
+.sparkline polyline { fill: none; stroke: var(--bright-green); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.sparkline circle { fill: var(--bright-green); }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--seg); margin-right: 8px; vertical-align: 0; }
+
+/* ==== status: pills (on-track bands, severity and state words) ==== */
+
+.band-chip, .status-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px 4px 8px; border-radius: var(--radius-pill);
+  font-family: var(--font-body); font-size: 13px; line-height: 16px; font-weight: 600; white-space: nowrap;
+  vertical-align: middle;
+  background: var(--pill-bg, var(--tint-neutral)); color: var(--pill-fg, var(--text-dim));
+}
+.band-chip .icon, .status-pill .icon { width: 14px; height: 14px; color: var(--pill-icon, currentColor); stroke-width: 1.9; }
+/* Capitalise the word on screen only; the HTML keeps the record's own words. */
+.band-chip__word { display: inline-block; }
+.band-chip__word::first-letter { text-transform: uppercase; }
+.status-pill__time { font-weight: 500; }
+.band-chip--g, .status-pill--done, .status-pill--ok { --pill-bg: var(--tint-green); --pill-fg: var(--status-done-text); --pill-icon: var(--status-done); }
+.band-chip--a, .status-pill--risk { --pill-bg: var(--status-risk-tint); --pill-fg: var(--status-risk-text); --pill-icon: var(--status-risk); }
+.band-chip--r, .status-pill--fail { --pill-bg: var(--status-fail-tint); --pill-fg: var(--status-fail-text); --pill-icon: var(--status-fail); }
+.status-pill--wait { --pill-bg: var(--status-wait-tint); --pill-fg: var(--status-wait-text); --pill-icon: var(--status-wait); }
+.status-pill--info { --pill-bg: var(--status-info-tint); --pill-fg: var(--status-info-text); --pill-icon: var(--status-info); }
+.status-pill--neutral { --pill-bg: var(--tint-neutral); --pill-fg: var(--text-dim); }
+/* No figure: the not-measured look (hatched, dashed edge). */
+.band-chip--none {
+  border-radius: var(--radius-sm); padding: 3px 9px 3px 7px; font-size: 12px;
+  border: 1px dashed var(--line-strong); color: var(--text-dim);
+  background: repeating-linear-gradient(135deg, var(--tint-neutral) 0 5px, var(--surface) 5px 10px);
+}
+/* No plan to compare against: a dashed outline. */
+.plan-row--no_baseline .band-chip { background: transparent; }
+
+/* ==== status: the journey (nine stations) ==== */
+
+.journey-bar__stations {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+}
+.journey-station {
+  position: relative; display: flex; flex-direction: column; align-items: center;
+  text-align: center; gap: 6px; padding: 0 4px;
+}
+.journey-station::before {
+  content: ""; position: absolute; top: 13px; right: 50%; width: 100%; height: 2px;
+  background: var(--line); z-index: 0;
+}
+.journey-station:first-child::before { display: none; }
+.journey-station--passed::before, .journey-station--current::before,
+.journey-station--pending::before, .journey-station--waiting::before, .journey-station--stopped::before { background: var(--bright-green); }
+.journey-station__glyph {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; justify-content: center; flex: none;
+  width: 28px; height: 28px; border-radius: var(--radius-pill);
+  background: var(--surface); border: 2px solid var(--line-strong); color: var(--text-dim);
+}
+.journey-station__glyph .icon { width: 14px; height: 14px; stroke-width: 2.2; }
+.journey-station--passed .journey-station__glyph { background: var(--bright-green); border-color: var(--bright-green); color: var(--surface); }
+.journey-station--current .journey-station__glyph { border-color: var(--bright-green); }
+.journey-station--current .journey-station__glyph::after { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--bright-green); }
+.journey-station--stopped .journey-station__glyph { background: var(--status-fail-tint); border-color: var(--status-fail); color: var(--status-fail); }
+/* Waiting for a person: purple. It comes after --current, so it wins on the same step. */
+.journey-station--pending .journey-station__glyph, .journey-station--waiting .journey-station__glyph { background: var(--status-wait-tint); border-color: var(--status-wait); color: var(--status-wait); }
+.journey-station--pending .journey-station__glyph::after, .journey-station--waiting .journey-station__glyph::after { content: none; }
+.journey-station__name { display: block; font-size: 13px; line-height: 16px; font-weight: 600; color: var(--text-dim); }
+.journey-station__name::first-letter { text-transform: uppercase; }
+.journey-station--passed .journey-station__name, .journey-station--current .journey-station__name,
+.journey-station--pending .journey-station__name, .journey-station--waiting .journey-station__name, .journey-station--stopped .journey-station__name { color: var(--heading); }
+.journey-station__time { font-size: 12px; line-height: 16px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.journey-station--pending .journey-station__time, .journey-station--waiting .journey-station__time { color: var(--status-wait-text); font-weight: 600; }
+.journey-station--stopped .journey-station__time { color: var(--status-fail-text); font-weight: 600; }
+.journey-bar__meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: var(--space-12); font-size: 14px; line-height: 20px; }
+.journey-bar__current { font-weight: 600; color: var(--heading); }
+
+/* The mini journey in list rows: nine small segments, read as one picture. */
+.journey-bar--mini { display: inline-flex; vertical-align: middle; }
+.journey-bar--mini .journey-bar__stations { display: inline-flex; align-items: center; gap: 3px; }
+.journey-bar--mini .journey-station { display: block; padding: 0; }
+.journey-bar--mini .journey-station::before { content: none; }
+.journey-bar--mini .journey-station__glyph {
+  display: block; width: 14px; height: 6px; border: 0; border-radius: 2px;
+  font-size: 0; background: var(--tint-neutral);
+}
+.journey-bar--mini .journey-station__glyph::after { content: none; }
+.journey-bar--mini .journey-station--passed .journey-station__glyph { background: var(--bright-green); }
+.journey-bar--mini .journey-station--current .journey-station__glyph { background: var(--bright-green); box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--bright-green); }
+.journey-bar--mini .journey-station--pending .journey-station__glyph, .journey-bar--mini .journey-station--waiting .journey-station__glyph { background: var(--status-wait); box-shadow: none; }
+.journey-bar--mini .journey-station--stopped .journey-station__glyph { background: var(--status-fail); }
+
+/* ==== honesty ==== */
+
+.honest-badge, .spend-slot, .state-pending, .lagging-note, .named-gap, .report-withheld, .provenance-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px 3px 7px; border-radius: var(--radius-sm);
+  font-family: var(--font-body); font-size: 12px; line-height: 16px; font-weight: 600; font-style: normal;
+  color: var(--text-dim); background: var(--surface-sunken);
+  border: 1px dashed var(--line-strong);
+}
+.honest-badge .icon, .spend-slot .icon, .state-pending .icon, .lagging-note .icon,
+.named-gap .icon, .report-withheld .icon, .provenance-badge .icon { width: 14px; height: 14px; stroke-width: 1.9; }
+/* Not measured: hatched, with the slash icon. Never a reassuring zero. */
+.honest-badge--not-measured, .spend-slot, .state-pending { background: var(--pending-hatch); }
+.state-pending { display: block; padding: var(--space-16) 18px; font-size: 14px; line-height: 20px; font-weight: 500; }
+.state-pending__label, .spend-slot__label { font-weight: 700; color: var(--text-dim); }
+/* Older than it should be: amber, with the clock icon. */
+.honest-badge--stale, .lagging-note, .named-gap { color: var(--status-risk-text); background: var(--status-risk-tint); border: 1px solid transparent; }
+.honest-badge--stale .icon, .lagging-note .icon, .named-gap .icon { color: var(--status-risk); }
+.lagging-note { margin: 0 0 var(--space-12); white-space: normal; }
+.named-gap { white-space: normal; }
+/* Stopped, or withheld: red. */
+.honest-badge--stopped, .report-withheld { color: var(--status-fail-text); background: var(--status-fail-tint); border: 1px solid transparent; }
+.honest-badge--stopped .icon, .report-withheld .icon { color: var(--status-fail); }
+.report-withheld { margin: 0 0 var(--space-8); white-space: normal; }
+/* A worked-out figure (part B). */
+.honest-badge--estimated, .provenance-badge { color: var(--status-info-text); background: var(--status-info-tint); border: 1px dotted var(--status-info); }
+.honest-badge--estimated .icon, .provenance-badge .icon { color: var(--status-info); }
+/* No plan to compare against. */
+.honest-badge--no-baseline { background: transparent; }
+/* A value we do not have, inside a table cell: plain words, no box. */
+td .spend-slot { padding: 0; border: 0; background: none; font-size: 13px; color: var(--text-dim); white-space: normal; }
+td .spend-slot .icon { display: none; }
+.signal-row--unmeasured { color: var(--text-dim); }
+
+/* As-of chips: an 8px dot coloured by state, then the time. freshness.js swaps the classes. */
+.asof-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; line-height: 16px; font-weight: 500; color: var(--text-dim); white-space: nowrap;
+}
+.asof-dot {
+  order: -1; flex: none; display: block; width: 8px; height: 8px; border-radius: 50%;
+  font-size: 0; line-height: 0; overflow: hidden; background: var(--status-done);
+}
+/* empty first, so a drift to lagging or stale wins over it */
+.asof-dot--empty, .asof-chip--empty .asof-dot, .asof-dot--live, .asof-chip--live .asof-dot { background: var(--status-done); }
+.asof-dot--lagging, .asof-chip--lagging .asof-dot { background: var(--status-risk); }
+.asof-dot--stale, .asof-chip--stale .asof-dot { background: var(--status-fail); }
+/* The hidden word follows the state as freshness.js changes it. */
+.asof-chip__word { display: none; }
+.asof-chip--live .asof-chip__word--live, .asof-chip--empty .asof-chip__word--live { display: inline; }
+.asof-chip--lagging .asof-chip__word--live, .asof-chip--stale .asof-chip__word--live { display: none; }
+.asof-chip--lagging .asof-chip__word--lagging { display: inline; }
+.asof-chip--stale .asof-chip__word--stale { display: inline; }
+
+/* Empty states. */
+.true-empty {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  margin: 0; padding: var(--space-16) 18px; border-radius: var(--radius-md);
+  border: 1px dashed var(--line-strong); background: var(--surface-sunken);
+  font-size: 14px; line-height: 20px; color: var(--text-dim);
+}
+.true-empty b { color: var(--heading); font-family: var(--font-heading); font-size: 15px; }
+.true-empty--circles {
+  position: relative; overflow: hidden; isolation: isolate;
+  padding: var(--space-32); border-style: solid; border-color: var(--line); background: var(--surface);
+}
+.true-empty--circles::before {
+  content: ""; position: absolute; z-index: -1; width: 260px; height: 260px; right: -70px; top: -110px;
+  border-radius: 50%; background: var(--tint-green);
+}
+
+/* Errors. */
+.error-block, .feed__error, .login-card__error {
+  display: flex; gap: 12px; align-items: flex-start;
+  margin: 0; padding: 14px 16px; border-radius: var(--radius-md);
+  background: var(--status-fail-tint); color: var(--status-fail-text);
+  font-size: 14px; line-height: 20px;
+}
+.error-block .icon, .feed__error .icon, .login-card__error .icon { color: var(--status-fail); width: 18px; height: 18px; margin-top: 1px; stroke-width: 1.9; }
+.error-block b { display: block; font-family: var(--font-heading); font-size: 15px; line-height: 20px; }
+.error-block a { color: inherit; font-weight: 600; }
+
+/* Read-only: decisions are made in Slack. Plain text until the record carries a thread address. */
+.decide-in-slack {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: var(--radius-md);
+  border: 1px solid var(--line-strong); background: var(--surface);
+  font-size: 13px; line-height: 16px; font-weight: 600; color: var(--heading); text-decoration: none; white-space: nowrap;
+}
+a.decide-in-slack:hover { border-color: var(--bright-green); }
+.decide-in-slack .icon { width: 14px; height: 14px; color: var(--accent-text); }
+.observes-only { margin: var(--space-12) 0 0; font-size: 13px; line-height: 18px; color: var(--text-dim); }
+
+/* ==== interaction: buttons and forms ==== */
+
+.button--primary, .button--secondary, .window-form button, .login-form button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 40px; padding: 0 18px; border-radius: var(--radius-md);
+  font: 600 15px/16px var(--font-body); text-decoration: none; cursor: pointer;
+  border: 1px solid transparent;
+}
+.button--primary, .login-form button { background: var(--heading); color: var(--surface); }
+.button--primary:hover, .login-form button:hover { background: var(--bright-green); color: var(--on-dark); }
+.button--secondary, .window-form button { background: var(--surface); color: var(--heading); border-color: var(--line-strong); }
+.button--secondary:hover, .window-form button:hover { border-color: var(--bright-green); }
+.button--primary[disabled], .button--secondary[disabled] { opacity: 0.45; cursor: not-allowed; }
+.button--primary .icon, .button--secondary .icon { width: 16px; height: 16px; }
+.button--compact, .window-form button { min-height: 38px; padding: 0 14px; font-size: 14px; }
+.button--block { width: 100%; min-height: 46px; }
+
+/* Fields: the labels already wrap their inputs, so these are descendant rules. */
+.window-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-8); margin: 0; }
+.window-form label, .login-form label {
+  display: flex; flex-direction: column; gap: 6px;
+  font-size: 13px; line-height: 16px; font-weight: 600; color: var(--heading);
+}
+.window-form input, .login-form input {
+  height: 44px; padding: 0 12px;
+  border-radius: var(--radius-md); border: 1px solid var(--line-strong);
+  background: var(--surface); color: var(--text);
+  font: 400 16px/24px var(--font-body);
+}
+.window-form input { width: auto; height: 38px; font-size: 14px; }
+.login-form input { width: 100%; }
+.window-form input:focus-visible, .login-form input:focus-visible { outline-offset: 1px; border-radius: var(--radius-md); }
+.window-form input[aria-invalid="true"], .login-form input[aria-invalid="true"] { border-color: var(--status-fail); }
+.hint { margin: 0; font-size: 13px; line-height: 18px; color: var(--text-dim); }
+
+/* Segmented links (one level only: never tabs inside tabs). */
+.window-links { display: inline-flex; align-self: flex-start; padding: 3px; gap: 2px; border-radius: var(--radius-md); background: var(--surface-sunken); border: 1px solid var(--line); }
+.window-links a { padding: 7px 14px; border-radius: 6px; font-size: 14px; line-height: 16px; font-weight: 600; color: var(--text-dim); text-decoration: none; white-space: nowrap; }
+.window-links a:hover { color: var(--heading); }
+.window-links a[aria-current="page"] { background: var(--surface); color: var(--heading); box-shadow: var(--shadow-card); }
+
+/* A details element (the request as sent; the services' model list). */
+.feature-request summary {
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; line-height: 18px; font-weight: 600; color: var(--accent-text);
+}
+
+/* ==== tables, signal lists, key-value lists ==== */
+
+.dense-table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 20px; }
+.dense-table th {
+  padding: 8px 12px; background: var(--surface-sunken); text-align: left; vertical-align: bottom;
+  font-size: 12px; line-height: 16px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim);
+}
+.dense-table td { padding: 10px 12px; border-top: 1px solid var(--line); color: var(--heading); vertical-align: top; }
+.dense-table tbody tr:first-child td { border-top: 0; }
+.dense-table thead + tbody tr:first-child td { border-top: 1px solid var(--line); }
+/* Figures align right; a time in the first column is a row label and stays left. */
+.dense-table td.num:not(:first-child), .dense-table th.num:not(:first-child) { text-align: right; }
+.feature-list td:first-child { min-width: 12em; }
+/* Long unbroken words (paths, ids in an error) may break, so a table fits its card where it can. */
+.dense-table td { overflow-wrap: anywhere; }
+.dense-table tfoot td { font-weight: 700; border-top: 2px solid var(--line-strong); }
+.feature-list__row--finished td { color: var(--text-dim); }
+.feature-list__row--finished .feature-title { color: var(--text-dim); }
+
+.signal-list { list-style: none; margin: 0; padding: 0; }
+.signal-list > .signal-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--space-12); padding: 12px 0; border-top: 1px solid var(--line); }
+.signal-list > .signal-row:first-child { border-top: 0; padding-top: 0; }
+.signal-list > .signal-row:last-child { padding-bottom: 0; }
+.signal-row__name { font-family: var(--font-heading); font-size: 15px; line-height: 20px; font-weight: 600; color: var(--heading); }
+.signal-row__text { grid-column: 1; margin: 0; font-size: 14px; line-height: 20px; color: var(--text-dim); }
+.signal-list > .signal-row > .band-chip, .signal-list > .signal-row > .status-pill,
+.signal-list > .signal-row > .honest-badge, .signal-list > .signal-row > .decide-in-slack {
+  grid-column: 2; grid-row: 1 / span 2; align-self: center; justify-self: end;
+}
+
+.kv-list { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 10px var(--space-16); font-size: 14px; line-height: 20px; }
+.kv-list dt { color: var(--text-dim); }
+.kv-list dd { margin: 0; color: var(--heading); font-weight: 600; text-align: right; display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ==== below 1024px: one column ==== */
+
+@media (max-width: 1024px) {
+  .home-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ==== phones: under 720px ==== */
+
+@media (max-width: 720px) {
+  :root, [data-theme="light"], [data-theme="dark"] { --pad-card: var(--space-16); }
+  .hide-phone { display: none; }
+
+  .topbar { height: 52px; padding: 0 var(--space-16); gap: var(--space-12); }
+  .topnav, .read-asof { display: none; }
+  .topbar__logo { height: 22px; }
+  .topbar__wordmark { height: 16px; }
+  .topbar__product { font-size: 15px; padding-left: 8px; }
+  .topbar__cluster { gap: var(--space-12); }
+  .theme-switch { height: 32px; padding: 0 10px; font-size: 13px; }
+  .user-menu__name {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  .user-menu__avatar, .theme-switch__mode { display: none; }
+  .org-chip { display: none; }
+
+  .banner { padding: 12px var(--space-16); }
+
+  .content { padding: var(--space-16) var(--space-16) 96px; gap: var(--space-16); }
+
+  .tabbar {
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    position: sticky; bottom: 0; z-index: 5;
+    background: var(--topbar); padding: 8px 4px calc(8px + env(safe-area-inset-bottom));
+  }
+  .tabbar__item {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    font-size: 11px; line-height: 14px; font-weight: 600; text-decoration: none; color: var(--on-dark-dim);
+  }
+  .tabbar__item .icon { width: 20px; height: 20px; }
+  .tabbar__item[aria-current="page"] { color: var(--on-dark-accent); }
+  /* Ask lives in the tab bar on phones, so the floating chat button would only cover it. */
+  .chat-toggle { display: none; }
+
+  .page-title { font-size: 26px; line-height: 32px; }
+  .page-lead { font-size: 16px; line-height: 24px; }
+  .page-head--split { flex-direction: column; align-items: flex-start; }
+  .section-title, .rail-title { font-size: 20px; line-height: 26px; }
+
+  .panel-card__header { flex-wrap: wrap; }
+  .panel-card__sub, .panel-card__header .asof-chip { white-space: normal; }
+  .panel-card--flush > .panel-card__header { padding: var(--space-16) var(--space-16) 0; }
+  .panel-card--flush > .panel-card__body > :not(table) { margin: 0 var(--space-16) var(--space-16); }
+
+  .feature-lower, .report-two-col, .fleet-grid, .stat-grid--3 { grid-template-columns: minmax(0, 1fr); }
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat-tile { padding: 14px 14px 14px calc(14px + var(--accent-bar)); }
+  .stat-tile__value { font-size: 30px; line-height: 34px; }
+  .stat-tile__value small { font-size: 17px; }
+
+  /* The full journey goes vertical. */
+  .journey-bar:not(.journey-bar--mini) .journey-bar__stations { display: flex; flex-direction: column; }
+  .journey-bar:not(.journey-bar--mini) .journey-station {
+    display: grid; grid-template-columns: 28px 1fr auto; align-items: center;
+    column-gap: var(--space-12); text-align: left; padding: 0 0 18px;
+  }
+  .journey-bar:not(.journey-bar--mini) .journey-station:last-child { padding-bottom: 0; }
+  .journey-bar:not(.journey-bar--mini) .journey-station::before { top: auto; bottom: 100%; right: auto; left: 13px; width: 2px; height: 18px; }
+  .journey-bar:not(.journey-bar--mini) .journey-station__name { font-size: 15px; line-height: 20px; }
+
+  .dense-table th, .dense-table td { padding-left: 8px; padding-right: 8px; }
+  .signal-list > .signal-row { grid-template-columns: minmax(0, 1fr); }
+  .signal-list > .signal-row > .band-chip, .signal-list > .signal-row > .status-pill,
+  .signal-list > .signal-row > .honest-badge, .signal-list > .signal-row > .decide-in-slack {
+    grid-column: 1; grid-row: auto; justify-self: start; margin-top: 6px;
+  }
+  .decide-in-slack { white-space: normal; }
+}
+
+/* ==== print: only the page's own content ==== */
+
+@media print {
+  .topbar, .tabbar, .chat-drawer, .chat-toggle, .report-toolbar, .no-print, .skip-link { display: none !important; }
+  html, body { background: #fff !important; }
+  .content { padding: 0; }
+  .panel-card, .stat-tile { box-shadow: none; }
+}
+
+/* ==== stage 2a: Now, Feature, Project ==== */
+/* Part A's own rules for these pages, carried over on the new tokens until stage 2a replaces them. */
+
 .needs-you__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.needs-you__item { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
-.needs-you__age { font-variant-numeric: tabular-nums; color: var(--muted); }
-.needs-you__meta { color: var(--muted); font-size: 12px; }
-.observes-only { color: var(--muted); font-style: italic; font-size: 12px; }
-
-/* ---- build board -------------------------------------------------------- */
+.needs-you__item { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.needs-you__headline { font-weight: 600; color: var(--heading); }
+.needs-you__age { font-variant-numeric: tabular-nums; color: var(--text-dim); }
 .build-row { padding: 8px 0; border-top: 1px solid var(--line); }
 .build-row:first-child { border-top: 0; }
-.build-row--terminal { opacity: 0.6; }
 .build-row__head, .build-row__foot { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-.build-row__detail { color: var(--muted); }
-
-/* ---- dense tables (operator) ------------------------------------------- */
-.dense-table { width: 100%; border-collapse: collapse; font-size: var(--fs-operator); }
-.dense-table th { text-align: left; color: var(--muted); font-weight: 600; }
-.dense-table th, .dense-table td { padding: var(--pad-cell-operator); border-bottom: 1px solid var(--line); vertical-align: top; }
-.dense-table .num { font-variant-numeric: tabular-nums; }
-.gate-status--passed { color: var(--ok); }
-.gate-status--gated { color: var(--warn); }
-.gate-status--rejected, .gate-status--failed { color: var(--bad); }
-
-/* ---- agents / serving --------------------------------------------------- */
-.agent-list, .service-list, .planning-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.agent-row, .service-row, .planning-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-.status-dot--ok { color: var(--ok); }
-.status-dot--idle { color: var(--muted); }
-.status-dot--fail { color: var(--bad); }
-.status-dot--unknown { color: var(--pending); font-weight: 700; }
-.unmeasured-note, .agents__note, .coverage-gaps__note { color: var(--muted); font-size: 12px; font-style: italic; }
-.service-row__resident { color: var(--muted); font-size: 12px; }
-
-/* ---- projector ---------------------------------------------------------- */
-.projector__streams { list-style: none; margin: 6px 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
-.stream-recency { display: flex; gap: 8px; font-size: 12px; }
-.stream-recency--lagging .stream-recency__label { color: var(--warn); }
-.projector__heartbeat--stale { color: var(--bad); font-weight: 700; }
-.projector__mirror { color: var(--muted); font-size: 12px; }
-
-/* ---- delivered ---------------------------------------------------------- */
-.delivered__summary { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
-.delivered__row--unverified { color: var(--muted); }
-.named-gap { color: var(--warn); font-style: italic; }
-.change-link { text-decoration: none; }
-.delivered__footer { display: flex; gap: 16px; justify-content: space-between; margin-top: 8px; color: var(--muted); font-size: 12px; }
-
-/* ---- feature page ------------------------------------------------------- */
-.feature-header { margin-bottom: 12px; }
+.build-row__detail { color: var(--text-dim); }
+.feature-header { display: flex; flex-direction: column; }
 .feature-header__title { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
-.feature-header__meta { display: flex; gap: 12px; color: var(--muted); font-size: 12px; margin-top: 4px; flex-wrap: wrap; }
-.signal-row--unmeasured { color: var(--muted); }
-.context-counters { color: var(--muted); font-size: 12px; }
-.coverage-gaps { margin-top: 8px; border-left: 3px solid var(--pending); padding-left: 8px; }
-.coverage-gaps__label { font-weight: 700; color: var(--pending); font-size: 12px; }
-.coverage-gaps__list { margin: 4px 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
-.feature-lower { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
-.feed-pending { margin-top: 8px; }
+.feature-mission, .norms-line { margin: var(--space-12) 0 0; font-size: 13px; line-height: 18px; color: var(--text-dim); }
+.feature-verdict-reason { color: var(--text); }
+.issue-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
+.issue-row--closed td { color: var(--text-dim); }
+.project-summary__list { list-style: none; margin: 0; padding: 0; display: flex; gap: 24px; flex-wrap: wrap; align-items: center; }
 
-/* ---- issues legend ------------------------------------------------------ */
-.kind-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 10px; }
-.kind-legend__entry { display: inline-flex; gap: 6px; align-items: baseline; }
+/* ==== stage 2b: Reports, export, Fleet, Login, Client ==== */
+/* Part A's own rules for these pages, carried over on the new tokens until stage 2b replaces them. */
 
-/* ---- weekly report (§4.7 / S4) ----------------------------------------- */
-.report-head { display: flex; gap: 16px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
-.report-toolbar { display: flex; gap: 24px; flex-wrap: wrap; margin: 8px 0 14px; font-size: 12px; color: var(--muted); }
-.report-rendering__active { font-weight: 700; color: var(--ink); }
-.report-rendering__link, .report-engagements a { color: var(--accent); text-decoration: none; }
+.report-head { display: flex; gap: 16px; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; }
+.report-toolbar { display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; line-height: 18px; color: var(--text-dim); }
+.report-rendering__active { font-weight: 700; color: var(--heading); }
+.report-rendering__link, .report-engagements a { color: var(--accent-text); text-decoration: none; }
 .report-engagements__active { font-weight: 700; }
-.panel-card__sub { color: var(--muted); font-weight: 400; font-size: 12px; }
-.report-headline__line { font-size: 15px; margin: 0 0 8px; }
-.report-withheld { color: var(--warn); font-style: italic; margin: 0 0 8px; }
-.plan-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.plan-row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
-.plan-row__id { font-weight: 600; }
-.plan-row__detail { color: var(--muted); font-size: 12px; }
-.plan-row__target { color: var(--muted); font-size: 12px; }
-.plan-row--withheld { color: var(--muted); }
-.report-two-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
-.report-delivered__list, .report-issues__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.report-delivered__row, .report-issues__row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-.report-issues__counts { color: var(--muted); font-size: 12px; margin: 0 0 6px; }
-.report-issues__row--closed { color: var(--muted); text-decoration: line-through; }
+.report-headline__line { font-size: 15px; color: var(--heading); margin: 0 0 8px; }
+.plan-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.plan-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.plan-row__id { font-weight: 600; color: var(--heading); }
+.plan-row__detail, .plan-row__target { color: var(--text-dim); font-size: 13px; }
+.plan-row--withheld { color: var(--text-dim); }
+.report-delivered__list, .report-issues__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.report-delivered__row, .report-issues__row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.report-issues__counts { color: var(--text-dim); font-size: 13px; margin: 0 0 8px; }
+.report-issues__row--closed { color: var(--text-dim); text-decoration: line-through; }
 
-/* ---- client-safe export (§4.7 firewall) — document-shaped, roomier ----- */
-.report-export { max-width: 820px; }
-.report-export__back { display: inline-block; margin-bottom: 12px; color: var(--accent); text-decoration: none; font-size: 13px; }
-.report-export__head h1 { margin: 0 0 4px; }
-.report-export__meta { display: flex; gap: 16px; align-items: baseline; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
-.report-export__section { margin-top: 22px; }
-.report-export__section h2 { font-size: 16px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
-.report-export__foot { margin-top: 26px; color: var(--muted); font-size: 12px; font-style: italic; }
+.report-export { max-width: 860px; width: 100%; overflow-x: auto; }
+.report-export__back { display: inline-block; color: var(--accent-text); text-decoration: none; font-size: 14px; }
+.report-export__head h1 { margin: 0 0 4px; font-family: var(--font-heading); color: var(--heading); }
+.report-export__meta { display: flex; gap: 16px; align-items: center; color: var(--text-dim); font-size: 13px; flex-wrap: wrap; }
+.report-export__section h2 { font-family: var(--font-heading); font-size: 20px; line-height: 26px; color: var(--heading); border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.report-export__foot { color: var(--text-dim); font-size: 13px; }
 
-/* ---- login -------------------------------------------------------------- */
-.layout-login { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
-.login-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; width: 320px; }
-.login-form { display: flex; flex-direction: column; gap: 10px; }
-.login-form label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-operator); }
-.login-form input { padding: 6px; border: 1px solid var(--line); border-radius: 4px; }
-.login-card__error { color: var(--bad); }
-.login-card__note { color: var(--muted); font-size: 12px; }
+.service-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.service-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.service-row__name { font-weight: 600; color: var(--heading); }
+.service-row__resident { color: var(--text-dim); font-size: 12px; }
+.status-dot--ok { color: var(--status-done); }
+.status-dot--idle { color: var(--text-dim); }
+.status-dot--fail { color: var(--status-fail); }
+.status-dot--unknown { color: var(--text-dim); font-weight: 700; }
+.feed__heartbeat { color: var(--text); }
 
-/* ---- client layout (§7.2) — roomier density --------------------------- */
-.layout-client { font-size: var(--fs-base); }
-.content--client { padding: 24px; max-width: 900px; margin: 0 auto; }
-.client-dark__lead { font-size: 18px; color: var(--muted); }
+.layout-login { display: flex; min-height: 100vh; align-items: center; justify-content: center; padding: var(--space-16); }
+.login-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-card); padding: var(--space-24); width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 14px; }
+.login-card__title { margin: 0; font-family: var(--font-heading); font-size: 22px; line-height: 28px; color: var(--heading); }
+.login-card__note { margin: 0; color: var(--text-dim); font-size: 13px; line-height: 18px; }
+.login-form { display: flex; flex-direction: column; gap: 14px; }
 
-/* ---- responsive: single column below 1024px; chat is /chat route below 1280px --------- */
-@media (max-width: 1024px) {
-  .home-grid, .feature-lower, .fleet-grid, .report-two-col { grid-template-columns: minmax(0, 1fr); }
-}
+.content--client { max-width: 900px; width: 100%; margin: 0 auto; }
+.client-dark__lead { margin: 0; font-size: 18px; line-height: 28px; color: var(--text-dim); }
 
-/* Wide content that must not scroll the page body: dense tables scroll inside their card. */
-.panel-card__body { overflow-x: auto; }
+/* ==== stage 3: Features, Delivered, Issues ==== */
+/* Part A's own rules for these pages, carried over on the new tokens until stage 3 replaces them. */
 
-/* ---- October 2026, part A: live data pages (minimal; a brand stylesheet comes later) ---------- */
-.banner--stale { background: #fbe9e9; color: var(--bad); border-bottom: 2px solid var(--bad); }
-.journey-station--stopped .journey-station__glyph { color: var(--bad); font-weight: 700; }
-.feature-list__row--finished { color: var(--muted); }
-.window-links { display: flex; gap: 14px; margin-bottom: 10px; font-size: var(--fs-operator); }
-.window-links a[aria-current="page"] { font-weight: 700; color: var(--ink); }
-.feed__error, .delivered__others, .norms-line, .feature-mission { color: var(--muted); font-size: 12px; }
-.project-summary__list { list-style: none; margin: 0; padding: 0; display: flex; gap: 24px; flex-wrap: wrap; }
-.issue-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
-.issue-row--closed { color: var(--muted); }
-.feature-request summary { cursor: pointer; color: var(--muted); font-size: 12px; }
-.spend-slot { flex-direction: row; }
-.journey-bar--mini .journey-bar__stations { flex-wrap: nowrap; gap: 3px; }
-@media (max-width: 700px) {
-  .topbar { flex-wrap: wrap; }
-  .topnav ul { flex-wrap: wrap; }
-  .topbar__cluster { margin-left: 0; }
-}
+.delivered__summary { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; color: var(--heading); }
+.delivered__row--unverified td { color: var(--text-dim); }
+.change-link { text-decoration: none; }
+.delivered__others { margin: var(--space-12) 0 0; font-size: 13px; line-height: 18px; color: var(--text-dim); }
+
+/* ==== stage 3: chat and microphone ==== */
