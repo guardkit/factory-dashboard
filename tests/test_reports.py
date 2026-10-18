@@ -118,3 +118,13 @@ def test_export_shows_only_deliveries_and_the_four_plan_fields(store: sqlite3.Co
     assert "Cost reporting is being set up." in html
     assert {m.milestone_id for m in export.milestones} == {"M1", "M2", "M3"}
     assert "behind" in html and "ahead" in html
+
+
+def test_a_client_whose_projects_are_lost_keeps_none_of_its_plan(store: sqlite3.Connection) -> None:
+    """Codex round 1 on the client-scope guard, R1: Acme's plan must not outlive its scope."""
+    store.execute("UPDATE tenants SET projects_json='[]' WHERE tenant_slug='acme'")
+    report = dbread.weekly_report(store, "acme", NOW, window=WEEK)
+    assert report.plan.milestones == ()
+    h = report.headline
+    assert (h.behind_count, h.on_target_count, h.ahead_count, h.delivered_count) == (0, 0, 0, 0)
+    assert dbread.export_report(store, "acme", NOW, window=WEEK).milestones == ()
