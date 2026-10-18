@@ -16,7 +16,7 @@ from backend.app import create_app
 from backend.projector.cost_import import import_once
 from backend.projector.forge_mirror import mirror_once
 from backend.projector.store import write_heartbeat
-from backend.readmodel import costs, dbread
+from backend.readmodel import dbread
 from starlette.testclient import TestClient
 
 from tests import forge_fake
@@ -265,16 +265,16 @@ def test_a_cost_outage_changes_the_page_version_so_open_pages_refresh(tmp_path: 
 
 
 def test_cost_and_time_summaries_for_the_chat(store: Path) -> None:
-    c = costs.cost_summary(store, feature="FEAT-0001", now=NOW)
+    c = dbread.cost_summary(store, feature="FEAT-0001", now=NOW)
     assert (c.state, c.calls, c.refs) == ("measured", 5, ("FEAT-0001",))
     assert c.cost_usd == pytest.approx(C1) and c.estimated
-    by_title = costs.cost_summary(store, feature="search box", now=NOW)
+    by_title = dbread.cost_summary(store, feature="search box", now=NOW)
     assert by_title.refs == ("FEAT-0001",)
-    p = costs.cost_summary(store, project=REPO, now=NOW)
+    p = dbread.cost_summary(store, project=REPO, now=NOW)
     assert p.calls == 7 and p.cost_usd == pytest.approx(C1 + MA)
-    old = costs.cost_summary(store, feature="FEAT-0OLD", now=NOW)
+    old = dbread.cost_summary(store, feature="FEAT-0OLD", now=NOW)
     assert old.state == "not_measured" and old.cost_usd is None
-    t = costs.time_summary(store, feature="FEAT-0001", now=NOW)
+    t = dbread.time_summary(store, feature="FEAT-0001", now=NOW)
     assert (t.elapsed_secs, t.machine_secs, t.waiting_secs) == (5400, 5160, 120)
     assert dict(t.waiting_parts) == {"Waiting for approvals": 60, "Waiting for the merge decision": 60}
 

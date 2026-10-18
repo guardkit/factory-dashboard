@@ -23,7 +23,8 @@ finished. Calls of one feature cannot be confused with another's, because they a
 first. The model name (which shows the role) is stored with every call but is not shown (Rich,
 17 October 2026).
 
-The read functions at the bottom (`cost_summary`, `time_summary`) are for the chat (part D).
+The chat's read functions (`dbread.cost_summary`, `dbread.time_summary`, for part D) return the
+`CostSummary` and `TimeSummary` shapes defined at the bottom of this module.
 """
 
 from __future__ import annotations
@@ -33,14 +34,12 @@ from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
-from backend import db
 from backend.prices import PriceList, load_prices
 from backend.projector.cost_import import stamp
 from backend.readmodel import viewmodels as vm
-from backend.readmodel.factory import Factory, Feature, Mission, load_factory, parse_dt
-from backend.readmodel.timing import FeatureTime, build_start, feature_time
+from backend.readmodel.factory import Factory, Feature, Mission, parse_dt
+from backend.readmodel.timing import build_start
 
 #: Cost figures carry a "may be incomplete" label once the last good import is this old.
 COST_STALE_SECS = 600
@@ -340,7 +339,7 @@ class TimeSummary:
     refs: tuple[str, ...]
 
 
-def _scope(factory: Factory, feature: str | None, project: str | None) -> tuple[str, str, list[Feature]]:
+def scope(factory: Factory, feature: str | None, project: str | None) -> tuple[str, str, list[Feature]]:
     if feature:
         f = factory.feature(feature)
         if f is None:
@@ -353,66 +352,7 @@ def _scope(factory: Factory, feature: str | None, project: str | None) -> tuple[
     return "project", name, [f for f in factory.features if f.project == name]
 
 
-def _period(lo: datetime | None, hi: datetime | None) -> str:
+def period(lo: datetime | None, hi: datetime | None) -> str:
     if lo is None or hi is None:
         return "all time"
     return f"{vm.to_london(lo).date().isoformat()} to {vm.to_london(hi - timedelta(seconds=1)).date().isoformat()}"
-
-
-def cost_summary(db_path: Path, *, feature: str | None = None, project: str | None = None,
-                 lo: datetime | None = None, hi: datetime | None = None, now: datetime | None = None) -> CostSummary:
-    """Tagged model calls, tokens and nominal cost for one feature (code, request id or title) or one
-    project, optionally only calls that started in [lo, hi)."""
-    now = now or datetime.now(UTC)
-    conn = db.connect_ro(db_path)
-    try:
-        factory, book = load_factory(conn, now), load_cost_book(conn, now)
-        scope, name, chosen = _scope(factory, feature, project)
-        measured = [f for f in chosen if not book.before_tagging(f)]
-        tags: set[str] = set().union(*(feature_tags(f) for f in measured)) if measured else set()
-        if scope == "project":
-            for m in factory.missions:
-                if m.target_repo == name:
-                    tags |= mission_tags(m)
-        hours = book.tag_hours(tags)
-        t = _sum(v for h, v in hours.items()
-                 if (lo is None or hour_to_dt(h) >= lo) and (hi is None or hour_to_dt(h) < hi))
-        slot = book.slot(t, scope=scope) if (measured or scope == "project") else (
-            book.feature_slot(chosen[0]) if chosen else vm.SpendSlot(state="not_measured", reason="No such record."))
-        return CostSummary(
-            scope=scope, name=name, period=_period(lo, hi), state=slot.state, reason=slot.reason,
-            calls=t.calls, tokens_in=t.tokens_in, tokens_out=t.tokens_out,
-            cost_usd=slot.amount_usd if slot.state == "measured" else None, estimated=slot.estimated,
-            stale=slot.stale, price_label=book.prices.label, refs=tuple(f.code or f.key for f in chosen),
-        )
-    finally:
-        conn.close()
-
-
-def time_summary(db_path: Path, *, feature: str | None = None, project: str | None = None,
-                 lo: datetime | None = None, hi: datetime | None = None, now: datetime | None = None) -> TimeSummary:
-    """Elapsed, machine and waiting time for one feature or the features of one project sent in [lo, hi)."""
-    now = now or datetime.now(UTC)
-    conn = db.connect_ro(db_path)
-    try:
-        factory = load_factory(conn, now)
-        scope, name, chosen = _scope(factory, feature, project)
-        if scope == "project":
-            chosen = [f for f in chosen
-                      if f.sent_at and (lo is None or f.sent_at >= lo) and (hi is None or f.sent_at < hi)]
-        times = [(f, feature_time(f, now)) for f in chosen]
-        known: list[tuple[Feature, FeatureTime]] = [(f, t) for f, t in times if t is not None]
-        waits: dict[str, float] = defaultdict(float)
-        for _f, t in known:
-            for p in t.parts:
-                if p.kind == "wait":
-                    waits[p.label] += p.seconds
-        return TimeSummary(
-            scope=scope, name=name, period=_period(lo, hi), features=len(known),
-            elapsed_secs=sum(t.elapsed for _f, t in known), machine_secs=sum(t.machine for _f, t in known),
-            waiting_secs=sum(t.waiting for _f, t in known),
-            waiting_parts=tuple(sorted(waits.items(), key=lambda kv: -kv[1])),
-            so_far=any(t.so_far for _f, t in known), refs=tuple(f.code or f.key for f, _t in known),
-        )
-    finally:
-        conn.close()
