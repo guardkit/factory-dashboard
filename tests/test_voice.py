@@ -43,15 +43,16 @@ def wav(seconds: float, rate: int = 8000) -> bytes:
     return b"RIFF" + (len(body) + data_size).to_bytes(4, "little") + body + b"\x00" * data_size
 
 
-def ogg_page(granule: int, payload: bytes, header_type: int = 0) -> bytes:
+def ogg_page(granule: int, payload: bytes, header_type: int = 0, serial: int = 1) -> bytes:
     """One Ogg page: the 27-byte header, a segment table, and the payload (under 255 bytes here)."""
-    return (b"OggS\x00" + bytes([header_type]) + granule.to_bytes(8, "little") + b"\x01\x00\x00\x00"
+    return (b"OggS\x00" + bytes([header_type]) + granule.to_bytes(8, "little") + serial.to_bytes(4, "little")
             + b"\x00" * 8 + bytes([1, len(payload)]) + payload)
 
 
-def ogg(seconds: float) -> bytes:
-    return (ogg_page(0, b"OpusHead" + b"\x00" * 11, 2) + ogg_page(0xFFFFFFFFFFFFFFFF, b"x" * 100)
-            + ogg_page(int(seconds * 48000), b"y" * 60, 4))
+def ogg(seconds: float, serial: int = 1) -> bytes:
+    """One logical stream: a beginning page, a page with no position, and an end page at `seconds`."""
+    return (ogg_page(0, b"OpusHead" + b"\x00" * 11, 2, serial) + ogg_page(0xFFFFFFFFFFFFFFFF, b"x" * 100, 0, serial)
+            + ogg_page(int(seconds * 48000), b"y" * 60, 4, serial))
 
 
 class Chunks(httpx.SyncByteStream):
@@ -685,3 +686,30 @@ def test_the_format_is_read_from_the_bytes() -> None:
                          (wav(29), "audio/wav"), (wav(29), "audio/x-wav"), (ogg(29), "audio/ogg"),
                          (ogg(29), "audio/opus")):
         assert voice.check_recording(audio, label) is None, label
+
+
+# --- Codex round 2 ------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("chained", [
+    ogg(20, serial=1) + ogg(20, serial=2),                      # two streams, two serial numbers
+    ogg(20, serial=7) + ogg(20, serial=7),                      # a second beginning page, same serial
+    ogg(20) + ogg_page(10 * 48000, b"z" * 60, 4, serial=9),       # a page from another stream
+], ids=["two-serials", "second-beginning", "foreign-page"])
+def test_a_chained_ogg_is_refused(world: tuple[TestClient, FakeModel, FakeSpeech], chained: bytes) -> None:
+    """A chained Ogg of two 20-second streams (40 s, under 1 MB) would read as 20 s by its highest
+    position; more than one logical stream is refused outright."""
+    client, _, speech = world
+    assert len(chained) < voice.MAX_COMPRESSED_BYTES
+    for label in ("audio/ogg;codecs=opus", "audio/opus"):
+        r = _ask(client, chained, label)
+        assert r.status_code == 415 and r.json() == {"message": voice.NOT_AUDIO}, label
+    assert speech.requests == []
+    assert voice.ogg_seconds(chained) is None
+
+
+def test_a_single_stream_ogg_still_passes(world: tuple[TestClient, FakeModel, FakeSpeech]) -> None:
+    client, _, _ = world
+    for serial in (1, 0x7FFFFFFF):
+        assert voice.ogg_seconds(ogg(29, serial)) == 29.0
+        assert _ask(client, ogg(29, serial), "audio/ogg;codecs=opus").status_code == 200

@@ -319,10 +319,15 @@ def wav_seconds(b: bytes) -> float | None:
 
 def ogg_seconds(b: bytes) -> float | None:
     """Opus in Ogg: the highest granule position (48 kHz samples), walking every page from the start.
-    None unless the pages run exactly to the end and at least one gives a position."""
+    None unless the pages run exactly to the end, at least one gives a position, and there is one logical
+    stream only: every page carries the first page's serial number, and no page after the first begins a
+    stream. (A chained file of two 20-second streams would otherwise read as 20 seconds; a browser's
+    recording is always one stream.)"""
     pos, highest = 0, -1
     while pos < len(b):
         if b[pos:pos + 4] != b"OggS" or len(b) < pos + 27 or b[pos + 4] != 0:
+            return None
+        if pos and (b[pos + 14:pos + 18] != b[14:18] or b[pos + 5] & 0x02):  # another stream, or a new one
             return None
         segments = b[pos + 27:pos + 27 + b[pos + 26]]
         if len(segments) < b[pos + 26]:
