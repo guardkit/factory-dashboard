@@ -196,10 +196,14 @@ def _scope_head(fields: dict[str, object]) -> str:
 def _cost_summary(fields: dict[str, object]) -> str:
     head = _scope_head(fields)
     state = _s(fields, "state")
+    # The cost feed's own warning goes with every cost answer, measured or not (as the pages show it).
+    cost_note = (" Note: " + _sentence(_s(fields, "stale_text"))) if _s(fields, "stale_text") else ""
     if state == "not_available":
-        return _stale(fields) + f"Cost for {head} isn't available: " + _sentence(_reason(_s(fields, "reason")))
+        return (_stale(fields) + f"Cost for {head} isn't available: " + _sentence(_reason(_s(fields, "reason")))
+                + cost_note)
     if state != "measured":
-        return _stale(fields) + f"Cost for {head} isn't measured: " + _sentence(_reason(_s(fields, "reason")))
+        return (_stale(fields) + f"Cost for {head} isn't measured: " + _sentence(_reason(_s(fields, "reason")))
+                + cost_note)
     if _s(fields, "calls") == "0":
         parts = [f"{head}: no model calls recorded."]
     else:
@@ -215,9 +219,7 @@ def _cost_summary(fields: dict[str, object]) -> str:
         parts.append(f"It leaves out {left_out} {noun} sent before calls were tagged by feature.")
     if _s(fields, "price_label"):
         parts.append(_sentence(_s(fields, "price_label")))
-    if _s(fields, "stale_text"):
-        parts.append("Note: " + _sentence(_s(fields, "stale_text")))
-    return _stale(fields) + " ".join(parts)
+    return _stale(fields) + " ".join(parts) + cost_note
 
 
 def _time_summary(fields: dict[str, object]) -> str:

@@ -34,6 +34,14 @@ class QuerySpec:
 _PERIOD = Arg("period", False, "a period: " + ", ".join(f'"{p}"' for p in tools.PERIOD_PHRASES)
               + '; leave it out for "this week"')
 _PROJECT = Arg("project", False, "a project name as the user said it")
+_PHRASES = ", ".join(f'"{p}"' for p in tools.PERIOD_PHRASES)
+# Cost and time differ from the queries above: no period means ALL TIME, so "this week" is passed.
+_COST_PERIOD = Arg("period", False, "a period: " + _PHRASES + "; leave it out for all time, and pass "
+                   '"this week" when the user asks about this week. It limits the cost to calls made in the period')
+_TIME_PERIOD = Arg("period", False, "a period: " + _PHRASES + "; leave it out for all time, and pass "
+                   '"this week" when the user asks about this week. For a project it chooses the features '
+                   "sent in the period; a single feature's time is always its whole time")
+_FEATURE = Arg("feature", False, "a feature as the user said it")
 
 QUERIES: dict[str, QuerySpec] = {
     q.name: q for q in (
@@ -46,10 +54,10 @@ QUERIES: dict[str, QuerySpec] = {
         QuerySpec("delivered", "what was merged and checked in a period", (_PERIOD, _PROJECT), tools.delivered),
         QuerySpec("weekly_report", "the weekly report's headline for a period", (_PERIOD, _PROJECT),
                   tools.weekly_report),
-        QuerySpec("cost_summary", "model cost of a feature or project",
-                  (_PROJECT, Arg("feature", False, "a feature as the user said it"), _PERIOD), tools.cost_summary),
-        QuerySpec("time_summary", "machine time and waiting time of a feature or project",
-                  (_PROJECT, Arg("feature", False, "a feature as the user said it"), _PERIOD), tools.time_summary),
+        QuerySpec("cost_summary", "model calls, tokens and nominal cost of a feature or project",
+                  (_PROJECT, _FEATURE, _COST_PERIOD), tools.cost_summary),
+        QuerySpec("time_summary", "elapsed, machine and waiting time of a feature or project",
+                  (_PROJECT, _FEATURE, _TIME_PERIOD), tools.time_summary),
     )
 }
 

@@ -1401,13 +1401,15 @@ def time_summary(db_path: Path, *, feature: str | None = None, project: str | No
     try:
         factory = load_factory(conn, now)
         scope, name, chosen = cost.scope(factory, feature, project)
+        on_record = bool(chosen)
         if scope == "project":
             chosen = [f for f in chosen
                       if f.sent_at and (lo is None or f.sent_at >= lo) and (hi is None or f.sent_at < hi)]
         times = [(f, feature_time(f, now)) for f in chosen]
         known: list[tuple[Feature, FeatureTime]] = [(f, t) for f, t in times if t is not None and not t.unmeasured]
         if not chosen:
-            slot = TimeSlot(reason="No such record.")
+            slot = TimeSlot(reason="No features of this project were sent in this period." if on_record and
+                            (lo is not None or hi is not None) else "No such record.")
         elif scope == "feature":
             slot = time_slot(times[0][1])
         else:

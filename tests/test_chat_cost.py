@@ -19,8 +19,8 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from backend.chat import answers, grounding, tools
-from backend.chat.service import OPERATORS_ONLY, Chat
+from backend.chat import answers, grounding, registry, tools
+from backend.chat.service import OPERATORS_ONLY, Chat, system_prompt
 from backend.projector.cost_import import import_once
 from backend.projector.forge_mirror import mirror_once
 from backend.projector.store import open_rw
@@ -286,3 +286,60 @@ def test_a_feed_pass_mid_answer_does_not_change_the_time_given(store: Path, fact
     assert passes == [True]
     monkeypatch.setattr(tools, "_cost_or_time_scope", real)
     assert answers.render(tools.time_summary(_ctx(store), feature="FEAT-000A")) != before   # the pass did land
+
+
+# --- Codex round 1: the cost feed's warning on every cost answer (R1), and what a period means (R2) ---------
+
+STALE_NOTE = "Note: cost data last read at 13:09:00 — may be incomplete."
+
+
+def test_an_all_unpriced_answer_still_warns_of_a_stale_cost_feed(tmp_path: Path, factory: ForgeFake) -> None:
+    spend = FakeSpend(T)
+    spend.add("x1", 30, "c-1", prompt=2_000, completion=200, provider_model="openai/no-price-model")
+    path = tmp_path / "readmodel.db"
+    conn = store_from(factory, path, NOW)                       # Forge's record is fresh
+    import_once(conn, spend, NOW - timedelta(minutes=11))       # the cost feed is not
+    conn.close()
+    assert dbread.chrome_view(path, NOW).banner is None
+    r = tools.cost_summary(_ctx(path), feature="FEAT-0001")
+    text = _grounded(r)
+    assert text == (f"Cost for {FEATURE} isn't measured: None of these calls has a price. 1 of these calls was "
+                    f"on a model with no price, so it is not counted. {STALE_NOTE}")
+    # A figure that is not measured for another reason carries the cost feed's warning too.
+    old = _grounded(tools.cost_summary(_ctx(path), feature="FEAT-0OLD"))
+    assert old.endswith("Calls before 17 October were not tagged by feature. " + STALE_NOTE)
+
+
+def test_the_system_prompt_says_what_a_cost_or_time_period_means() -> None:
+    prompt = system_prompt(registry.QUERIES, NOW)
+    lines = {ln.split(":", 1)[0].lstrip("- "): ln for ln in prompt.splitlines() if ln.startswith("- ")}
+    for name in ("cost_summary", "time_summary"):
+        assert 'leave it out for all time, and pass "this week" when the user asks about this week' in lines[name]
+        assert 'leave it out for "this week"' not in lines[name]
+    assert "It limits the cost to calls made in the period" in lines["cost_summary"]
+    assert "For a project it chooses the features sent in the period" in lines["time_summary"]
+    assert "a single feature's time is always its whole time" in lines["time_summary"]
+    for name in ("delivered", "weekly_report", "project_summary"):           # unchanged
+        assert 'leave it out for "this week"' in lines[name]
+
+
+def test_all_time_and_this_week_differ_as_they_should(store: Path) -> None:
+    monday = tools.Context(store, NOW + timedelta(days=1))   # a new week: nothing has happened in it yet
+    feature_all = tools.cost_summary(monday, feature="FEAT-0001")
+    feature_week = tools.cost_summary(monday, feature="FEAT-0001", period="this week")
+    assert (feature_all.fields["calls"], feature_week.fields["calls"]) == ("5", "0")
+    assert "19 Oct 2026 to 25 Oct 2026" in _grounded(feature_week) and "no model calls recorded" in \
+        _grounded(feature_week)
+    assert "5 model calls" in _grounded(feature_all)
+    project_all = tools.cost_summary(monday, project=REPO)
+    project_week = tools.cost_summary(monday, project=REPO, period="this week")
+    assert (project_all.fields["calls"], project_week.fields["calls"]) == ("7", "0")
+    # Time: a project's period chooses the features sent in it; a feature's time is its whole time.
+    time_all = tools.time_summary(monday, project=REPO)
+    time_week = tools.time_summary(monday, project=REPO, period="this week")
+    assert time_all.fields["state"] == "measured" and time_week.fields["state"] == "not_measured"
+    assert _grounded(time_week).endswith("this week (19 Oct 2026 to 25 Oct 2026) isn't measured: No features of this "
+                                         "project were sent in this period.")
+    one_all = tools.time_summary(monday, feature="FEAT-0001")
+    one_week = tools.time_summary(monday, feature="FEAT-0001", period="this week")
+    assert one_all.fields == one_week.fields

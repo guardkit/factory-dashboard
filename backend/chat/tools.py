@@ -31,7 +31,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
-from backend.readmodel import dbread
+from backend.readmodel import costs, dbread
 from backend.readmodel import viewmodels as vm
 from backend.readmodel.factory import STATIONS, Factory, Feature, load_factory
 
@@ -586,6 +586,13 @@ def _cost_or_time_scope(query: str, ctx: Context, factory: Factory, feature: str
     return Result(query, "no_scope", {"what": "cost" if query == "cost_summary" else "time"})
 
 
+def _cost_feed_note(conn: sqlite3.Connection, now: datetime) -> str:
+    """The cost feed's "last read at … — may be incomplete" when its last good import is over ten
+    minutes old (the pages' cost warning), or ""."""
+    fresh = costs.cost_freshness(conn)
+    return fresh.stale_text(now) if fresh.state(now) == "stale" else ""
+
+
 def _bounds(p: Period | None) -> tuple[datetime | None, datetime | None]:
     return dbread._window_bounds(*p.window) if p is not None else (None, None)
 
@@ -612,7 +619,8 @@ def cost_summary(ctx: Context, project: str | None = None, feature: str | None =
             "reason": s.reason, "calls": str(s.calls), "tokens_in": vm.fmt_tokens(s.tokens_in),
             "tokens_out": vm.fmt_tokens(s.tokens_out),
             "cost": vm.fmt_usd(s.cost_usd) if s.state == "measured" and s.cost_usd is not None else "",
-            "estimated": "yes" if s.estimated else "", "stale_text": s.stale_text if s.stale else "",
+            # The cost feed's own staleness (not Forge's), whatever the figure's state.
+            "estimated": "yes" if s.estimated else "", "stale_text": _cost_feed_note(conn, ctx.now),
             "price_label": s.price_label, "left_out": str(s.left_out), "stale_note": _stale_note(ctx, conn),
         }
         refs = [ref] + ([_period_ref(p, "reports")] if p else [])
