@@ -296,3 +296,13 @@ def test_client_export_says_when_its_delivery_information_may_be_out_of_date(sto
     unread = render("stale", "")
     assert "No delivery information has been read yet." in unread and "This summary may be out of date" in unread
     assert "No features were delivered in this week." in render("live", iso, rows=False)
+
+
+def test_a_client_whose_projects_are_lost_keeps_none_of_its_plan(store: sqlite3.Connection) -> None:
+    """Codex round 1 on the client-scope guard, R1: Acme's plan must not outlive its scope."""
+    store.execute("UPDATE tenants SET projects_json='[]' WHERE tenant_slug='acme'")
+    report = dbread.weekly_report(store, "acme", NOW, window=WEEK)
+    assert report.plan.milestones == ()
+    h = report.headline
+    assert (h.behind_count, h.on_target_count, h.ahead_count, h.delivered_count) == (0, 0, 0, 0)
+    assert dbread.export_report(store, "acme", NOW, window=WEEK).milestones == ()
