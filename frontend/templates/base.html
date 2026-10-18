@@ -71,13 +71,13 @@
     {% endif %}
   </div>
 
-  {# Phones: the main places, at the bottom of the screen. The fifth place becomes Ask (/chat)
-     for operators once the chat page exists; until then it is Fleet. #}
+  {# Phones: the main places, at the bottom of the screen. The fifth place is Ask (/chat) for
+     operators; Fleet stays reachable from the Now page. #}
   <nav class="tabbar" aria-label="Main">
     {% for label, href, key, glyph in [('Now', '/', 'now', 'now'), ('Features', '/features', 'features', 'list'),
                                        ('Issues', '/issues', 'issues', 'flag'), ('Reports', '/reports', 'reports', 'report'),
-                                       ('Fleet', '/fleet', 'fleet', 'server')] %}
-      <a class="tabbar__item" href="{{ href }}"{% if key == nav_active %} aria-current="page"{% endif %}>{{ m.icon(glyph) }}<span>{{ label }}</span></a>
+                                       (('Ask', '/chat', 'chat', 'mic') if signed_in and signed_in.is_operator else ('Fleet', '/fleet', 'fleet', 'server'))] %}
+      <a class="tabbar__item" href="{{ href }}"{% if key == nav_active or (key == 'chat' and chat_page) %} aria-current="page"{% endif %}>{{ m.icon(glyph) }}<span>{{ label }}</span></a>
     {% endfor %}
   </nav>
 </body>

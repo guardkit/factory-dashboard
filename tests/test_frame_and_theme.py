@@ -191,3 +191,19 @@ def test_stale_cards_keep_their_text_at_full_contrast() -> None:
         assert "state-lagging" not in sel and "--closed" not in sel, sel
         assert re.fullmatch(r"[\d%,\s]+|from|to", sel) or "[disabled]" in sel, sel
     assert any("state-lagging" in sel and "var(--status-risk)" in body for sel, body in rules)
+
+
+def test_phone_tab_bar_offers_ask_to_operators(operator_client: TestClient) -> None:
+    body = operator_client.get("/").text
+    tabbar = body[body.index('<nav class="tabbar"'):]
+    tabbar = tabbar[: tabbar.index("</nav>")]
+    assert 'href="/chat"' in tabbar and "<span>Ask</span>" in tabbar
+    assert 'href="/fleet"' not in tabbar
+    chat = operator_client.get("/chat").text
+    chat_tabbar = chat[chat.index('<nav class="tabbar"'):]
+    assert 'href="/chat" aria-current="page"' in chat_tabbar[: chat_tabbar.index("</nav>")]
+
+
+def test_no_temporary_chat_style_block_left() -> None:
+    css = (Path(__file__).resolve().parent.parent / "frontend" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "chat (Part D)" not in css
