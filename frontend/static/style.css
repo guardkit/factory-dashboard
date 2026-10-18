@@ -1222,7 +1222,8 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 
 /* The headline: the Deep Green kicker band. The count is the screen's one Luminous Green moment. */
 .report-headline { background: var(--kicker); border-color: var(--kicker); color: var(--on-dark); }
-.report-headline .panel-card__title { color: var(--on-dark-accent); font-size: 13px; line-height: 16px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; }
+/* The title is dim, so the Luminous Green figure is the band's one green moment. */
+.report-headline .panel-card__title { color: var(--on-dark-dim); font-size: 13px; line-height: 16px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; }
 .report-headline .panel-card__header .asof-chip { color: var(--on-dark-dim); }
 .report-headline .panel-card__body { color: var(--on-dark); }
 .report-headline__line { margin: 0; font-size: 16px; line-height: 24px; color: var(--on-dark); }
