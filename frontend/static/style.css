@@ -208,6 +208,7 @@
   --pad-cell-client: 12px;
   --rail-width: 340px;
   --chat-width: 440px;
+  --readline-height: 37px; /* the read-time line under the top bar; the chat's heights subtract it */
 }
 
 /* ==== self-hosted fonts (SIL Open Font Licence; texts beside the files) ==== */
@@ -421,7 +422,10 @@ a.feature-title:hover { text-decoration: underline; }
 /* The freshness element (fragments/freshness.html) holds the read time, then the banner. The
    banner shows first, directly under the top bar; the read time follows it. */
 .freshness { display: flex; flex-direction: column-reverse; }
-.freshness .read-asof { display: block; text-align: right; padding: var(--space-4) var(--space-32); }
+.freshness .read-asof {
+  display: flex; align-items: center; justify-content: flex-end; box-sizing: border-box;
+  height: var(--readline-height); padding: 0 var(--space-32);
+}
 
 /* ==== frame: page grid, content and the chat slot ==== */
 
@@ -876,7 +880,7 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
 
   .topbar { height: 52px; padding: 0 var(--space-16); gap: var(--space-12); }
   .topnav { display: none; }
-  .freshness .read-asof { padding: var(--space-4) var(--space-16); }
+  .freshness .read-asof { padding: 0 var(--space-16); }
   .topbar__logo { height: 22px; }
   .topbar__wordmark { height: 16px; }
   .topbar__product { font-size: 15px; padding-left: 8px; }
@@ -1407,7 +1411,8 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
   }
   .frame > .chat-drawer > .chat {
     position: sticky; top: 0; flex: none;
-    height: calc(100vh - var(--topbar-height) - 40px); height: calc(100dvh - var(--topbar-height) - 40px);
+    height: calc(100vh - var(--topbar-height) - var(--readline-height));
+    height: calc(100dvh - var(--topbar-height) - var(--readline-height));
   }
   .chat-toggle:not([hidden]) { display: none; }
 }
@@ -1438,8 +1443,8 @@ body:has(.panel-card--hero) .freshness .read-asof .asof-chip { color: var(--on-d
 /* The /chat page: the same panel as a page of its own (the design's page form). */
 .content > .chat {
   flex: none; width: 100%; max-width: 820px; margin: 0 auto;
-  height: calc(100vh - var(--topbar-height) - 2 * var(--space-32));
-  height: calc(100dvh - var(--topbar-height) - 2 * var(--space-32));
+  height: calc(100vh - var(--topbar-height) - var(--readline-height) - 2 * var(--space-32));
+  height: calc(100dvh - var(--topbar-height) - var(--readline-height) - 2 * var(--space-32));
   min-height: 420px;
   border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-card); overflow: hidden;
 }
@@ -1591,7 +1596,8 @@ textarea.chat__input { min-height: 68px; }
   .content:has(> .chat) { padding: 0; }
   .content > .chat {
     max-width: none; min-height: 0; border: 0; border-radius: 0; box-shadow: none;
-    height: calc(100vh - 52px - 54px); height: calc(100dvh - 52px - 54px - env(safe-area-inset-bottom));
+    height: calc(100vh - 52px - var(--readline-height) - 54px);
+    height: calc(100dvh - 52px - var(--readline-height) - 54px - env(safe-area-inset-bottom));
   }
   .chat__log { padding: var(--space-16); }
   .chat-exchange__question, .chat-exchange__answer { max-width: 92%; }
