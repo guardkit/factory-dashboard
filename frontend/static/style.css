@@ -325,3 +325,33 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
   .topnav ul { flex-wrap: wrap; }
   .topbar__cluster { margin-left: 0; }
 }
+
+/* ---- chat (Part D) ------------------------------------------------------------------------------
+   Minimal styling so the chat is usable; the Appmilla redesign restyles it later. Wide screens
+   (>=1280px): the reserved drawer column opens to var(--chat-width). Narrow screens: the drawer is
+   hidden and the "Ask a question" toggle (a link to /chat) floats at the bottom right. */
+.chat-drawer { display: none; }
+.chat-toggle {
+  position: fixed; right: 16px; bottom: 16px; z-index: 10;
+  padding: 8px 12px; border-radius: var(--radius); background: var(--accent); color: #fff; text-decoration: none;
+}
+@media (min-width: 1280px) {
+  .frame:has(> .chat-drawer) { grid-template-columns: minmax(0, 1fr) var(--chat-width); }
+  .frame > .chat-drawer { display: block; grid-column: 2; grid-row: 1; border-left: 1px solid var(--line); padding: 16px; }
+  .chat-toggle { display: none; }
+}
+.chat { display: flex; flex-direction: column; gap: 10px; font-size: var(--fs-operator); }
+.chat__title { margin: 0; font-size: 16px; }
+.chat__note { margin: 0; color: var(--muted); font-size: 12px; }
+.chat__log { display: flex; flex-direction: column; gap: 12px; max-height: 60vh; overflow-y: auto; }
+.chat__form, .chat-exchange__reply { display: flex; flex-direction: column; gap: 6px; }
+.chat__input { font: inherit; width: 100%; padding: 6px; border: 1px solid var(--line); border-radius: var(--radius); }
+.chat__ask { align-self: flex-start; }
+.chat__working { display: none; color: var(--muted); font-size: 12px; }
+.htmx-request .chat__working, .htmx-request.chat__working { display: inline; }
+.chat-exchange { border-top: 1px solid var(--line); padding-top: 8px; }
+.chat-exchange__question { margin: 0 0 4px; font-weight: 600; }
+.chat-exchange__text { margin: 0 0 4px; }
+.chat-exchange--refused .chat-exchange__text, .chat-exchange--busy .chat-exchange__text,
+.chat-exchange--limited .chat-exchange__text, .chat-exchange--unavailable .chat-exchange__text { color: var(--muted); }
+.chat-refs { margin: 0; padding-left: 18px; font-size: 12px; }

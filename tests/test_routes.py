@@ -61,7 +61,7 @@ def test_the_nav_reads_now_features_projects_reports_issues_fleet(operator_clien
 
 CLIENT_REDIRECTED = ["/features", "/features/FEAT-3ED2", "/features/anything", "/projects",
                      "/projects/study-tutor", "/projects/anything", "/projects/acme/notes", "/delivered", "/reports",
-                     "/reports?view=export", "/issues", "/fleet"]
+                     "/reports?view=export", "/issues", "/fleet", "/chat"]
 CLIENT_FORBIDDEN = ["/fragments/p2", "/fragments/freshness", "/events?once=1"]
 # "/" is tenant-aware (the client layout for a client); /healthz is for the start script and
 # says only whether the factory's record is fresh (tested in tests/test_pages.py).
@@ -89,6 +89,11 @@ def test_every_route_is_guarded_for_a_client(app, clientco_client: TestClient) -
         assert any(re.fullmatch(re.sub(r"\{[^}]+\}", "[^/]+", route.path), c) for c in covered), (
             f"{route.path} is not in the client-guard lists"
         )
+        if "POST" in (route.methods or set()):
+            # A POST route (the chat) must refuse a client session too, even from the board's own page.
+            r = clientco_client.post(path, headers={"Origin": "http://localhost:8090"}, follow_redirects=False)
+            assert r.status_code in (303, 403), (route.path, "POST", r.status_code)
+            continue
         r = clientco_client.get(path + ("?once=1" if route.path == "/events" else ""),
                                 follow_redirects=False)
         assert r.status_code in (303, 403, 404), (route.path, r.status_code)
