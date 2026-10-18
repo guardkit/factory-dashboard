@@ -542,6 +542,7 @@ class IssuesView:
     closed_rows: tuple[IssueRow, ...]
     note: str
     hidden_line: str = ""    # how many old open failures the 14-day cut-off leaves out
+    hidden_count: int = 0    # that number, so a total of open issues can include them (the chat)
 
 
 @dataclass(frozen=True)
@@ -593,6 +594,13 @@ def _open(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def snapshot(db_path: Path) -> sqlite3.Connection:
+    """One read snapshot (see `_open`) for a caller that builds one answer from several views, such
+    as the chat: pass it to each view as ``conn=`` and close it when done. A view given ``conn``
+    reads on it and leaves it open; without one it opens and closes its own, as the pages do."""
+    return _open(db_path)
+
+
 def home_view(db_path: Path, now: datetime | None = None) -> HomeView:
     now = now or _now()
     conn = _open(db_path)
@@ -634,9 +642,11 @@ def _norms_line(norms: Norms) -> str:
             f"Build: {norms.build_minutes.describe()}.")
 
 
-def feature_page(db_path: Path, key: str, now: datetime | None = None) -> tuple[PageChrome, FeaturePage] | None:
+def feature_page(db_path: Path, key: str, now: datetime | None = None, *,
+                 conn: sqlite3.Connection | None = None) -> tuple[PageChrome, FeaturePage] | None:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         factory, norms = load_factory(conn, now), load_norms()
         f = factory.feature(key)
@@ -678,7 +688,8 @@ def feature_page(db_path: Path, key: str, now: datetime | None = None) -> tuple[
         )
         return page_chrome(conn, now), page
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
 def _build_words(b: Build) -> str:
@@ -705,9 +716,11 @@ def _mission_words(status: str) -> str:
             "NOT_MERGED": "not merged"}.get(status, status.lower())
 
 
-def project_view(db_path: Path, project: str, now: datetime | None = None) -> ProjectView:
+def project_view(db_path: Path, project: str, now: datetime | None = None, *,
+                 conn: sqlite3.Connection | None = None) -> ProjectView:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         factory, norms = load_factory(conn, now), load_norms()
         fr = freshness(conn)
@@ -731,7 +744,8 @@ def project_view(db_path: Path, project: str, now: datetime | None = None) -> Pr
             open_issues_total=len(open_issues) + hidden, hidden_line=hidden_line(hidden),
         )
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
 def hidden_line(hidden: int) -> str:
@@ -766,9 +780,10 @@ def projects_view(db_path: Path, now: datetime | None = None) -> ProjectsView:
         conn.close()
 
 
-def issues_view(db_path: Path, now: datetime | None = None) -> IssuesView:
+def issues_view(db_path: Path, now: datetime | None = None, *, conn: sqlite3.Connection | None = None) -> IssuesView:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         factory, norms = load_factory(conn, now), load_norms()
         open_, closed, hidden = recent(find_issues(factory, norms, now), now)
@@ -776,26 +791,32 @@ def issues_view(db_path: Path, now: datetime | None = None) -> IssuesView:
                 "later attempt. Closed: issues that closed in the last 7 days.")
         return IssuesView(chrome=page_chrome(conn, now), open_rows=tuple(issue_row(i, now) for i in open_),
                           closed_rows=tuple(issue_row(i, now) for i in closed), note=note,
-                          hidden_line=hidden_line(hidden))
+                          hidden_line=hidden_line(hidden), hidden_count=hidden)
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
-def delivered_view(db_path: Path, window: tuple[str, str] | None = None, now: datetime | None = None) -> DeliveredView:
+def delivered_view(db_path: Path, window: tuple[str, str] | None = None, now: datetime | None = None, *,
+                   conn: sqlite3.Connection | None = None) -> DeliveredView:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         return DeliveredView(chrome=page_chrome(conn, now), panel=delivered_panel(conn, now, window=window))
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
-def chrome_view(db_path: Path, now: datetime | None = None) -> PageChrome:
-    conn = _open(db_path)
+def chrome_view(db_path: Path, now: datetime | None = None, *, conn: sqlite3.Connection | None = None) -> PageChrome:
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         return page_chrome(conn, now or _now())
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
 def fleet_view(db_path: Path, now: datetime | None = None) -> FleetView:
@@ -985,13 +1006,15 @@ def _client_tenants(conn: sqlite3.Connection) -> tuple[tuple[str, str], ...]:
 
 
 def weekly_report_view(db_path: Path, tenant: str, window: tuple[str, str] | None = None,
-                       now: datetime | None = None) -> WeeklyReport:
+                       now: datetime | None = None, *, conn: sqlite3.Connection | None = None) -> WeeklyReport:
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         return weekly_report(conn, tenant, now, window=window, client_tenants=_client_tenants(conn))
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
 def export_report_view(db_path: Path, tenant: str, window: tuple[str, str] | None = None,
