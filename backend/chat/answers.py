@@ -60,6 +60,11 @@ def _more(fields: dict[str, object], key: str, where: str) -> str:
     return f" And {more} more on the {where}." if more and more != "0" else ""
 
 
+def _hidden(fields: dict[str, object]) -> str:
+    """The pages' own sentence for the older unresolved failures a list leaves out, or ""."""
+    return _sentence(_s(fields, "hidden_line"))
+
+
 def _stale(fields: dict[str, object]) -> str:
     note = _s(fields, "stale_note")
     return f"Note: {_sentence(note)} " if note else ""
@@ -103,9 +108,11 @@ def _project_summary(fields: dict[str, object]) -> str:
     if count == "0":
         parts.append("No open issues.")
     else:
-        parts.append(f"{_plural(count, 'open issue', 'open issues')}: "
-                     + _sentence(_join([str(i) for i in _list(fields, "open_issues")])))
+        listed = [str(i) for i in _list(fields, "open_issues")]
+        parts.append(f"{_plural(count, 'open issue', 'open issues')}"
+                     + (": " + _sentence(_join(listed)) if listed else "."))
         parts.append(_more(fields, "more_issues", "project page").strip())
+        parts.append(_hidden(fields))
     parts.append(_sentence(_s(fields, "cost")))
     return _stale(fields) + " ".join(p for p in parts if p)
 
@@ -123,7 +130,9 @@ def _open_issues(fields: dict[str, object]) -> str:
                     f"{row.get('how_serious')}")
     verb = "is" if count == "1" else "are"
     head = f"There {verb} {_plural(count, 'open issue', 'open issues')}{_for_project(fields)}"
-    return (_stale(fields) + head + ": " + _sentence(_join(rows)) + _more(fields, "more", "Issues page"))
+    body = (": " + _sentence(_join(rows)) + _more(fields, "more", "Issues page")) if rows else "."
+    hidden = _hidden(fields)
+    return _stale(fields) + head + body + (" " + hidden if hidden else "")
 
 
 def _delivered(fields: dict[str, object]) -> str:

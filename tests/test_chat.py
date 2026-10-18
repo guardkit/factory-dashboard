@@ -208,6 +208,73 @@ def test_project_names_resolve_or_ask(ctx: tools.Context) -> None:
     assert tools.project_summary(ctx, "nothing here").status == "not_found"
 
 
+_HIDDEN_ONE = "1 older failure with no later attempt is not listed (opened more than 14 days ago)."
+_HIDDEN_TWO = "2 older failures with no later attempt are not listed (opened more than 14 days ago)."
+
+
+def _with_old_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """acme/old has only a failure from 30 days ago; other/notes has a recent failure and an old
+    one; acme/notes has a delivered feature and no issue (Codex round 2, R4)."""
+    fake = ForgeFake(tmp_path / "forge.db")
+    delivered_feature(fake, 1, text="Search box that filters notes by title.")
+    fake.planning("c9", "Tidy the readme.", state="FAILED", error="No readme found.", repo="other/notes")
+    t0 = forge_fake.T0
+    monkeypatch.setattr(forge_fake, "T0", t0 - timedelta(days=30))
+    fake.planning("old-1", "An old failure.", state="FAILED", error="x", repo="acme/old")
+    fake.planning("old-2", "Another old failure.", state="FAILED", error="y", repo="other/notes")
+    monkeypatch.setattr(forge_fake, "T0", t0)
+    store = tmp_path / "readmodel.db"
+    store_from(fake, store, now=NOW).close()
+    return store
+
+
+def test_a_project_whose_only_failure_is_old_has_one_open_issue(tmp_path: Path,
+                                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = tools.Context(_with_old_failures(tmp_path, monkeypatch), NOW)
+    page = dbread.project_view(ctx.db_path, "acme/old", NOW)
+    assert (page.open_issues_total, len(page.issues), page.hidden_line) == (1, 0, _HIDDEN_ONE)
+    summary = tools.project_summary(ctx, "acme/old")
+    assert summary.fields["open_issue_count"] == str(page.open_issues_total) == "1"
+    text = answers.render(summary)
+    assert "1 open issue. " + _HIDDEN_ONE in text and "No open issues" not in text
+    assert "/issues" in [r.href for r in summary.refs]
+    issues = tools.open_issues(ctx, "acme/old")
+    assert answers.render(issues) == "There is 1 open issue in acme/old. " + _HIDDEN_ONE
+    assert [r.href for r in issues.refs] == ["/projects/acme/old", "/issues"]
+    for r in (summary, issues):
+        assert grounding.figures_grounded(answers.render(r), r.fields)
+
+
+def test_recent_and_older_failures_are_counted_together(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = tools.Context(_with_old_failures(tmp_path, monkeypatch), NOW)
+    page = dbread.project_view(ctx.db_path, "other/notes", NOW)
+    assert (page.open_issues_total, len(page.issues), page.hidden_line) == (2, 1, _HIDDEN_ONE)
+    summary = tools.project_summary(ctx, "other/notes")
+    assert summary.fields["open_issue_count"] == "2"
+    text = answers.render(summary)
+    assert "2 open issues: " in text and "Tidy the readme" in text and _HIDDEN_ONE in text
+    issues = tools.open_issues(ctx, "other/notes")
+    text = answers.render(issues)
+    assert text.startswith("There are 2 open issues in other/notes: ") and "Tidy the readme" in text
+    assert text.endswith(_HIDDEN_ONE)
+    # A project with no issue at all still says so.
+    assert answers.render(tools.open_issues(ctx, "acme/notes")) == "There are no open issues in acme/notes."
+    assert "No open issues." in answers.render(tools.project_summary(ctx, "acme/notes"))
+    for r in (summary, issues):
+        assert grounding.figures_grounded(answers.render(r), r.fields)
+
+
+def test_every_open_issue_counts_older_failures_too(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = tools.Context(_with_old_failures(tmp_path, monkeypatch), NOW)
+    page = dbread.issues_view(ctx.db_path, NOW)
+    assert (page.hidden_count, page.hidden_line) == (2, _HIDDEN_TWO)
+    r = tools.open_issues(ctx)
+    assert r.fields["count"] == str(len(page.open_rows) + page.hidden_count) == "3"
+    text = answers.render(r)
+    assert text.startswith("There are 3 open issues: ") and text.endswith(_HIDDEN_TWO)
+    assert grounding.figures_grounded(text, r.fields)
+
+
 def test_open_issues_match_the_issues_page(ctx: tools.Context) -> None:
     r = tools.open_issues(ctx)
     page = dbread.issues_view(ctx.db_path, NOW)

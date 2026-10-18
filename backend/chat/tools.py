@@ -433,12 +433,16 @@ def project_summary(ctx: Context, project: str, period: str | None = None) -> Re
         view = dbread.project_view(ctx.db_path, name, ctx.now)
         fields: dict[str, object] = {
             "project": name, "in_progress": str(view.in_progress), "delivered_7d": str(view.delivered_7d),
-            "delivered_total": str(view.delivered_total), "open_issue_count": str(len(view.issues)),
+            # The project page's own total: the listed open issues and the older unresolved failures
+            # the 14-day cut-off leaves out of the list, which `hidden_line` explains.
+            "delivered_total": str(view.delivered_total), "open_issue_count": str(view.open_issues_total),
             "open_issues": [f"{i.kind}: {i.subject}" for i in view.issues[:MAX_LISTED]],
-            "more_issues": str(max(0, len(view.issues) - MAX_LISTED)), "cost": view.spend.text,
-            "period_label": "", "period_delivered": "", "stale_note": _stale_note(ctx),
+            "more_issues": str(max(0, len(view.issues) - MAX_LISTED)), "hidden_line": view.hidden_line,
+            "cost": view.spend.text, "period_label": "", "period_delivered": "", "stale_note": _stale_note(ctx),
         }
         refs = [_project_ref(name)]
+        if view.hidden_line:
+            refs.append(PAGES["issues"])
         if p is not None:
             lo, hi = dbread._window_bounds(*p.window)
             fields["period_label"] = p.label
@@ -458,15 +462,24 @@ def open_issues(ctx: Context, project: str | None = None) -> Result:
             return problem
         view = dbread.issues_view(ctx.db_path, ctx.now)
         rows = [r for r in view.open_rows if name is None or r.project == name]
+        # The total counts the older unresolved failures the 14-day cut-off leaves out of the list,
+        # as the pages do: the Issues page's count for every project, the project page's for one.
+        if name is None:
+            total, hidden = len(rows) + view.hidden_count, view.hidden_line
+        else:
+            pv = dbread.project_view(ctx.db_path, name, ctx.now)
+            total, hidden = pv.open_issues_total, pv.hidden_line
         shown = rows[:MAX_LISTED]
         fields: dict[str, object] = {
-            "project": name or "", "count": str(len(rows)), "more": str(len(rows) - len(shown)),
+            "project": name or "", "count": str(total), "more": str(len(rows) - len(shown)),
             "rows": [{"kind": r.kind, "subject": r.subject, "detail": r.detail, "age": r.age,
                       "how_serious": r.band.label} for r in shown],
-            "stale_note": _stale_note(ctx),
+            "hidden_line": hidden, "stale_note": _stale_note(ctx),
         }
         refs = [Ref("issue", f"{r.kind}: {r.subject}" if r.subject else r.kind, r.link) for r in shown]
         refs.append(_project_ref(name) if name else PAGES["issues"])
+        if name and hidden:
+            refs.append(PAGES["issues"])
         return Result("open_issues", "found", fields, tuple(refs))
 
     return _with_store(ctx, read)

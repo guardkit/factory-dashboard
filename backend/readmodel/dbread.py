@@ -542,6 +542,7 @@ class IssuesView:
     closed_rows: tuple[IssueRow, ...]
     note: str
     hidden_line: str = ""    # how many old open failures the 14-day cut-off leaves out
+    hidden_count: int = 0    # that number, so a total of open issues can include them (the chat)
 
 
 @dataclass(frozen=True)
@@ -776,7 +777,7 @@ def issues_view(db_path: Path, now: datetime | None = None) -> IssuesView:
                 "later attempt. Closed: issues that closed in the last 7 days.")
         return IssuesView(chrome=page_chrome(conn, now), open_rows=tuple(issue_row(i, now) for i in open_),
                           closed_rows=tuple(issue_row(i, now) for i in closed), note=note,
-                          hidden_line=hidden_line(hidden))
+                          hidden_line=hidden_line(hidden), hidden_count=hidden)
     finally:
         conn.close()
 
