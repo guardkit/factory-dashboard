@@ -348,7 +348,7 @@ def test_the_client_safe_export_has_no_suggest_link(data: Path) -> None:
 
 def test_the_18_october_changes_are_newest_first() -> None:
     (day,) = [d for d in suggestions.read_changes() if d.date == "18 October 2026"]
-    order = ["suggest a change", "about cost and time", "by voice", "what each build cost", "Appmilla look", "client account",
-             "from the dashboard's own records", "live data", "signs in"]
+    order = ["suggest a change", "about cost and time", "by voice", "what each build cost", "Appmilla look",
+             "client account", "from the dashboard's own records", "live data", "signs in"]
     found = [next(i for i, item in enumerate(day.items) if key in item) for key in order]
     assert found == sorted(found) == list(range(len(order)))
