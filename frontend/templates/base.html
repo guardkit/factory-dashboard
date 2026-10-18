@@ -1,10 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en-GB" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Factory dashboard{% endblock %}</title>
+  <title>{% block title %}Appmilla Factory{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
+  {# Not deferred: it sets the light or dark theme before the first paint. #}
+  <script src="/static/theme.js"></script>
   {# Vendored scripts only, no CDN. #}
   <script src="/static/htmx.min.js" defer></script>
   <script src="/static/htmx-ext-sse.js" defer></script>
@@ -14,9 +16,15 @@
 </head>
 <body class="layout-operator">
   <a class="skip-link" href="#main">Skip to content</a>
+  {% include "icon_sprite.html" %}
+  {% import 'macros.html' as m %}
 
   <header class="topbar">
-    <div class="topbar__brand">Factory dashboard</div>
+    <a class="topbar__brand" href="/">
+      <img class="topbar__logo" src="/static/logos/appmilla-icon-A.png" alt="" width="37" height="24">
+      <img class="topbar__wordmark" src="/static/logos/appmilla-wordmark-white-on-dark.png" alt="appmilla" width="73" height="19">
+      <span class="topbar__product">Factory</span>
+    </a>
     <nav class="topnav" aria-label="Primary">
       <ul>
         {% for label, href, key in nav %}
@@ -30,8 +38,10 @@
       <span class="sse-dot" data-sse-state="idle" title="connecting to live updates…">
         <span aria-hidden="true">●</span><span class="visually-hidden">live updates</span>
       </span>
+      <button type="button" class="theme-switch" hidden><span class="visually-hidden">Switch to </span><span class="theme-switch__label">Dark</span><span class="theme-switch__mode"> mode</span></button>
       <span class="user-menu">
-        {% if signed_in %}<span class="user-menu__name">Signed in as {{ signed_in.display_name }}</span>{% endif %}
+        {% if signed_in %}<span class="user-menu__avatar" aria-hidden="true">{{ signed_in.display_name[:1] | upper }}</span>
+        <span class="user-menu__name">Signed in as {{ signed_in.display_name }}</span>{% endif %}
         <form method="post" action="/logout" class="user-menu__form"><button type="submit" class="user-menu__signout">Sign out</button></form>
       </span>
     </div>
@@ -41,6 +51,9 @@
   <div class="banner-slot">
     {% include "fragments/freshness.html" %}
   </div>
+
+  {# Full-width bands above the page grid (the Now page's Needs-you band). #}
+  {% block hero %}{% endblock %}
 
   <div class="frame">
     <main id="main" class="content">
@@ -54,8 +67,14 @@
     </aside>
   </div>
 
-  <footer class="site-footer">
-    <span>The dashboard reads the factory's record; it never changes anything.</span>
-  </footer>
+  {# Phones: the main places, at the bottom of the screen. The fifth place becomes Ask (/chat)
+     for operators once the chat page exists; until then it is Fleet. #}
+  <nav class="tabbar" aria-label="Main">
+    {% for label, href, key, glyph in [('Now', '/', 'now', 'now'), ('Features', '/features', 'features', 'list'),
+                                       ('Issues', '/issues', 'issues', 'flag'), ('Reports', '/reports', 'reports', 'report'),
+                                       ('Fleet', '/fleet', 'fleet', 'server')] %}
+      <a class="tabbar__item" href="{{ href }}"{% if key == nav_active %} aria-current="page"{% endif %}>{{ m.icon(glyph) }}<span>{{ label }}</span></a>
+    {% endfor %}
+  </nav>
 </body>
 </html>

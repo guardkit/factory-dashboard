@@ -1,35 +1,50 @@
-{# Shared pieces. Class names are stable so a later stylesheet can restyle them. #}
+{# Shared pieces. Class names are a stable contract (see the header of static/style.css).
+   Later stages only append macros at the end of this file. Icons come from icon_sprite.html,
+   which base.html and client_base.html include once. #}
 
-{% macro station_glyph(state) -%}
-{{ {'passed':'●','current':'◉','waiting':'◔','future':'○','stopped':'✕'}.get(state, '○') }}
+{# One icon from the sprite. Decorative: the words beside it carry the meaning. #}
+{% macro icon(name) -%}
+<svg class="icon" aria-hidden="true" focusable="false"><use href="#i-{{ name }}"/></svg>
 {%- endmacro %}
 
-{# When the data on a card was read. data-asof / data-threshold let freshness.js age the dot. #}
+{# A state word in a pill, with its icon: kind is done, ok, wait, info, neutral, risk or fail.
+   time, when given, follows the word: "Waiting for approval · 2 h". #}
+{% macro status_pill(kind, word, time='') -%}
+{% set glyph = {'done':'check','ok':'check','wait':'clock','info':'progress','neutral':'slash','risk':'alert','fail':'x'}.get(kind, 'dot') %}
+<span class="status-pill status-pill--{{ kind }}">{{ icon(glyph) }}{{ word }}{% if time %} <span class="status-pill__time">· {{ time }}</span>{% endif %}</span>
+{%- endmacro %}
+
+{# When the data on a card was read. data-asof / data-threshold let freshness.js age the dot; it
+   swaps the state classes, and the stylesheet shows the hidden word that matches the state. #}
 {% macro asof_chip(a) -%}
 <span class="asof-chip asof-chip--{{ a.dot_state }}"
       {% if a.title_iso %}title="{{ a.title_iso }}"{% endif %}
       {% if a.asof_epoch is not none %}data-asof="{{ a.asof_epoch }}" data-threshold="{{ a.threshold_secs }}"{% endif %}>
   <span class="asof-chip__label">{{ a.prefix }} {{ a.label }}</span>
   <span class="asof-dot asof-dot--{{ a.dot_state }}" aria-hidden="true">●</span>
-  <span class="visually-hidden">freshness: {{ a.dot_state }}</span>
+  <span class="visually-hidden asof-chip__word asof-chip__word--live">up to date</span>
+  <span class="visually-hidden asof-chip__word asof-chip__word--lagging">a little old</span>
+  <span class="visually-hidden asof-chip__word asof-chip__word--stale">out of date</span>
 </span>
 {%- endmacro %}
 
-{# On-track colour: always a word with the colour. #}
+{# On-track colour (or an issue's severity): always a word and an icon with the colour. #}
 {% macro band_chip(chip) -%}
 {% set cls = ('g' if chip.band == 'G' else 'a' if chip.band == 'A' else 'r' if chip.band == 'R' else 'none') %}
-<span class="band-chip band-chip--{{ cls }}">{{ {'G':'●','A':'▲','R':'■'}.get(chip.band, '–') }}{% if chip.label %} {{ chip.label }}{% endif %}</span>
+<span class="band-chip band-chip--{{ cls }}">{{ icon({'g':'check','a':'alert','r':'x'}.get(cls, 'slash')) }}{% if chip.label %}<span class="band-chip__word">{{ chip.label }}</span>{% endif %}</span>
 {%- endmacro %}
 
-{# How far through: all nine steps, never a subset. #}
+{# How far through: all nine steps, never a subset. A step waiting on a person (glyph state
+   "waiting", from the read model) is purple, with the clock icon. #}
 {% macro journey_bar(j, mini=False) -%}
-<div class="journey-bar {% if mini %}journey-bar--mini{% endif %}">
+<div class="journey-bar {% if mini %}journey-bar--mini{% endif %}"{% if mini %} role="img" aria-label="{{ j.current_label }}"{% endif %}>
   <ol class="journey-bar__stations">
   {% for st in j.stations %}
-    <li class="journey-station journey-station--{{ st.glyph_state }}" title="{{ st.name }}">
-      <span class="journey-station__glyph" aria-hidden="true">{{ station_glyph(st.glyph_state) }}</span>
-      {% if not mini %}<span class="journey-station__name">{{ st.name }}</span>{% endif %}
-      <span class="visually-hidden">{{ st.name }}: {{ st.glyph_state }}</span>
+    {% set is_wait = st.glyph_state == 'waiting' %}
+    <li class="journey-station journey-station--{{ st.glyph_state }}" title="{{ st.name }}"{% if st.glyph_state in ('current', 'waiting') and not mini %} aria-current="step"{% endif %}>
+      <span class="journey-station__glyph" aria-hidden="true">{% if not mini %}{% if is_wait %}{{ icon('clock') }}{% elif st.glyph_state == 'passed' %}{{ icon('check') }}{% elif st.glyph_state == 'stopped' %}{{ icon('x') }}{% endif %}{% endif %}</span>
+      {% if not mini %}<span class="journey-station__name">{{ st.name }}</span>
+      <span class="visually-hidden">: {{ 'waiting for a person' if is_wait else {'passed':'done','current':'the step it is on','future':'not reached yet','stopped':'stopped here'}.get(st.glyph_state, st.glyph_state) }}</span>{% endif %}
     </li>
   {% endfor %}
   </ol>
@@ -37,22 +52,24 @@
 </div>
 {%- endmacro %}
 
-{# Cost is not measured yet: shown as a gap, never as a zero. #}
+{# Cost is not measured yet: shown as a hatched gap, never as a zero. #}
 {% macro spend_slot(s) -%}
-<span class="spend-slot" data-state="not-measured">{{ s.text }}</span>
+<span class="spend-slot" data-state="not-measured">{{ icon('slash') }}{{ s.text }}</span>
 {%- endmacro %}
 
+{# The card's data is older than it should be: the amber badge, with the age. #}
 {% macro lagging_note(a) -%}
-<p class="lagging-note">Showing the last known data ({{ a.prefix }} {{ a.label }}).</p>
+<p class="lagging-note">{{ icon('clock') }}Showing the last known data ({{ a.prefix }} {{ a.label }}).</p>
 {%- endmacro %}
 
-{# A feature list: title first, code after. Used by Features, the project page and Now. #}
+{# A feature list: title first, code after. Used by Features, the project page and Now. It stays a
+   table (a test reads a row to its </tr>). #}
 {% macro feature_table(rows, show_project=True) -%}
 <table class="dense-table feature-list">
   <thead>
     <tr><th scope="col">Feature</th>{% if show_project %}<th scope="col">Project</th>{% endif %}
       <th scope="col">How far</th><th scope="col">Where it stands</th><th scope="col">On track</th>
-      <th scope="col">Elapsed</th><th scope="col">Sent</th><th scope="col">Cost</th></tr>
+      <th scope="col" class="num">Elapsed</th><th scope="col" class="num">Sent</th><th scope="col">Cost</th></tr>
   </thead>
   <tbody>
   {% for r in rows %}
@@ -64,7 +81,7 @@
       <td>{{ band_chip(r.band) }}</td>
       <td class="num">{{ r.elapsed }}</td>
       <td class="num" title="{{ r.sent_title }}">{{ r.sent_label }}</td>
-      <td><span class="spend-slot" data-state="not-measured">not measured yet</span></td>
+      <td><span class="spend-slot" data-state="not-measured">Not measured</span></td>
     </tr>
   {% endfor %}
   </tbody>
