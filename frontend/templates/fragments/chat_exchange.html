@@ -1,8 +1,9 @@
 {# One question and its answer. The answer text and the links are the server's, from the records. #}
 <article class="chat-exchange chat-exchange--{{ answer.kind }}">
-  <p class="chat-exchange__question"><span class="visually-hidden">You asked: </span>{{ question }}</p>
+  <p class="chat-exchange__question"><span class="visually-hidden">You asked: </span>{{ question }}{% if how %} <span class="chat-exchange__how">{{ how }}</span>{% endif %}</p>
   <div class="chat-exchange__answer">
     <p class="chat-exchange__text">{{ answer.text }}</p>
+    {% if voice_note %}<p class="chat-exchange__voice-note">{{ voice_note }}</p>{% endif %}
     {% if answer.refs %}
     <ul class="chat-refs" aria-label="Records this answer comes from">
       {% for ref in answer.refs %}<li class="chat-refs__item chat-refs__item--{{ ref.kind }}"><a href="{{ ref.href }}">{{ ref.label }}</a></li>{% endfor %}

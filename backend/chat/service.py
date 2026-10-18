@@ -91,6 +91,13 @@ class HourlyLimit:
             self._times.append(now)
             return True
 
+    def full(self) -> bool:
+        """True when the limit is reached just now, without taking one (voice checks it before it
+        spends a speech-to-text call)."""
+        with self._lock:
+            now = self._clock()
+            return sum(1 for t in self._times if now - t < 3600) >= self._limit
+
 
 def _today(now: datetime) -> str:
     d = vm.to_london(now)
