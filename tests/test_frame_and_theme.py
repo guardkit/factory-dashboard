@@ -6,7 +6,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from backend.app import create_app
+from backend.readmodel.viewmodels import AsOf
 from fastapi.testclient import TestClient
+
+from tests.test_pages import world  # noqa: F401  (the page-test factory, reused)
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 TEMPLATES = FRONTEND / "templates"
@@ -128,3 +132,44 @@ def test_later_stages_have_their_own_sections() -> None:
     for label in ("stage 2a: Now, Feature, Project", "stage 2b: Reports, export, Fleet, Login, Client",
                   "stage 3: Features, Delivered, Issues", "stage 3: chat and microphone"):
         assert f"/* ==== {label} ==== */" in STYLE, label
+
+
+# --- honesty surfaces: emptying any of these must fail a test -------------------------------------
+
+
+def _macros(tmp_path: Path):  # type: ignore[no-untyped-def]
+    env = create_app(db_path=tmp_path / "rm.db").state.templates.env
+    return env.get_template("macros.html").module
+
+
+def test_lagging_note_shows_its_clock_and_its_words(tmp_path: Path) -> None:
+    note = str(_macros(tmp_path).lagging_note(
+        AsOf(prefix="factory record read", label="12:00:00", title_iso="", dot_state="lagging")))
+    assert '<p class="lagging-note">' in note
+    assert '<use href="#i-clock"/>' in note
+    assert "Showing the last known data (factory record read 12:00:00)." in note
+
+
+def test_asof_chip_carries_all_three_state_words(tmp_path: Path) -> None:
+    """freshness.js swaps the state classes on the open page; the stylesheet shows the matching
+    word, so all three must be in the HTML."""
+    chip = str(_macros(tmp_path).asof_chip(AsOf(prefix="read", label="12:00:00", title_iso="", dot_state="live",
+                                        asof_epoch=1.0, threshold_secs=60)))
+    for state, word in (("live", "up to date"), ("lagging", "a little old"), ("stale", "out of date")):
+        assert f'asof-chip__word asof-chip__word--{state}">{word}</span>' in chip, state
+    assert 'class="asof-dot asof-dot--live"' in chip and 'data-threshold="60"' in chip
+
+
+def test_a_features_row_says_its_cost_is_not_measured(world: tuple[TestClient, Path, object]) -> None:  # noqa: F811
+    client, _, _ = world
+    body = client.get("/features").text
+    start = body.index('<tr class="feature-list__row')
+    row = body[start: body.index("</tr>", start)]
+    assert '<span class="spend-slot" data-state="not-measured">Not measured</span>' in row
+
+
+def test_waiting_for_a_person_is_purple_in_the_journey() -> None:
+    purple = re.search(
+        r"([^{}]*)\{[^}]*background: var\(--status-wait-tint\); border-color: var\(--status-wait\)", STYLE)
+    assert purple is not None
+    assert ".journey-station--waiting .journey-station__glyph" in purple.group(1)

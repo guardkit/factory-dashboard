@@ -29,7 +29,7 @@
       </ul>
     </nav>
     <div class="topbar__cluster">
-      {% if tenant is defined and tenant %}<span class="org-chip">{{ tenant.display_name }}</span>{% endif %}
+      {% if tenant is defined and tenant %}<span class="org-chip" title="{{ tenant.display_name }}">{{ tenant.display_name }}</span>{% endif %}
       <button type="button" class="theme-switch" hidden><span class="visually-hidden">Switch to </span><span class="theme-switch__label">Dark</span><span class="theme-switch__mode"> mode</span></button>
       <span class="user-menu">
         {% if signed_in %}<span class="user-menu__avatar" aria-hidden="true">{{ signed_in.display_name[:1] | upper }}</span>

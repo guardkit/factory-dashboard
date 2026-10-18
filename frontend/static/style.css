@@ -326,7 +326,9 @@ a.feature-title:hover { text-decoration: underline; }
 .sse-dot[data-sse-state="reconnecting"] > [aria-hidden="true"] { background: var(--status-risk); }
 .sse-dot[data-sse-state="down"] > [aria-hidden="true"] { background: var(--status-fail); }
 
-.read-asof .asof-chip { color: var(--on-dark-dim); }
+/* The read time sits on the page ground under the top bar (fragments/freshness.html). A plain
+   default: a page-context rule may restyle it. */
+.read-asof .asof-chip { color: var(--text-dim); }
 
 /* The theme switch: an on-dark outline pill. theme.js shows it and keeps its label right. */
 .theme-switch {
@@ -374,7 +376,9 @@ a.feature-title:hover { text-decoration: underline; }
 .banner--sse_paused { background: var(--status-risk-tint); color: var(--status-risk-text); cursor: pointer; }
 /* Never two banners: the stale banner wins over "updates paused", whichever arrived first. */
 .banner-slot:has(.banner--stale) .banner--sse_paused { display: none; }
-/* The freshness element (fragments/freshness.html): the read time under the top bar, then the banner. */
+/* The freshness element (fragments/freshness.html) holds the read time, then the banner. The
+   banner shows first, directly under the top bar; the read time follows it. */
+.freshness { display: flex; flex-direction: column-reverse; }
 .freshness .read-asof { display: block; text-align: right; padding: var(--space-4) var(--space-32); }
 
 /* ==== frame: page grid, content and the chat slot ==== */
@@ -659,7 +663,7 @@ a.feature-title:hover { text-decoration: underline; }
 /* No plan to compare against. */
 .honest-badge--no-baseline { background: transparent; }
 /* A value we do not have, inside a table cell: plain words, no box. */
-td .spend-slot { padding: 0; border: 0; background: none; font-size: 13px; color: var(--text-dim); white-space: normal; }
+td .spend-slot { padding: 0; border: 0; background: none; font-size: 13px; color: var(--text-dim); }
 td .spend-slot .icon { display: none; }
 .signal-row--unmeasured { color: var(--text-dim); }
 
@@ -782,8 +786,10 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
 /* Figures align right; a time in the first column is a row label and stays left. */
 .dense-table td.num:not(:first-child), .dense-table th.num:not(:first-child) { text-align: right; }
 .feature-list td:first-child { min-width: 12em; }
-/* Long unbroken words (paths, ids in an error) may break, so a table fits its card where it can. */
-.dense-table td { overflow-wrap: anywhere; }
+/* Words and figures never break mid-way: a table wider than its card scrolls inside the card
+   (.panel-card__body). No overflow-wrap here: in a table, Chrome lets even break-word shrink a
+   column below its longest word, which split "mission's" and "12:28:50" at 1440. */
+.dense-table td.num, td .spend-slot { white-space: nowrap; }
 .dense-table tfoot td { font-weight: 700; border-top: 2px solid var(--line-strong); }
 .feature-list__row--finished td { color: var(--text-dim); }
 .feature-list__row--finished .feature-title { color: var(--text-dim); }
@@ -816,7 +822,8 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
   .hide-phone { display: none; }
 
   .topbar { height: 52px; padding: 0 var(--space-16); gap: var(--space-12); }
-  .topnav, .read-asof { display: none; }
+  .topnav { display: none; }
+  .freshness .read-asof { padding: var(--space-4) var(--space-16); }
   .topbar__logo { height: 22px; }
   .topbar__wordmark { height: 16px; }
   .topbar__product { font-size: 15px; padding-left: 8px; }
@@ -827,9 +834,17 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
     overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
   }
   .user-menu__avatar, .theme-switch__mode { display: none; }
-  .org-chip { display: none; }
+  /* A client always sees their organisation's name; a long one is cut short with an ellipsis. */
+  .topbar__cluster { min-width: 0; }
+  .org-chip { display: block; min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+  /* The client's bar makes room for the name: the green A and "Factory" stay, the wordmark goes. */
+  .topbar--client .topbar__wordmark { display: none; }
 
   .banner { padding: 12px var(--space-16); }
+
+  /* The page fills the screen, so the sticky tab bar sits at the bottom even on a short page. */
+  body { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+  .frame { flex: 1 0 auto; width: 100%; }
 
   .content { padding: var(--space-16) var(--space-16) 96px; gap: var(--space-16); }
 
@@ -857,8 +872,9 @@ a.decide-in-slack:hover { border-color: var(--bright-green); }
   .panel-card--flush > .panel-card__header { padding: var(--space-16) var(--space-16) 0; }
   .panel-card--flush > .panel-card__body > :not(table) { margin: 0 var(--space-16) var(--space-16); }
 
-  .feature-lower, .report-two-col, .fleet-grid, .stat-grid--3 { grid-template-columns: minmax(0, 1fr); }
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* after .stat-grid, so the three-tile grid goes to one column */
+  .feature-lower, .report-two-col, .fleet-grid, .stat-grid--3 { grid-template-columns: minmax(0, 1fr); }
   .stat-tile { padding: 14px 14px 14px calc(14px + var(--accent-bar)); }
   .stat-tile__value { font-size: 30px; line-height: 34px; }
   .stat-tile__value small { font-size: 17px; }
