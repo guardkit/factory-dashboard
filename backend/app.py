@@ -15,6 +15,7 @@ DB-open failure (ux §2). No client tenant is registered today, so no account ca
 from __future__ import annotations
 
 import asyncio
+import base64
 import functools
 import os
 import sys
@@ -27,11 +28,14 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import select_autoescape
+from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from backend import accounts, auth, db, sse
+from backend import accounts, auth, db, sse, voice
 from backend.chat.service import Chat, FollowUp
 from backend.config_loader import (
     PLANS_PATH,
@@ -198,10 +202,13 @@ def create_app(
     # hourly limit hold across every request and every account. Part E's voice endpoint calls the
     # same `app.state.chat.ask(question, user)`.
     app.state.chat = Chat(db_path)
+    # Voice (requirement 10): speech-to-text, then the same chat, then text-to-speech.
+    app.state.voice = voice.Voice()
 
     _register_exception_handlers(app)
     _register_routes(app)
     _register_chat_routes(app)
+    _register_voice_routes(app)
     return app
 
 
@@ -576,6 +583,63 @@ def _register_chat_routes(app: FastAPI) -> None:
         return _render(request, "chat.html", {"exchanges": [exchange], "chat_page": True, "nav_active": "",
                                               "chrome": dbread.chrome_view(request.app.state.db_path),
                                               "tenant": _tenant(request, user)})
+
+
+def _voice_json(reply: voice.VoiceReply, templates: Jinja2Templates) -> JSONResponse:
+    """One JSON shape for the browser and, later, the robot: what was heard, the answer (text and
+    links), the WAV read aloud (base64) and, for the browser, the chat's own answer fragment."""
+    if reply.answer is None:
+        return JSONResponse({"message": reply.message}, status_code=reply.status)
+    a = reply.answer
+    html = templates.get_template("fragments/chat_exchange.html").render(
+        question=reply.transcript, answer=a, how="Spoken", voice_note=reply.voice_note)
+    return JSONResponse({
+        "transcript": reply.transcript,
+        "answer": {
+            "text": a.text, "kind": a.kind,
+            "refs": [{"kind": r.kind, "label": r.label, "href": r.href} for r in a.refs],
+            "follow_up": ({"question": a.follow_up.question, "clarify": a.follow_up.clarify}
+                          if a.follow_up else None),
+        },
+        "spoken": reply.spoken,
+        "audio": ({"content_type": "audio/wav", "base64": base64.b64encode(reply.audio).decode("ascii")}
+                  if reply.audio else None),
+        "voice_note": reply.voice_note,
+        "html": html,
+    })
+
+
+def _register_voice_routes(app: FastAPI) -> None:
+    """Voice (design requirement 10): the chat's guards, plus limits on the recording."""
+
+    @app.post("/api/voice/ask")
+    async def voice_ask(request: Request, user: OperatorApi) -> JSONResponse:
+        # The same guards as POST /chat: operators only (401/403 above), same-origin only. The body
+        # is read only after the guards and the length check, and never beyond the limit.
+        if not same_origin(request):
+            return JSONResponse({"message": voice.CROSS_SITE}, status_code=403)
+        length = request.headers.get("content-length", "")
+        if not length.isdigit():
+            return JSONResponse({"message": voice.NO_LENGTH}, status_code=411)
+        if int(length) > voice.MAX_BODY_BYTES:
+            return JSONResponse({"message": voice.TOO_BIG}, status_code=413)
+        try:
+            form = await request.form(max_files=1, max_fields=3, max_part_size=4096)
+        except StarletteHTTPException:  # a malformed form
+            return JSONResponse({"message": voice.NO_RECORDING}, status_code=400)
+        try:
+            upload = form.get("audio")
+            if not isinstance(upload, UploadFile):
+                return JSONResponse({"message": voice.NO_RECORDING}, status_code=400)
+            audio = await upload.read(voice.MAX_WAV_BYTES + 1)
+            content_type = upload.content_type or ""
+            prior_q, prior_c = str(form.get("prior_question") or ""), str(form.get("prior_clarify") or "")
+        finally:
+            await form.close()
+        follow_up = FollowUp(prior_q, prior_c) if prior_q and prior_c else None
+        reply = await run_in_threadpool(voice.ask_by_voice, request.app.state.chat, request.app.state.voice,
+                                        audio, content_type, user, follow_up)
+        return _voice_json(reply, request.app.state.templates)
 
 
 _FRAGMENT_TEMPLATES: dict[str, str] = {

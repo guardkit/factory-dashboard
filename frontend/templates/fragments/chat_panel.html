@@ -11,8 +11,19 @@
         hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-disabled-elt="find button"
         hx-on::after-request="if (event.detail.successful) this.reset()">
     <label for="chat-question" class="chat__label">Your question</label>
+    {# Voice (Part E): mic.js shows these only where the browser can record (a secure page with a
+       microphone); otherwise they stay hidden and the text box works as before. #}
+    <div class="chat-voice" role="status" hidden>
+      <span class="chat-voice__wave" aria-hidden="true" hidden>{% for h in (0.35, 0.6, 0.9, 0.5, 0.8, 0.45, 0.3) %}<span class="chat-voice__bar" style="--h: {{ h }}"></span>{% endfor %}</span>
+      <span class="chat-voice__dots" aria-hidden="true" hidden><span></span><span></span><span></span></span>
+      <span class="chat-voice__text"></span>
+    </div>
     <textarea id="chat-question" class="chat__input" name="question" rows="2" maxlength="500" required></textarea>
     <button type="submit" class="chat__ask">Ask</button>
+    <button type="button" class="chat-mic" aria-pressed="false" hidden>
+      <svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg><span class="visually-hidden">Ask by voice: hold to speak, or press to start and again to send</span>
+    </button>
     <span class="chat__working">Looking it up…</span>
   </form>
+  <script src="/static/mic.js" defer></script>
 </section>

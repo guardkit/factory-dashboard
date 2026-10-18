@@ -1,7 +1,8 @@
 # The factory dashboard: one image, two containers.
 #
 #   board  — the web pages and the chat, on 127.0.0.1:8090 (loopback only; nothing is published). The
-#            chat calls LiteLLM on :4000 with its own key (FACTORY_DASH_CHAT_KEY, from ./.env).
+#            chat calls LiteLLM on :4000 with its own key (FACTORY_DASH_CHAT_KEY, from ./.env); voice
+#            calls the speech models through llama-swap on :9000 (no key).
 #   projector ("the feed") — copies Forge's build record into ./data every 15 s, read-only, and checks the model
 #            gateway, the model server and the bus monitor every 30 s. No bus connection.
 #
@@ -30,6 +31,13 @@ services:
       # value is passed, so the board never holds the file's other logins. Empty: the chat says it
       # is not switched on, and the pages work as before.
       FACTORY_DASH_CHAT_KEY: ${FACTORY_DASH_CHAT_KEY:-}
+      # Voice (requirement 10): where the speech models are. Empty means the defaults in
+      # backend/voice.py (llama-swap on 127.0.0.1:9000); set them in ./.env when the models move.
+      FACTORY_DASH_STT_URL: ${FACTORY_DASH_STT_URL:-}
+      FACTORY_DASH_STT_MODEL: ${FACTORY_DASH_STT_MODEL:-}
+      FACTORY_DASH_TTS_URL: ${FACTORY_DASH_TTS_URL:-}
+      FACTORY_DASH_TTS_MODEL: ${FACTORY_DASH_TTS_MODEL:-}
+      FACTORY_DASH_TTS_VOICE: ${FACTORY_DASH_TTS_VOICE:-}
     volumes:
       - ./data:/data
       # Accounts and the session secret (README "Accounts and access"), outside the repository,

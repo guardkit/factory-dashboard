@@ -351,3 +351,16 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
 .chat-exchange--refused .chat-exchange__text, .chat-exchange--busy .chat-exchange__text,
 .chat-exchange--limited .chat-exchange__text, .chat-exchange--unavailable .chat-exchange__text { color: var(--muted); }
 .chat-refs { margin: 0; padding-left: 18px; font-size: 12px; }
+
+/* ---- voice (Part E) -----------------------------------------------------------------------------
+   Minimal styling only; the redesign styles .chat-mic (and its --listening, --thinking, --speaking,
+   --error modifiers), the .chat-voice status line, its __wave bars (--h) and __dots, and
+   .chat-exchange__how. The button and status line stay hidden where the browser cannot record. */
+.chat-mic[hidden], .chat-voice[hidden], .chat-voice [hidden] { display: none; }
+.chat-mic { align-self: flex-start; touch-action: none; user-select: none; -webkit-user-select: none; }
+.chat-mic .icon { width: 1em; height: 1em; }
+.chat-voice { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.chat-voice__wave { display: inline-flex; align-items: center; gap: 2px; height: 1em; }
+.chat-voice__bar { display: inline-block; width: 3px; height: calc(var(--h, 0.5) * 1em); background: currentColor; }
+.chat-voice__dots span::before { content: "·"; }
+.chat-exchange__how, .chat-exchange__voice-note { margin: 0 0 4px; color: var(--muted); font-size: 12px; }

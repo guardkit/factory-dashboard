@@ -54,7 +54,7 @@ def test_fragment_api_requires_login(client: TestClient) -> None:
 CLIENT_REDIRECTED = ["/features", "/features/FEAT-3ED2", "/features/anything",
                      "/projects/study-tutor", "/projects/anything", "/projects/acme/notes", "/delivered", "/reports",
                      "/reports?view=export", "/issues", "/fleet", "/chat"]
-CLIENT_FORBIDDEN = ["/fragments/p2", "/events?once=1"]
+CLIENT_FORBIDDEN = ["/fragments/p2", "/events?once=1", "/api/voice/ask"]
 # "/" is tenant-aware (the client layout for a client); /healthz is for the start script and
 # says only whether the factory's record is fresh (tested in tests/test_pages.py).
 OPEN_ROUTES = {"/", "/login", "/logout", "/healthz"}
