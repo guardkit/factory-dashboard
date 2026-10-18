@@ -3,7 +3,11 @@
 Every web request opens the store read-only (URI `mode=ro`). The feed is the only writer of the
 Forge copy. Both containers apply the schema at start (`apply_schema`, idempotent), so the feed no
 longer fails when it starts before the web container (the 17 October first-start crash). The web
-container's `init_db` also mirrors the tenant registry and seeds the placeholder users.
+container's `init_db` also mirrors the tenant registry.
+
+Sign-in no longer uses the `users` table: accounts come from accounts.yaml (backend/accounts.py,
+17 October 2026). The July seed users (`username == tenant slug`) are gone, and any rows they left
+in an older read model are deleted at start so their weak hashes do not linger.
 """
 
 from __future__ import annotations
@@ -13,7 +17,6 @@ import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
-from backend.auth import make_credential_hash
 from backend.config_loader import Tenant
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "readmodel" / "schema.sql"
@@ -48,13 +51,14 @@ def apply_schema(db_path: Path) -> None:
 
 def init_db(db_path: Path, tenants: Iterable[Tenant]) -> None:
     """Startup-only bootstrap (NOT a request path): create the operational DB if absent, apply the
-    schema (idempotent), mirror the tenant registry, and seed dev users. rw connection here only."""
+    schema (idempotent), mirror the tenant registry, and delete the retired July seed users.
+    rw connection here only."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=_BUSY_TIMEOUT_SECS)
     try:
         _apply_schema(conn, SCHEMA_PATH)
         _mirror_tenants(conn, tenants)
-        _seed_dev_users(conn)
+        conn.execute("DELETE FROM users")  # retired July seed users; sign-in uses accounts.yaml
         conn.commit()
     finally:
         conn.close()
@@ -92,20 +96,3 @@ def _mirror_tenants(conn: sqlite3.Connection, tenants: Iterable[Tenant]) -> None
                 t.store_path,
             ),
         )
-
-
-def _seed_dev_users(conn: sqlite3.Connection) -> None:
-    """Seed one dev user per registered tenant: username == tenant_slug, password == tenant_slug.
-
-    DEV-ONLY skeleton credentials (S1). Idempotent — never overwrites an existing user row.
-    """
-    rows = conn.execute("SELECT tenant_slug FROM tenants").fetchall()
-    for (tenant_slug,) in rows:
-        existing = conn.execute(
-            "SELECT 1 FROM users WHERE username = ?", (tenant_slug,)
-        ).fetchone()
-        if existing is None:
-            conn.execute(
-                "INSERT INTO users (username, tenant_slug, credential_hash) VALUES (?, ?, ?)",
-                (tenant_slug, tenant_slug, make_credential_hash(str(tenant_slug))),
-            )

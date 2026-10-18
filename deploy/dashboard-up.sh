@@ -6,8 +6,9 @@
 #   deploy/dashboard-up.sh            start with the current image
 #   deploy/dashboard-up.sh --build    rebuild the image from this checkout first
 #
-# Exit status: 0 when the dashboard reports the factory's record as fresh, 1 otherwise (the
-# containers are left running either way; the pages then show the stale-data banner).
+# Exit status: 0 when the dashboard reports the factory's record as fresh; 1 when it started but the
+# record is not fresh yet (the pages then show the stale-data banner); 2 when the board's
+# configuration folder (accounts and session secret) is missing, so nothing was started.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,6 +22,18 @@ if [ ! -f .env ]; then
   (umask 077 && : > .env)
 fi
 mkdir -p data
+
+# The board reads its accounts and session secret from a folder outside the repository (README,
+# "Accounts and access"); compose will not start it without the folder, and the board will not
+# start without both files. Say so plainly rather than leave a half-started dashboard.
+CONFIG="${FACTORY_DASH_CONFIG_DIR:-$HOME/.config/factory-dashboard}"
+for need in session_secret accounts.yaml; do
+  if [ ! -r "$CONFIG/$need" ]; then
+    echo "dashboard: not started — $CONFIG/$need is missing (see README.md, 'Accounts and access')"
+    exit 2
+  fi
+done
+export FACTORY_DASH_CONFIG_DIR="$CONFIG"
 
 if [ "${1:-}" = "--build" ]; then
   docker compose up -d --build

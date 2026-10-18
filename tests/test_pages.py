@@ -14,6 +14,7 @@ from backend.projector.store import iso, open_rw, write_heartbeat
 from starlette.testclient import TestClient
 
 from tests import forge_fake
+from tests.conftest import LOOPBACK_URL, login
 from tests.forge_fake import ForgeFake, delivered_feature, store_from
 
 TENANTS_TEST = Path(__file__).resolve().parent / "fixtures" / "tenants_test.yaml"
@@ -48,8 +49,8 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Tes
     store = tmp_path / "readmodel.db"
     store_from(fake, store).close()
     app = create_app(db_path=store, tenants_path=TENANTS_TEST)
-    with TestClient(app) as client:
-        client.post("/login", data={"username": "operator", "password": "operator"})
+    with TestClient(app, base_url=LOOPBACK_URL) as client:
+        login(client)
         yield client, store, fake
 
 
@@ -160,7 +161,8 @@ def test_banner_when_the_feed_has_stopped(world: tuple[TestClient, Path, ForgeFa
 
 def test_healthz_needs_no_login_and_says_little(world: tuple[TestClient, Path, ForgeFake]) -> None:
     client, _, _ = world
-    client.get("/logout")
+    client.post("/logout")
+    assert client.get("/features", follow_redirects=False).status_code == 303  # signed out
     data = client.get("/healthz").json()
     assert set(data) == {"factory_record", "feed", "last_read_at"} and data["factory_record"] == "fresh"
 

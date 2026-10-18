@@ -34,10 +34,10 @@
       {% import 'macros.html' as m %}
       <span class="read-asof">{{ m.asof_chip(chrome.read_as_of) }}</span>
       {% endif %}
-      <details class="user-menu">
-        <summary>{{ tenant.display_name if tenant is defined and tenant else 'session' }}</summary>
-        <ul><li><a href="/logout">Log out</a></li></ul>
-      </details>
+      <span class="user-menu">
+        {% if signed_in %}<span class="user-menu__name">Signed in as {{ signed_in.display_name }}</span>{% endif %}
+        <form method="post" action="/logout" class="user-menu__form"><button type="submit" class="user-menu__signout">Sign out</button></form>
+      </span>
     </div>
   </header>
 

@@ -23,7 +23,10 @@ deploy/dashboard-up.sh --build    # rebuild from this checkout first (after a co
 ```
 
 It starts whatever is stopped, waits for the feed's first read, and prints the result. Exit
-status 0 means the dashboard is reading the factory's record.
+status 0 means the dashboard is reading the factory's record. It needs the board's configuration
+folder (`~/.config/factory-dashboard/` with `session_secret` and `accounts.yaml`, or the folder in
+`FACTORY_DASH_CONFIG_DIR`; see the README's "Accounts and access"); without it, it starts nothing
+and exits 2 with one sentence saying which file is missing.
 
 The containers use `restart: unless-stopped`, so a reboot brings them back on its own. What left
 the dashboard stopped on 1 October was a rollout step (`docker compose down` or a stop) with no
@@ -31,6 +34,7 @@ matching start. So:
 
 - **The factory's start script** runs `deploy/dashboard-up.sh` as its last line, after the estate
   is up. It never fails the factory's start: run it as `deploy/dashboard-up.sh || true`.
+- `/healthz` needs no sign-in; every page does.
 - **The release runbook's final checks** include: `curl -s http://127.0.0.1:8090/healthz` shows
   `"factory_record":"fresh"` and `"feed":"running"`, and the dashboard's pages show no red banner.
 

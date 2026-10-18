@@ -1,0 +1,17 @@
+# Factory dashboard accounts (example). The real file is accounts.yaml in the configuration
+# folder OUTSIDE this repository (default ~/.config/factory-dashboard/, mounted read-only into the
+# board at /config). Never commit a real accounts file.
+#
+# password_hash: run `uv run python -m backend.accounts hash` (it asks for the password twice and
+# prints one line) and paste that line here. The placeholder below matches no password at all.
+# The board re-reads this file when it changes; removing an account signs that person out.
+#
+# tenant (optional, default operator): operator sees the factory pages. A client tenant sees only
+# its own client view, and must first be registered in backend/config/tenants.yaml (none is today).
+# Any other field is refused, so a misspelt one can never widen what someone sees.
+
+accounts:
+  - username: example
+    display_name: Example Person
+    password_hash: "pbkdf2_sha256$120000$replace-me$with-the-line-printed-by-the-hash-command"
+    # tenant: operator
