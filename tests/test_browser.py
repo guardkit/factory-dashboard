@@ -32,6 +32,7 @@ import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 import uvicorn
@@ -227,7 +228,7 @@ def _level(view: dict[str, object]) -> None:
     cards = view["cards"]
     assert isinstance(cards, list) and cards, view
     assert view["top"] == "live" and set(cards) == {"live"}, view
-    assert set(view["cardLabels"]) == {view["topLabel"]}, view  # type: ignore[arg-type]
+    assert set(cast("list[str]", view["cardLabels"])) == {view["topLabel"]}, view
 
 
 def test_an_open_page_follows_the_record_through_change_outage_and_recovery(  # noqa: PLR0915 (one story)
@@ -242,17 +243,18 @@ def test_an_open_page_follows_the_record_through_change_outage_and_recovery(  # 
     watchdog = threading.Timer(secs(900) + 120, proc.kill)
     watchdog.start()
     assert proc.stdin is not None and proc.stdout is not None
+    stdin, stdout = proc.stdin, proc.stdout
 
     def step(name: str) -> dict[str, dict[str, object]]:
-        line = proc.stdout.readline()
+        line = stdout.readline()
         assert line, f"the browser stopped before '{name}': {proc.stderr.read() if proc.stderr else ''}"
         got = json.loads(line)
         assert got["step"] == name, got
-        return got
+        return cast("dict[str, dict[str, object]]", got)
 
     def go() -> None:
-        proc.stdin.write("go\n")
-        proc.stdin.flush()
+        stdin.write("go\n")
+        stdin.flush()
 
     try:
         opened = step("opened")
@@ -292,7 +294,7 @@ def test_an_open_page_follows_the_record_through_change_outage_and_recovery(  # 
         outage = step("outage")
         assert outage["features"]["banner"] == 1 and int(str(outage["features"]["lagging"])) >= 1
         assert int(str(outage["report"]["withheld"])) >= 1
-        assert "live" not in set(outage["features"]["cards"])  # type: ignore[arg-type]
+        assert "live" not in set(cast("list[str]", outage["features"]["cards"]))
 
         # Recovery: reads work again. Banner gone, cards live, report figures back, no reload.
         feed.path = fake.path

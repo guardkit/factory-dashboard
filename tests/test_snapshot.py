@@ -16,7 +16,7 @@ import pytest
 from backend.projector.forge_mirror import mirror_once
 from backend.projector.store import open_rw
 from backend.readmodel import dbread
-from backend.readmodel.norms import Norms
+from backend.readmodel.norms import Norms, load_norms
 
 from tests import forge_fake
 from tests.forge_fake import ForgeFake, delivered_feature, store_from
@@ -62,7 +62,7 @@ def test_a_feed_pass_in_the_middle_of_a_page_never_mixes_old_content_with_the_ne
     fake.conn.execute("UPDATE builds SET status='COMPLETE', completed_at=? WHERE build_id='b3'",
                       (forge_fake.at(150),))
     fake.merge_offer("b3", 151)
-    real_load_norms = dbread.load_norms
+    real_load_norms = load_norms     # what dbread.load_norms is (dbread imports it from norms)
     passes: list[bool] = []
 
     def load_norms_with_a_pass_committing_now() -> Norms:
