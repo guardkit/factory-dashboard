@@ -589,6 +589,8 @@ NOTE_BUSY = "The microphone is busy with another recording just now, so please t
 NOTES_LIMITED = (f"You have recorded {NOTES_PER_HOUR} voice notes in the last hour, so please type your "
                  "suggestion instead.")
 NOTE_CROSS_SITE = "This recording came from another website, so it was refused."
+#: Part E's refusals reworded for the voice note, for the shared recording reader (backend/app.py).
+NOTE_REFUSALS = {**NOTE_WORDS, CROSS_SITE: NOTE_CROSS_SITE}
 
 
 class PerUserHourly:

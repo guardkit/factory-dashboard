@@ -87,6 +87,11 @@ operator can set the status there. They are kept in `./data/suggestions.db`, the
 board writes while it runs; the feed never opens it. Each person can send 10 an hour, each up to
 2,000 characters, and record 10 voice notes an hour.
 
+If `suggestions.db` is locked or damaged, the board still starts (the log says
+"suggestions.db cannot be opened"), every other page works, and the suggestion pages say in one
+sentence that suggestions can't be saved or read just now. To start afresh, stop the board, move
+the damaged file aside and start it again; it creates an empty one.
+
 To read them without a browser (read-only; it never creates the file):
 
 ```sh

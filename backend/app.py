@@ -19,14 +19,22 @@ import asyncio
 import base64
 import functools
 import os
+import re
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from jinja2 import select_autoescape
 from starlette.concurrency import run_in_threadpool
@@ -160,6 +168,35 @@ def same_origin(request: Request) -> bool:
     return _strip_default_port(parts.netloc, parts.scheme) == _strip_default_port(target, None)
 
 
+# Every form post but the two voice routes (which check their own, larger limits before reading) must
+# say its length, and be small: FastAPI reads a whole form before the sign-in check runs, so without
+# this a signed-out caller could make the board read a very large body. 32 KiB fits the largest real
+# form: a 2,000-character suggestion of non-Latin text is up to 24 KB once URL-encoded.
+MAX_FORM_BYTES = 32 * 1024
+NO_FORM_LENGTH = "Please send the form with its length."
+FORM_TOO_BIG = "That was too large to send, so please make it shorter and try again."
+_OWN_BODY_LIMITS = frozenset({"/api/voice/ask", "/api/voice/transcribe"})
+
+
+class FormSizeLimit:
+    """Refuses a POST whose Content-Length is missing (411) or over MAX_FORM_BYTES (413) before
+    routing, so its body is never read. The voice routes keep their own limits."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["method"] == "POST" and scope["path"] not in _OWN_BODY_LIMITS:
+            length = next((bytes(v).decode("latin-1").strip() for k, v in scope.get("headers", ())
+                           if k == b"content-length"), "")
+            refusal = ((411, NO_FORM_LENGTH) if not (length.isascii() and length.isdigit())
+                       else (413, FORM_TOO_BIG) if int(length) > MAX_FORM_BYTES else None)
+            if refusal:
+                await PlainTextResponse(refusal[1], status_code=refusal[0])(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 class _LoginRedirect(Exception):
     """Unauthenticated request to a protected route -> bounce to /login."""
 
@@ -192,6 +229,7 @@ def create_app(
     # Suggestions (requirement 11): the one thing the web side writes, in its own small database
     # beside the read model. The feed never opens it.
     suggestions_path = suggestions.db_path_for(db_path.parent)
+    # A corrupt or locked file is logged and the board starts anyway; the suggestion pages then say so.
     suggestions.init_db(suggestions_path)
 
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -202,6 +240,7 @@ def create_app(
 
     app = FastAPI(title="factory-dashboard", docs_url=None, redoc_url=None)
     app.add_middleware(SessionsByHost, secret_key=key, max_age=SESSION_MAX_AGE)
+    app.add_middleware(FormSizeLimit)  # outermost: before sessions and routing
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     app.state.db_path = db_path
@@ -372,7 +411,7 @@ def _reports_response(
         return _render(
             request,
             "reports_export.html",
-            {"report": export, "report_tenant": report_tenant, "nav_active": "reports",
+            {"report": export, "report_tenant": report_tenant, "nav_active": "reports", "export_page": True,
              "tenant": _tenant(request, user)},
         )
     report = dbread.weekly_report_view(db_path, report_tenant, window)
@@ -642,27 +681,32 @@ def _voice_json(reply: voice.VoiceReply, templates: Jinja2Templates) -> JSONResp
 
 
 async def _read_recording(  # noqa: PLR0911 (one return per refusal)
-    request: Request, cross_site: str,
+    request: Request, words: Mapping[str, str],
 ) -> tuple[bytes, str, dict[str, str]] | Response:
     """The recording (field `audio`) and the form's other fields, or the refusal to send instead. The
-    body is read only after the same-origin and length checks, and never beyond the limit."""
+    body is read only after the same-origin and length checks, and never beyond the limit. `words`
+    rewords Part E's refusals for another use (the voice note's: voice.NOTE_REFUSALS); a sentence
+    it does not list is sent as it is."""
+    def refuse(sentence: str, status: int) -> JSONResponse:
+        return JSONResponse({"message": words.get(sentence, sentence)}, status_code=status)
+
     if not same_origin(request):
-        return JSONResponse({"message": cross_site}, status_code=403)
+        return refuse(voice.CROSS_SITE, 403)
     length = request.headers.get("content-length", "")
     if not length.isdigit():
-        return JSONResponse({"message": voice.NO_LENGTH}, status_code=411)
+        return refuse(voice.NO_LENGTH, 411)
     if int(length) > voice.MAX_BODY_BYTES:
-        return JSONResponse({"message": voice.TOO_BIG}, status_code=413)
+        return refuse(voice.TOO_BIG, 413)
     try:
         form = await request.form(max_files=1, max_fields=3, max_part_size=4096)
     except StarletteHTTPException:  # a malformed form
-        return JSONResponse({"message": voice.NO_RECORDING}, status_code=400)
+        return refuse(voice.NO_RECORDING, 400)
     except ClientDisconnect:  # the caller went away mid-upload: nothing to answer, nothing to log
         return Response(status_code=400)
     try:
         upload = form.get("audio")
         if not isinstance(upload, UploadFile):
-            return JSONResponse({"message": voice.NO_RECORDING}, status_code=400)
+            return refuse(voice.NO_RECORDING, 400)
         audio = await upload.read(voice.MAX_WAV_BYTES + 1)
         content_type = upload.content_type or ""
         fields = {k: str(v) for k, v in form.items() if isinstance(v, str)}
@@ -677,7 +721,7 @@ def _register_voice_routes(app: FastAPI) -> None:
     @app.post("/api/voice/ask")
     async def voice_ask(request: Request, user: OperatorApi) -> Response:
         # The same guards as POST /chat: operators only (401/403 above), same-origin only.
-        got = await _read_recording(request, voice.CROSS_SITE)
+        got = await _read_recording(request, {})
         if isinstance(got, Response):
             return got
         audio, content_type, fields = got
@@ -692,7 +736,7 @@ def _register_voice_routes(app: FastAPI) -> None:
         # A voice note for the suggestion box (requirement 11): the same guards and recording limits,
         # then speech to text only. The words go into the box for the person to check; nothing is
         # stored here and nothing is spoken back.
-        got = await _read_recording(request, voice.NOTE_CROSS_SITE)
+        got = await _read_recording(request, voice.NOTE_REFUSALS)
         if isinstance(got, Response):
             return got
         audio, content_type, _fields = got
@@ -716,8 +760,13 @@ def _suggest_form(request: Request, user: auth.ResolvedUser, *, from_page: str, 
 def _suggestions_page(request: Request, user: auth.ResolvedUser, *, sent: bool = False, error: str = "",
                       status_code: int = 200) -> HTMLResponse:
     changes = suggestions.read_changes(request.app.state.changes_path)
+    try:
+        rows, unreadable = suggestions.list_all(request.app.state.suggestions_path), False
+    except suggestions.Unavailable:  # locked or corrupt: one sentence, never a bare error page
+        rows, unreadable, status_code = [], True, 503
+        error = error or suggestions.CANT_READ
     return _render(request, "suggestions.html", {
-        "rows": suggestions.list_all(request.app.state.suggestions_path), "sent": sent, "error": error,
+        "rows": rows, "unreadable": unreadable, "sent": sent, "error": error,
         "statuses": [(s, suggestions.STATUS_WORDS[s]) for s in suggestions.STATUSES],
         "recent": suggestions.recent_changes(changes), "nav_active": "", "tenant": _tenant(request, user),
     }, status_code=status_code)
@@ -737,9 +786,12 @@ def _register_suggestion_routes(app: FastAPI) -> None:
                        from_page: OptionalFormText = "") -> Response:
         if not same_origin(request):
             return HTMLResponse(suggestions.CROSS_SITE, status_code=403)
-        added, refusal = suggestions.add(request.app.state.suggestions_path, user, text, from_page)
+        try:
+            added, refusal = suggestions.add(request.app.state.suggestions_path, user, text, from_page)
+        except suggestions.Unavailable:
+            added, refusal = None, suggestions.CANT_SAVE
         if added is None:
-            code = 429 if refusal == suggestions.LIMITED else 400
+            code = {suggestions.LIMITED: 429, suggestions.CANT_SAVE: 503}.get(refusal, 400)
             # The words come back in the box (cut to the limit), so nothing typed is lost.
             return _suggest_form(request, user, from_page=from_page, text=text[: suggestions.MAX_CHARS * 2],
                                  error=refusal, status_code=code)
@@ -754,8 +806,14 @@ def _register_suggestion_routes(app: FastAPI) -> None:
                           status: OptionalFormText = "") -> Response:
         if not same_origin(request):
             return HTMLResponse(suggestions.CROSS_SITE, status_code=403)
-        if not (suggestion_id.isdigit() and suggestions.set_status(
-                request.app.state.suggestions_path, int(suggestion_id), status, user)):
+        # ASCII digits only, at most 18 (isdigit() also accepts "²", which int() refuses).
+        if not re.fullmatch(r"[0-9]{1,18}", suggestion_id):
+            return _suggestions_page(request, user, error=suggestions.UNKNOWN, status_code=400)
+        try:
+            changed = suggestions.set_status(request.app.state.suggestions_path, int(suggestion_id), status, user)
+        except suggestions.Unavailable:
+            return _suggestions_page(request, user, error=suggestions.CANT_SET, status_code=503)
+        if not changed:
             return _suggestions_page(request, user, error=suggestions.UNKNOWN, status_code=400)
         return RedirectResponse(f"/suggestions#suggestion-{int(suggestion_id)}", status_code=303)
 

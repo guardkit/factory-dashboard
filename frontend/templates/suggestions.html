@@ -4,7 +4,7 @@
 <header class="page-head page-head--split">
   <div>
     <p class="page-eyebrow">Suggestions</p>
-    <h1 class="page-title">{{ rows | length }} suggestion{{ '' if rows | length == 1 else 's' }}</h1>
+    <h1 class="page-title">{% if unreadable %}Suggestions{% else %}{{ rows | length }} suggestion{{ '' if rows | length == 1 else 's' }}{% endif %}</h1>
     <p class="page-lead">Changes people have asked for on the dashboard, newest first. Rich reads them and marks where each has got to.</p>
   </div>
   <a class="button--primary" href="/suggest?from=/suggestions">Suggest a change</a>
@@ -39,6 +39,8 @@
       </li>
     {% endfor %}
     </ol>
+  {% elif unreadable %}
+    <p class="true-empty">The list can't be shown just now.</p>
   {% else %}
     <p class="true-empty">No suggestions yet.</p>
   {% endif %}

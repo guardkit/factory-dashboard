@@ -23,7 +23,9 @@ Command line (read-only; it never creates the database)::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -35,6 +37,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from backend.auth import ResolvedUser
+
+log = logging.getLogger("factory_dashboard.suggestions")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CHANGES_PATH = BASE_DIR / "CHANGES.md"
@@ -52,6 +56,9 @@ TOO_LONG = f"Please keep a suggestion under {MAX_CHARS} characters."
 LIMITED = f"You have sent {PER_HOUR} suggestions in the last hour, so please wait a little before sending another."
 CROSS_SITE = "This came from another website, so it was refused."
 UNKNOWN = "That suggestion or status was not recognised, so nothing was changed."
+CANT_SAVE = "Suggestions can't be saved just now, so please try again in a minute (your words are still in the box)."
+CANT_READ = "The list of suggestions can't be read just now, so please try again in a minute."
+CANT_SET = "The status can't be saved just now, so please try again in a minute."
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS suggestions (
@@ -68,7 +75,9 @@ CREATE TABLE IF NOT EXISTS suggestions (
 CREATE INDEX IF NOT EXISTS suggestions_by_user ON suggestions (username, created_at);
 """
 
-_BUSY_TIMEOUT_SECS = 10.0
+# How long a write waits for another one to finish. Each write takes milliseconds, so a wait this long
+# means the file is held by something else, and the person gets a sentence instead of a long hang.
+_BUSY_TIMEOUT_SECS = 3.0
 # A page address on this board: a path from the root, no scheme, no host, no spaces.
 _PAGE = re.compile(r"/(?!/)[A-Za-z0-9/_.~%?=&+-]*")
 
@@ -125,20 +134,32 @@ def clean_page(raw: str) -> str:
     return page
 
 
+class Unavailable(Exception):
+    """suggestions.db could not be read or written (locked, corrupt, missing folder, a full disk)."""
+
+
 def _connect_rw(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path, timeout=_BUSY_TIMEOUT_SECS, isolation_level=None)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def init_db(path: Path) -> None:
-    """Create suggestions.db and its table if missing (the board's start-up; idempotent)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = _connect_rw(path)
+def init_db(path: Path) -> bool:
+    """Create suggestions.db and its table if missing (the board's start-up; idempotent). A file that
+    cannot be opened (corrupt, locked, unwritable) is logged and False returned: the rest of the board
+    must still start, and the suggestion pages then say they can't save or read."""
     try:
-        conn.executescript(_SCHEMA)
-    finally:
-        conn.close()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        conn = _connect_rw(path)
+        try:
+            conn.executescript(_SCHEMA)
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as exc:
+        log.warning("suggestions: %s cannot be opened (%s); suggestions are switched off until it can",
+                    path.name, exc)
+        return False
+    return True
 
 
 def _iso(now: datetime) -> str:
@@ -148,13 +169,23 @@ def _iso(now: datetime) -> str:
 def add(path: Path, user: ResolvedUser, text: str, from_page: str, *, now: datetime | None = None,
         per_hour: int = PER_HOUR) -> tuple[int | None, str]:
     """(id, "") when stored, or (None, the sentence saying why not). The hourly count and the insert are
-    one transaction (BEGIN IMMEDIATE), so parallel posts cannot pass the limit together."""
+    one transaction (BEGIN IMMEDIATE), so parallel posts cannot pass the limit together. Raises
+    Unavailable when the database cannot be used."""
     body = clean_text(text)
     if not body:
         return None, EMPTY
     if len(body) > MAX_CHARS:
         return None, TOO_LONG
     now = now or datetime.now(UTC)
+    try:
+        return _insert(path, user, body, from_page, now, per_hour)
+    except sqlite3.Error as exc:
+        log.warning("suggestions: could not save (%s)", exc)
+        raise Unavailable(str(exc)) from None
+
+
+def _insert(path: Path, user: ResolvedUser, body: str, from_page: str, now: datetime,
+            per_hour: int) -> tuple[int | None, str]:
     conn = _connect_rw(path)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -174,7 +205,8 @@ def add(path: Path, user: ResolvedUser, text: str, from_page: str, *, now: datet
             conn.execute("COMMIT")
         except BaseException:
             if conn.in_transaction:
-                conn.execute("ROLLBACK")
+                with contextlib.suppress(sqlite3.Error):
+                    conn.execute("ROLLBACK")
             raise
         return int(cur.lastrowid or 0), ""
     finally:
@@ -183,34 +215,44 @@ def add(path: Path, user: ResolvedUser, text: str, from_page: str, *, now: datet
 
 def set_status(path: Path, suggestion_id: int, status: str, user: ResolvedUser, *,
                now: datetime | None = None) -> bool:
-    """Set one suggestion's status. False when the status or the suggestion is not known."""
+    """Set one suggestion's status. False when the status or the suggestion is not known; raises
+    Unavailable when the database cannot be used."""
     if status not in STATUSES:
         return False
-    conn = _connect_rw(path)
     try:
-        cur = conn.execute(
-            "UPDATE suggestions SET status = ?, status_changed_at = ?, status_changed_by = ? WHERE id = ?",
-            (status, _iso(now or datetime.now(UTC)), user.username, suggestion_id),
-        )
-        return cur.rowcount == 1
-    finally:
-        conn.close()
+        conn = _connect_rw(path)
+        try:
+            cur = conn.execute(
+                "UPDATE suggestions SET status = ?, status_changed_at = ?, status_changed_by = ? WHERE id = ?",
+                (status, _iso(now or datetime.now(UTC)), user.username, suggestion_id),
+            )
+            return cur.rowcount == 1
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        log.warning("suggestions: could not set a status (%s)", exc)
+        raise Unavailable(str(exc)) from None
 
 
 def list_all(path: Path, status: str | None = None) -> list[Suggestion]:
-    """Newest first, read-only. A missing database is an empty list, and is not created."""
+    """Newest first, read-only. A missing database is an empty list, and is not created. Raises
+    Unavailable when the database cannot be read."""
     if not path.exists():
         return []
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=_BUSY_TIMEOUT_SECS)
-    conn.row_factory = sqlite3.Row
     try:
-        sql = "SELECT * FROM suggestions"
-        args: tuple[str, ...] = ()
-        if status:
-            sql, args = sql + " WHERE status = ?", (status,)
-        rows = conn.execute(sql + " ORDER BY id DESC", args).fetchall()
-    finally:
-        conn.close()
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=_BUSY_TIMEOUT_SECS)
+        conn.row_factory = sqlite3.Row
+        try:
+            sql = "SELECT * FROM suggestions"
+            args: tuple[str, ...] = ()
+            if status:
+                sql, args = sql + " WHERE status = ?", (status,)
+            rows = conn.execute(sql + " ORDER BY id DESC", args).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        log.warning("suggestions: could not read the list (%s)", exc)
+        raise Unavailable(str(exc)) from None
     return [Suggestion(**dict(row)) for row in rows]
 
 
@@ -287,7 +329,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.json:
             print("[]")
         return 0
-    rows = list_all(path, args.status)
+    try:
+        rows = list_all(path, args.status)
+    except Unavailable as exc:
+        print(f"{CANT_READ} ({exc})", file=sys.stderr)
+        return 1
     if args.json:
         print(json.dumps([asdict(s) for s in rows], indent=2, ensure_ascii=False))
     else:
