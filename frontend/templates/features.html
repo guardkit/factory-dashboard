@@ -2,21 +2,27 @@
 {% import 'macros.html' as m %}
 {% block title %}Features · Appmilla Factory{% endblock %}
 {% block content %}
-<h1 class="page-title">Features</h1>
-<nav class="window-links" aria-label="Period">
-  <a href="/features?days=7" {% if view.days == 7 %}aria-current="page"{% endif %}>Last 7 days</a>
-  <a href="/features?days=30" {% if view.days == 30 %}aria-current="page"{% endif %}>Last 30 days</a>
-  <a href="/features?days=all" {% if view.days is none %}aria-current="page"{% endif %}>All</a>
-</nav>
+{% set count = view.features.rows | length %}
+<header class="page-head page-head--split features-head">
+  <div>
+    <p class="page-eyebrow">All projects · Features</p>
+    <h1 class="page-title">{{ count }} feature{{ '' if count == 1 else 's' }}</h1>
+    {% if view.features.note %}<p class="page-lead">{{ view.features.note }}</p>{% endif %}
+  </div>
+  <nav class="window-links" aria-label="Period">
+    <a href="/features?days=7" {% if view.days == 7 %}aria-current="page"{% endif %}>Last 7 days</a>
+    <a href="/features?days=30" {% if view.days == 30 %}aria-current="page"{% endif %}>Last 30 days</a>
+    <a href="/features?days=all" {% if view.days is none %}aria-current="page"{% endif %}>All</a>
+  </nav>
+</header>
 {% set panel = view.features %}
-<section class="panel-card features state-{{ panel.state.value }}">
+<section class="panel-card panel-card--flush features state-{{ panel.state.value }}" aria-labelledby="features-title">
   <header class="panel-card__header">
-    <h2 class="panel-card__title">Newest first</h2>
+    <h2 class="panel-card__title" id="features-title">Newest first</h2>
     {{ m.asof_chip(panel.as_of) }}
   </header>
   <div class="panel-card__body">
     {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
-    <p class="page-lead">{{ panel.note }}</p>
     {% if panel.rows %}{{ m.feature_table(panel.rows) }}{% else %}<p class="true-empty">{{ panel.empty_copy }}</p>{% endif %}
   </div>
 </section>

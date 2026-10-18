@@ -1,8 +1,9 @@
 {% import 'macros.html' as m %}
-{# Delivered = merged and checked: the merge step passed and named the commit it checked and published. #}
-<section class="panel-card delivered state-{{ panel.state.value }}" id="panel-p7" data-panel="p7">
+{# Delivered = merged and checked: the merge step passed and named the commit it checked and published.
+   sse.js swaps this section whole, so its look lives on this root element. #}
+<section class="panel-card panel-card--flush delivered state-{{ panel.state.value }}" id="panel-p7" data-panel="p7" aria-labelledby="delivered-title">
   <header class="panel-card__header">
-    <h2 class="panel-card__title">{{ panel.title }}</h2>
+    <h2 class="panel-card__title" id="delivered-title">{{ panel.title }}</h2>
     {{ m.asof_chip(panel.as_of) }}
   </header>
   <div class="panel-card__body">
@@ -20,8 +21,8 @@
             <td class="num" title="{{ r.delivered_title }}">{{ r.delivered_date }}</td>
             <td><a class="feature-title" href="{{ r.link }}">{{ r.title }}</a> <span class="feature-id">({{ r.code }})</span></td>
             <td>{% if r.project_link %}<a href="{{ r.project_link }}">{{ r.project }}</a>{% endif %}</td>
-            <td class="num">{{ r.commit or '—' }}</td>
-            <td>{{ m.spend_slot(r.spend) }}</td>
+            <td>{% if r.commit %}<span class="feature-id">{{ r.commit }}</span>{% else %}<span class="dim">Not recorded</span>{% endif %}</td>
+            <td><span class="spend-slot" data-state="not-measured">Not measured</span></td>
           </tr>
         {% endfor %}
         </tbody>
@@ -29,6 +30,6 @@
     {% else %}
       <p class="true-empty">{{ panel.empty_copy }}</p>
     {% endif %}
-    {% if panel.other_endings %}<p class="delivered__others">{{ panel.other_endings }}</p>{% endif %}
   </div>
+  {% if panel.other_endings %}<p class="panel-card__foot delivered__others">{{ panel.other_endings }}</p>{% endif %}
 </section>
