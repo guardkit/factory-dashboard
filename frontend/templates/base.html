@@ -34,7 +34,6 @@
       {% import 'macros.html' as m %}
       <span class="read-asof">{{ m.asof_chip(chrome.read_as_of) }}</span>
       {% endif %}
-      {% if signed_in and signed_in.is_operator and not chat_page %}<a class="chat-toggle" href="/chat">Ask a question</a>{% endif %}
       <span class="user-menu">
         {% if signed_in %}<span class="user-menu__name">Signed in as {{ signed_in.display_name }}</span>{% endif %}
         <form method="post" action="/logout" class="user-menu__form"><button type="submit" class="user-menu__signout">Sign out</button></form>
@@ -49,16 +48,17 @@
     {% endif %}
   </div>
 
-  <div class="frame{% if signed_in and signed_in.is_operator and not chat_page %} frame--with-chat{% endif %}">
+  <div class="frame">
     <main id="main" class="content">
       {% block content %}{% endblock %}
     </main>
 
-    {# The chat (operator accounts only): a side drawer on wide screens; narrow screens use the
-       "Ask a question" link to /chat, which shows the same panel as a page. #}
+    {# The chat (Part D), operator accounts only: a side drawer on wide screens; on narrow screens
+       the toggle opens /chat, which shows the same panel as a page. #}
     {% if signed_in and signed_in.is_operator and not chat_page %}
+    <a class="chat-toggle" href="/chat">Ask a question</a>
     <aside class="chat-drawer" aria-label="Ask about the factory">
-      {% block chat_drawer %}{% with exchanges = [] %}{% include "chat_panel.html" %}{% endwith %}{% endblock %}
+      {% block chat_drawer %}{% with exchanges = [] %}{% include "fragments/chat_panel.html" %}{% endwith %}{% endblock %}
     </aside>
     {% endif %}
   </div>

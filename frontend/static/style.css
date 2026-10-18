@@ -103,14 +103,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
 }
 .content { padding: 16px; min-width: 0; }
 .chat-drawer[hidden], .chat-toggle[hidden] { display: none; }
-/* The chat drawer: a var(--chat-width) column at >=1280px; below that it is hidden and the
-   "Ask a question" link opens /chat, the same panel as a page. */
-.chat-drawer { display: none; }
-@media (min-width: 1280px) {
-  .frame--with-chat { grid-template-columns: minmax(0, 1fr) var(--chat-width); }
-  .frame--with-chat .chat-drawer { display: block; border-left: 1px solid var(--line); padding: 16px; }
-  .chat-toggle { display: none; }
-}
+/* The chat drawer column is reserved; it opens (D4) to var(--chat-width) at >=1280px. */
 
 .site-footer {
   display: flex; gap: 16px; justify-content: space-between;
@@ -329,7 +322,20 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
   .topbar__cluster { margin-left: 0; }
 }
 
-/* ---- October 2026, part D: the chat (minimal; a brand stylesheet comes later) ------------------ */
+/* ---- chat (Part D) ------------------------------------------------------------------------------
+   Minimal styling so the chat is usable; the Appmilla redesign restyles it later. Wide screens
+   (>=1280px): the reserved drawer column opens to var(--chat-width). Narrow screens: the drawer is
+   hidden and the "Ask a question" toggle (a link to /chat) floats at the bottom right. */
+.chat-drawer { display: none; }
+.chat-toggle {
+  position: fixed; right: 16px; bottom: 16px; z-index: 10;
+  padding: 8px 12px; border-radius: var(--radius); background: var(--accent); color: #fff; text-decoration: none;
+}
+@media (min-width: 1280px) {
+  .frame:has(> .chat-drawer) { grid-template-columns: minmax(0, 1fr) var(--chat-width); }
+  .frame > .chat-drawer { display: block; grid-column: 2; grid-row: 1; border-left: 1px solid var(--line); padding: 16px; }
+  .chat-toggle { display: none; }
+}
 .chat { display: flex; flex-direction: column; gap: 10px; font-size: var(--fs-operator); }
 .chat__title { margin: 0; font-size: 16px; }
 .chat__note { margin: 0; color: var(--muted); font-size: 12px; }
@@ -337,9 +343,8 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
 .chat__form, .chat-exchange__reply { display: flex; flex-direction: column; gap: 6px; }
 .chat__input { font: inherit; width: 100%; padding: 6px; border: 1px solid var(--line); border-radius: var(--radius); }
 .chat__ask { align-self: flex-start; }
-.chat__working { color: var(--muted); font-size: 12px; }
-.htmx-indicator { display: none; }
-.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline; }
+.chat__working { display: none; color: var(--muted); font-size: 12px; }
+.htmx-request .chat__working, .htmx-request.chat__working { display: inline; }
 .chat-exchange { border-top: 1px solid var(--line); padding-top: 8px; }
 .chat-exchange__question { margin: 0 0 4px; font-weight: 600; }
 .chat-exchange__text { margin: 0 0 4px; }
