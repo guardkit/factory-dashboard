@@ -23,7 +23,12 @@ CREATE TABLE builds (
     triggered_by TEXT NOT NULL DEFAULT 'jarvis', originating_adapter TEXT, originating_user TEXT,
     correlation_id TEXT NOT NULL, parent_request_id TEXT, queued_at TEXT NOT NULL, started_at TEXT,
     completed_at TEXT, worktree_path TEXT, pr_url TEXT, error TEXT, terminal_class TEXT,
-    mission_id TEXT, mission_role TEXT, pending_approval_request_id TEXT);
+    mission_id TEXT, mission_role TEXT, pending_approval_request_id TEXT, target_branch TEXT);
+CREATE TABLE publication_records (
+    build_id TEXT PRIMARY KEY, feature_id TEXT, repo TEXT, decided_by TEXT, decided_at TEXT,
+    target_branch TEXT, g_commit TEXT, build_tip TEXT, j_commit TEXT, attempt INTEGER NOT NULL DEFAULT 0,
+    result TEXT, checked_json TEXT, lease_holder TEXT, lease_expires_at TEXT, turn INTEGER NOT NULL DEFAULT 0,
+    lines_json TEXT NOT NULL DEFAULT '[]', created_at TEXT, updated_at TEXT);
 CREATE TABLE stage_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT, build_id TEXT NOT NULL, stage_label TEXT NOT NULL,
     target_kind TEXT NOT NULL DEFAULT 'local_tool', target_identifier TEXT NOT NULL, status TEXT NOT NULL,
@@ -100,13 +105,15 @@ class ForgeFake:
     # --- builds -------------------------------------------------------------------------------
     def build(self, build_id: str, code: str, corr: str, *, status: str = "COMPLETE", queued: float = 21,
               started: float | None = 21, completed: float | None = 80, error: str | None = None,
-              mission_id: str | None = None, mission_role: str | None = None, triggered_by: str = "jarvis") -> None:
+              mission_id: str | None = None, mission_role: str | None = None, triggered_by: str = "jarvis",
+              target_branch: str | None = None) -> None:
         self.conn.execute(
             "INSERT INTO builds (build_id, feature_id, repo, branch, status, triggered_by, correlation_id, "
-            "queued_at, started_at, completed_at, error, mission_id, mission_role) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "queued_at, started_at, completed_at, error, mission_id, mission_role, target_branch) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (build_id, code, REPO, "main", status, triggered_by, corr, at(queued),
              at(started) if started is not None else None, at(completed) if completed is not None else None,
-             error, mission_id, mission_role),
+             error, mission_id, mission_role, target_branch),
         )
 
     def stage(self, build_id: str, label: str, target: str, status: str, minute: float,
@@ -140,6 +147,21 @@ class ForgeFake:
         if mission_branch:
             details["result"] = "published-to-the-mission-branch"
         self.stage(build_id, "merge-deploy", "merge_deploy_executor", "PASSED", minute, details)
+        if mission_branch:
+            self.publication(build_id, minute, result="published to the mission branch", target="mission/branch",
+                             sha=sha)
+        else:
+            self.publication(build_id, minute, sha=sha)
+
+    def publication(self, build_id: str, minute: float, *, result: str = "merged into the remote and running",
+                    target: str | None = "main", sha: str = "1e581663e8aa") -> None:
+        """Forge's publication record for a build (one row per build): what the merge word did."""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO publication_records (build_id, feature_id, repo, decided_by, decided_at, "
+            "target_branch, j_commit, result, created_at, updated_at) "
+            "SELECT build_id, feature_id, repo, 'U1', ?, ?, ?, ?, ?, ? FROM builds WHERE build_id = ?",
+            (at(minute), target, sha, result, at(minute), at(minute), build_id),
+        )
 
     def merge_failed(self, build_id: str, minute: float, detail: str = "the merge stopped on a conflict") -> None:
         self.stage(build_id, "merge-deploy", "merge_deploy_executor", "FAILED", minute, {"detail": detail})

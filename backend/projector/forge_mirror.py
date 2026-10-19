@@ -2,7 +2,8 @@
 
 Design, 17 October 2026, requirement 1: Forge's record is the dashboard's single source of truth,
 so the feed copies all of it that the pages read: builds, stage rows, planning runs, planning
-events, queue items, missions and each mission's plan (its features and what each needs). It does
+events, queue items, missions and each mission's plan (its features and what each needs), and each
+build's publication record (whether it reached main; read by the summary file's `merges`). It does
 this in one short read transaction and closes Forge's database between passes, so it never holds a
 read open long enough to get in Forge's way.
 
@@ -48,7 +49,12 @@ _REPLACED: dict[str, tuple[str, tuple[str, ...], str]] = {
     "forge_builds": ("builds", (
         "build_id", "feature_id", "repo", "branch", "project", "status", "triggered_by",
         "originating_user", "correlation_id", "queued_at", "started_at", "completed_at", "error",
-        "terminal_class", "mission_id", "mission_role", "pending_approval_request_id"), "build_id"),
+        "terminal_class", "mission_id", "mission_role", "pending_approval_request_id", "target_branch"),
+        "build_id"),
+    # What the merge word did: the build's publication record, which says whether it is on main.
+    "forge_publication_records": ("publication_records", (
+        "build_id", "feature_id", "repo", "target_branch", "j_commit", "result", "decided_at", "updated_at"),
+        "build_id"),
     "forge_planning_runs": ("planning_runs", (
         "correlation_id", "state", "originating_user", "expected_approver", "request_text",
         "target_repo", "triggered_by", "defer_count", "paused_at", "escalated_at", "queued_at",
