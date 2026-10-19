@@ -43,6 +43,8 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("forge_missions", "originating_user", "TEXT"),
     ("forge_missions", "approved_by", "TEXT"),
     ("forge_missions", "approved_at", "TEXT"),
+    ("forge_missions", "stop_requested_at", "TEXT"),
+    ("forge_missions", "stop_requested_by", "TEXT"),
 )
 
 
