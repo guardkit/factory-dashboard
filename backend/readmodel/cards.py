@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from zoneinfo import ZoneInfo
 
 from backend.readmodel.factory import Build, Factory, Feature, Mission, MissionFeature, PlanningEvent, PlanningRun
@@ -30,6 +30,7 @@ BUILD_GATE = "build_gate"
 MISSION_PLAN = "mission_plan"
 MERGE = "merge"
 CHECKPOINT = "checkpoint"
+PAUSED = "paused"      # a paused build at another card (a fix journey's merge-ready checkpoint, a budget pause)
 
 KIND_TITLES = {
     SPEC_REVIEW: "Spec review",
@@ -38,6 +39,7 @@ KIND_TITLES = {
     MISSION_PLAN: "Mission plan",
     MERGE: "Merge card",
     CHECKPOINT: "Assumptions checkpoint",
+    PAUSED: "Paused build",
 }
 
 #: The planning doors that wait inline: (kind, Forge's stage label, the key its record sits under).
@@ -69,6 +71,8 @@ SUBJECT_PREFIX = "agents.approval.forge."
 _TOKEN = re.compile(r"[^.*>\s]{1,200}")
 
 SLACK = "Answer this one in Slack."
+#: Forge's build gate: the stage its request ids name (`<build>:autobuild:<attempt>`).
+BUILD_GATE_STAGE = "autobuild"
 _LONDON = ZoneInfo("Europe/London")
 
 
@@ -115,6 +119,7 @@ BUTTONS: dict[str, tuple[Button, ...]] = {
         Button("decline", "Decline"),
     ),
     CHECKPOINT: (),
+    PAUSED: (),
 }
 REBUILD_BUTTON = Button("rebuild", "Rebuild the preview")
 
@@ -239,6 +244,14 @@ def _day(dt: datetime) -> str:
     return f"{local.day} {local.strftime('%B')}"
 
 
+def stage_of(request_id: str) -> str:
+    """The stage a Forge request id names (Forge's `parse_request_id`), or "" when it is not one."""
+    parts = request_id.split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        return ""
+    return unquote(parts[1])
+
+
 def _attempt_of(request_id: str) -> int:
     """The attempt at the end of a Forge request id (`build:stage:attempt`), or 0."""
     tail = request_id.rsplit(":", 1)[-1] if ":" in request_id else ""
@@ -270,16 +283,20 @@ _DOOR_CLOSED = {
 
 
 def _door_card(f: Feature, run: PlanningRun, kind: str, stage: str, key: str) -> Card | None:
+    """The latest round of one planning door. A door with no opening row carrying a request id never
+    showed a card (a mission feature's spec review is skipped, Forge writes only a `skipped` row), so
+    there is none. The verdict is the FIRST row after the latest opening: when a Stop cancels the run
+    Forge writes the verdict, then a second row for the move to CANCELLED that carries no decision."""
     rows = [e for e in run.events if e.stage_label == stage and isinstance(e.details.get(key), dict)]
-    if not rows:
+    openings = [e for e in rows if e.status in _DOOR_OPEN and _text(_dict(e.details.get(key)).get("request_id"))]
+    if not openings:
         return None
-    latest = rows[-1]
-    record = _dict(latest.details.get(key))
-    openings = [e for e in rows if e.status in _DOOR_OPEN]
-    opening = openings[-1] if openings else latest
+    opening = openings[-1]
     opened = _dict(opening.details.get(key))
-    request_id = _text(record.get("request_id")) or _text(opened.get("request_id"))
-    first = next((e for e in openings if _text(_dict(e.details.get(key)).get("request_id")) == request_id), opening)
+    request_id = _text(opened.get("request_id"))
+    # A door reopened after a restart keeps its request id: the card has been waiting since the first.
+    first = next(e for e in openings if _text(_dict(e.details.get(key)).get("request_id")) == request_id)
+    after = [e for e in rows if e.id > opening.id]
     token = f"plan-{run.correlation_id}"
     base = dict(kind=kind, request_id=request_id, attempt=_int(opened.get("attempt_count")),
                 correlation_id=run.correlation_id, token=token, opened_at=first.at, subject=f.label,
@@ -289,14 +306,16 @@ def _door_card(f: Feature, run: PlanningRun, kind: str, stage: str, key: str) ->
         ids = tuple(_text(a.get("id")) for a in _list(card_body.get("assumptions")) if isinstance(a, dict)
                     and _text(a.get("id")))
         base["assumption_ids"] = ids
-    if latest.status in _DOOR_OPEN:
+    if not after:
         if run.state in _PLANNING_OVER:
             return Card(**base, open=False, answerable=False,  # type: ignore[arg-type]
                         recorded=Recorded(f"Closed without an answer: {_PLANNING_OVER[run.state]}.", False,
                                           at=run.completed_at))
         ok = bool(request_id) and valid_token(token)
         return Card(**base, open=True, answerable=ok, slack_reason="" if ok else SLACK)  # type: ignore[arg-type]
-    return Card(**base, open=False, answerable=False, recorded=_door_verdict(kind, latest, record))  # type: ignore[arg-type]
+    verdict = after[0]
+    return Card(**base, open=False, answerable=False,  # type: ignore[arg-type]
+                recorded=_door_verdict(kind, verdict, _dict(verdict.details.get(key))))
 
 
 def _door_verdict(kind: str, row: PlanningEvent, record: dict[str, object]) -> Recorded:
@@ -304,7 +323,9 @@ def _door_verdict(kind: str, row: PlanningEvent, record: dict[str, object]) -> R
     who = _text(record.get("decided_by"))
     decision = _text(record.get("decision"))
     notes = _text(record.get("notes"))
-    if who and decision:
+    # A person's answer: who and which. A Stop is recorded as outcome "cancelled" with decided_by,
+    # and a row written only for the move to CANCELLED carries no decision, so either is "stopped".
+    if who and (decision or outcome == "cancelled"):
         words = _DOOR_ANSWERS[kind].get(outcome, f"answered “{decision}”")
         return Recorded(words, True, who=row.actor if row.actor and row.actor != "planning-driver" else who,
                         decision=decision, notes=notes, at=row.at)
@@ -363,24 +384,41 @@ _GATE_CARRIED_ON = {
 }
 
 
+def _pause_base(b: Build, rid: str, subject: str, link: str, feature_key: str, request_text: str
+                ) -> dict[str, object]:
+    """A paused build's card: the build gate only when Forge's request id names the `autobuild` stage.
+    Any other pause (a fix journey parked at the merge-ready checkpoint, a budget pause) is shown with
+    the stage Forge names and answered in Slack."""
+    stage = stage_of(rid)
+    if stage == BUILD_GATE_STAGE:
+        evidence = Evidence(heading="The plan is ready; the build waits for the go-ahead",
+                            lines=tuple(x for x in (request_text, f"Build {b.build_id}") if x))
+        kind = BUILD_GATE
+    else:
+        where = f"at {stage}" if stage else "at a card this dashboard cannot answer"
+        evidence = Evidence(heading=f"The build is waiting {where}",
+                            lines=tuple(x for x in (request_text, f"Build {b.build_id}") if x))
+        kind = PAUSED
+    return dict(kind=kind, correlation_id=b.correlation_id, token=b.build_id, subject=subject, link=link,
+                feature_key=feature_key, build_id=b.build_id, mission_id=b.mission_id, evidence=evidence)
+
+
 def _gate_card(b: Build, subject: str, link: str, feature_key: str, request_text: str) -> Card | None:
     pauses = [s for s in b.stages if isinstance(s.details.get("gate_pause"), dict)]
-    evidence = Evidence(heading="The plan is ready; the build waits for the go-ahead",
-                        lines=tuple(x for x in (request_text, f"Build {b.build_id}") if x))
-    base = dict(kind=BUILD_GATE, correlation_id=b.correlation_id, token=b.build_id, subject=subject, link=link,
-                feature_key=feature_key, build_id=b.build_id, mission_id=b.mission_id, evidence=evidence)
     if b.status == "PAUSED" and b.pending_request_id:
         rid = b.pending_request_id
+        base = _pause_base(b, rid, subject, link, feature_key, request_text)
         mine = [s for s in pauses if _text(_dict(s.details.get("gate_pause")).get("request_id")) == rid]
         attempt = _int(_dict(mine[-1].details["gate_pause"]).get("attempt_count")) if mine else _attempt_of(rid)
         opened = mine[0].at if mine else (pauses[-1].at if pauses else b.started_at)
-        ok = bool(b.correlation_id) and valid_token(b.build_id)
+        ok = base["kind"] == BUILD_GATE and bool(b.correlation_id) and valid_token(b.build_id)
         return Card(**base, request_id=rid, attempt=attempt, opened_at=opened, open=True,  # type: ignore[arg-type]
                     answerable=ok, slack_reason="" if ok else SLACK)
     if not pauses:
         return None
     last = _dict(pauses[-1].details["gate_pause"])
     rid = _text(last.get("request_id"))
+    base = _pause_base(b, rid, subject, link, feature_key, request_text)
     if b.status == "PAUSED":   # paused again under a new card that is not recorded yet
         return None
     after = _GATE_CARRIED_ON.get(b.status, f"the build is {b.status.lower()}")

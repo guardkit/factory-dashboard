@@ -30,8 +30,15 @@
   {% for f in ev.plan %}<li><b>{{ f.key }}</b>: {{ f.sentence }}{% if f.needs %} <span class="answer-card__why">(needs {{ f.needs | join(', ') }} first)</span>{% endif %}{% if f.no_sign_in %} <span class="answer-card__why">(no sign-in)</span>{% endif %}</li>{% endfor %}
   </ol>
   {% endif %}
-{% elif ev.lines and card.kind in ('merge', 'build_gate') %}
+{% else %}
+  {% if ev.lines and card.kind in ('merge', 'build_gate', 'paused') %}
   <p class="answer-card__line">{{ ev.lines[-1] if card.kind == 'merge' else ev.lines[0] }}</p>
+  {% endif %}
+  {# Forge reads an approve that leaves the sign-in question unanswered as "no sign-in", so the
+     short card says so beside the button too. #}
+  {% if ev.sign_in %}
+  <p class="answer-card__line">{{ ev.sign_in }} Approving the spec counts as agreeing that nothing here involves signing in.</p>
+  {% endif %}
 {% endif %}
 {% if ev.preview_url or ev.report_url %}
 <p class="answer-card__links">

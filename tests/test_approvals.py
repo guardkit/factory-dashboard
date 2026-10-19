@@ -852,3 +852,138 @@ def test_the_bus_client_fails_quickly_when_the_bus_is_not_there(tmp_path: Path) 
     with pytest.raises(Exception):  # noqa: B017 (any failure is "the bus can't be reached")
         asyncio.run(bus.publish("agents.approval.forge.x.response", b"{}"))
     assert time.monotonic() - started < answers.CONNECT_TIMEOUT_SECS + 3
+
+
+# --- the coach's round (19 October 2026): Forge's real record shapes, and the gaps it found ---------------
+
+
+def _cancel_at_the_spec_door(w: World, rid: str, *, verdict: bool = True) -> None:
+    """Forge's two rows when Stop cancels a run (driver.py `_cancel_run_at_digest_door`): the verdict,
+    then the row for the move to CANCELLED, which carries no decision."""
+    if verdict:
+        w.fake.event("c1", "feature-spec-digest-review", "cancelled", 8, {"digest_review": {
+            "outcome": "cancelled", "request_id": rid, "decided_by": "U0SOMEONEELSE", "decision": "reject",
+            "notes": "reject: too big for now"}}, actor="U0SOMEONEELSE")
+    w.fake.event("c1", "feature-spec-digest-review", "CANCELLED", 9, {"digest_review": {
+        "outcome": "cancelled", "reason": "too big for now", "decided_by": "U0SOMEONEELSE"}}, actor="U0SOMEONEELSE")
+    w.fake.conn.execute("UPDATE planning_runs SET state='CANCELLED', error='too big for now' WHERE correlation_id='c1'")
+    w.refresh()
+
+
+def test_a_stop_on_the_spec_card_is_recorded_as_stopped_by_the_person(world: World) -> None:
+    rid = spec_card(world)
+    _cancel_at_the_spec_door(world, rid)
+    lines = recorded_lines(page(world, "/features/c1"))
+    assert lines == ["<b>U0SOMEONEELSE</b> stopped this request: “reject: too big for now” at "
+                     + lines[0].split(" at ", 1)[1]], lines
+    assert "Closed without" not in lines[0]
+
+
+def test_a_stop_recorded_only_by_the_cancel_row_is_still_stopped_by_the_person(world: World) -> None:
+    rid = spec_card(world)
+    _cancel_at_the_spec_door(world, rid, verdict=False)
+    (line,) = recorded_lines(page(world, "/features/c1"))
+    assert line.startswith("<b>U0SOMEONEELSE</b> stopped this request")
+
+
+@pytest.mark.parametrize(("rid", "where"), [
+    ("b3:the%20merge-ready%20checkpoint:0", "The build is waiting at the merge-ready checkpoint"),
+    ("budget-b3-1", "The build is waiting at a card this dashboard cannot answer"),
+])
+def test_a_paused_build_at_another_card_is_not_a_build_gate(world: World, rid: str, where: str) -> None:
+    world.fake.planning("c3", "Count the notes.", state="BUILD_QUEUED")
+    world.fake.build("b3", "FEAT-0003", "c3", status="PAUSED", completed=None)
+    world.fake.conn.execute("UPDATE builds SET pending_approval_request_id=? WHERE build_id='b3'", (rid,))
+    world.refresh()
+    body = page(world, "/features/FEAT-0003")
+    assert "Paused build" in body and where in body and "Answer this one in Slack." in body
+    assert "Start the build" not in body and "Go-ahead to build" not in body
+    assert "Start the build" not in page(world, "/")
+    assert said(world.answer(rid, "build_gate", "b3", "start")) == "slack"
+    assert world.bus.sent == []
+
+
+def test_a_skipped_spec_review_shows_no_card(world: World) -> None:
+    world.fake.planning("c5", "A mission feature.", state="FEATURE_PLAN", end=None)
+    world.fake.event("c5", "feature-spec-digest-review", "skipped", 5, {"digest_review": {
+        "skipped": "part of mission m1, approved by U0SOMEONEELSE at 2026-10-18T09:00:00+00:00"}},
+        actor="planning-driver")
+    world.refresh()
+    body = page(world, "/features/c5")
+    assert "Spec review" not in body and "answer-card" not in body and "Closed without" not in body
+
+
+def test_the_compact_spec_card_says_what_approving_means_for_sign_in(world: World) -> None:
+    spec_card(world, card={**SPEC_CARD, "sign_in_check": {"title": "One thing to confirm",
+                                                          "statement": "Nothing here involves signing in."}})
+    body = page(world, "/")
+    band = body[body.index('data-panel="p4"'):body.index('data-panel="p2"')]
+    assert "Approve the spec" in band
+    assert "Approving the spec counts as agreeing that nothing here involves signing in." in band
+
+
+def test_a_door_left_open_on_an_ended_run_is_closed(world: World) -> None:
+    rid = spec_card(world)
+    world.fake.conn.execute("UPDATE planning_runs SET state='FAILED' WHERE correlation_id='c1'")
+    world.refresh()
+    body = page(world, "/features/c1")
+    assert recorded_lines(body) == ["Closed without an answer: the planning run failed."]
+    assert "Approve the spec" not in body and "Approve the spec" not in page(world, "/")
+    assert said(world.answer(rid, "spec_review", "plan-c1", "approve")) == "already"
+    assert world.bus.sent == []
+
+
+def test_a_door_reopened_after_a_restart_is_open_since_it_first_opened(world: World) -> None:
+    rid = spec_card(world)
+    world.fake.event("c1", "feature-spec-digest-review", "reopened", 40, {"digest_review": {
+        "outcome": "reopened", "request_id": rid, "attempt_count": 0, "expected_approver": APPROVER,
+        "card": SPEC_CARD, "wait_seconds": 3600}}, actor="planning-driver")
+    world.refresh()
+    body = page(world, "/features/c1")
+    assert "Approve the spec" in body and recorded_lines(body) == []
+    assert said(world.answer(rid, "spec_review", "plan-c1", "approve")) == "sent"
+    _, env = one_sent(world)
+    assert env["payload"]["request_id"] == rid
+
+
+def test_a_build_gate_without_a_correlation_id_is_not_answered_here(world: World) -> None:
+    world.fake.planning("c3", "Count the notes.", state="BUILD_QUEUED")
+    world.fake.build("b3", "FEAT-0003", "", status="PAUSED", completed=None)
+    world.fake.conn.execute("UPDATE builds SET pending_approval_request_id='b3:autobuild:0' WHERE build_id='b3'")
+    world.refresh()
+    assert "Start the build" not in page(world, "/features/FEAT-0003")
+    assert said(world.answer("b3:autobuild:0", "build_gate", "b3", "start")) == "slack"
+    assert world.bus.sent == []
+
+
+@pytest.mark.parametrize(("back", "goes"), [
+    ("/features/FEAT-0001", "/features/FEAT-0001"), ("/missions/m1", "/missions/m1"), ("/", "/"),
+    ("https://elsewhere.example/x", "/"), ("//elsewhere.example/x", "/"), ("/issues", "/"),
+    ("/features/FEAT-0001?x=1", "/features/FEAT-0001"), ("/features/../../etc", "/"), ("javascript:alert(1)", "/"),
+    ("", "/"),
+])
+def test_the_page_after_a_press_is_one_of_the_boards_own(world: World, back: str, goes: str) -> None:
+    rid = merge_card(world)
+    r = world.answer(rid, "merge", "merge-FEAT-0001", "decline", back=back)
+    assert r.status_code == 303
+    assert urlsplit(r.headers["location"]).path == goes and not urlsplit(r.headers["location"]).netloc
+
+
+def test_needs_you_shows_each_card_once(world: World) -> None:
+    # A feature with two waits open at once (its spec card and its go-ahead), and a mission's own merge.
+    gate_card(world, corr="c3")
+    world.fake.event("c3", "feature-spec-digest-review", "GATED", 29, {"digest_review": {
+        "outcome": "opened", "request_id": "plan-c3:feature-spec-digest-review:0", "attempt_count": 0,
+        "card": SPEC_CARD}}, actor="planning-driver")
+    world.fake.conn.execute("UPDATE planning_runs SET state='FEATURE_SPEC' WHERE correlation_id='c3'")
+    world.fake.mission("m3", "Archive", "lin-m-m3-1", status="READY")
+    world.fake.build("bm", "MISSION-m3", "lin-m-m3-1", mission_id="m3", mission_role="mission-merge")
+    world.fake.stage("bm", "the merge word", "merge_deploy_offer", "GATED", 81, {"merge_offer": {
+        **offer(), "build_id": "bm", "request_id": "merge-bm", "correlation_id": "lin-m-m3-1",
+        "approval_subject": "agents.approval.forge.merge-MISSION-m3"}})
+    world.refresh()
+    body = page(world, "/")
+    band = body[body.index('data-panel="p4"'):body.index('data-panel="p2"')]
+    ids = re.findall(r'<article class="panel-card answer-card[^"]*" id="([^"]+)"', band)
+    assert sorted(ids) == sorted(set(ids)) and len(ids) == 3, ids
+    assert 'id="card-merge-bm"' in band and 'href="/missions/m3"' in band
