@@ -265,5 +265,28 @@ id it has already shown.
   extended password list, which needs the broker restarted in an idle window; the password file; and the `forge.yaml`
   approver entry.
 - **The dashboard rebuild,** after those, under the dashboard handoff's authority.
+
+### Restarting the bus (checked 19 October 2026)
+
+No factory service changes the NATS client's reconnect settings, so each one tries to reconnect for about 2 minutes:
+60 attempts, 2 seconds apart. While it does, it buffers what it publishes. The streams and the durable consumers
+(`forge-serve`, `forge-serve-planning`, `fleet-memory-relay`) are kept on the bus's disk volume, and survived the
+14 October restart with their positions. So:
+- **Before:** the factory is idle. `routerctl check-idle` passes, and the bus shows `forge-serve` with nothing waiting
+  for an acknowledgement.
+- **The restart:** keep it short. Restarting the bus container takes seconds, well inside the 2-minute window. The
+  coordinator, the Linear door, the architect and product-owner seats and the memory relay then reconnect by
+  themselves.
+- **After every bus restart:** restart the Jarvis bus gateway (`serve-nats`). Its three event subscriptions (pipeline
+  build updates, Slack approval cards, planning notifications) are not durable. They are bound only when it starts,
+  and nothing checks they came back.
+- **If the outage ran past about 1.5 minutes:** also restart the Forge coordinator, the Jarvis front door and the
+  memory relay. Past the window, the coordinator's build loop re-attaches with a fresh client but closes the shared
+  one that planning intake and the publisher hold, so planning stays stuck while the health check passes. The front
+  door and the relay keep a dead connection while still reporting healthy. That coordinator behaviour is a Forge
+  defect, recorded separately for fixing.
+- **The `jarvis-session` bucket** is in memory and is lost on every bus restart. Nothing uses it today.
+- **The dashboard:** it has no lasting bus connection. Its answers module connects for each answer, so the restart
+  only shows as a short "bus unavailable" on the Fleet page.
 - **First live use:** answer one real card from the dashboard, for example a declined merge on a test-fixture
   feature, and confirm Forge recorded it.
