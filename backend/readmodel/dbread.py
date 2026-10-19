@@ -27,11 +27,13 @@ from backend.readmodel.factory import (
     Build,
     Factory,
     Feature,
+    Mission,
     Outcome,
     load_factory,
     parse_dt,
 )
 from backend.readmodel.issues import Issue, find_issues, recent
+from backend.readmodel.linear import linear_links
 from backend.readmodel.norms import GAP, OUTCOME_WORDS, Norms, load_norms, on_track
 from backend.readmodel.timing import FeatureTime, feature_time
 from backend.readmodel.viewmodels import (
@@ -644,6 +646,7 @@ class ProjectRow:
     open_issues: int       # listed open issues plus older unresolved failures
     spend: SpendSlot = field(default_factory=SpendSlot)  # tagged calls of the project's features (since tagging)
     time: TimeSlot = field(default_factory=TimeSlot)     # summed over the project's features
+    linear_url: str = ""   # the project's Linear project (https://linear.app/ only), or ""
 
 
 @dataclass(frozen=True)
@@ -865,6 +868,7 @@ def project_view(db_path: Path, project: str, now: datetime | None = None, *,
             weeks=project_weeks(conn, book, factory, project, now),
             spend_week=project_spend(book, factory, project, lo=cost.week_start(now)),
             untagged_note=_untagged_note(conn, book, now), features_total=len(mine),
+            linear_url=linear_links().get(project, ""),
         )
     finally:
         if owned:
@@ -934,6 +938,39 @@ def project_spend(book: CostBook, factory: Factory, project: str, *, lo: datetim
     return tagged_spend(book, factory, (project,), lo=lo, hi=hi)
 
 
+def attempt_spend(book: CostBook, features: Iterable[Feature], mission: Mission | None = None) -> SpendSlot:
+    """One Linear attempt's cost (design 11.5): the deduplicated union of the tags of the features it
+    covers and, for a mission, the mission's own tags, which project spend also counts. The same
+    not-measured rules as `tagged_spend`: features sent before tagging are left out and the reason
+    says how many; nothing at all since tagging is "Not measured"."""
+    chosen = list(features)
+    if book.state == "never":
+        return book.not_available()
+    measured = [f for f in chosen if not book.before_tagging(f)]
+    mission_since = (mission is not None and mission.created_at is not None
+                     and mission.created_at >= book.tagging_started())
+    if not measured and not mission_since:
+        if not chosen and mission is None:
+            return SpendSlot(state="not_measured", label="Not measured", price_label=book.prices.label,
+                             reason="No work on record for this.")
+        return _before_tagging_slot(book)
+    tags: set[str] = set()
+    for f in measured:
+        tags |= cost.feature_tags(f)
+    if mission is not None:
+        tags |= cost.mission_tags(mission)
+    slot = book.slot(book.tag_totals(tags), scope="attempt")
+    left = [f for f in chosen if f not in measured]
+    if left:
+        noun = "feature" if len(chosen) == 1 else "features"
+        verb = "was" if len(left) == 1 else "were"
+        names = "; ".join(f.label.rstrip(".") for f in left)
+        note = (f"{len(left)} of its {len(chosen)} {noun} {verb} sent before calls were tagged by feature, "
+                f"so {'it is' if len(left) == 1 else 'they are'} not counted: {names}.")
+        slot = replace(slot, reason=f"{note} {slot.reason}".strip())
+    return slot
+
+
 #: How many weeks a project page lists, newest first.
 PROJECT_WEEKS = 8
 
@@ -988,14 +1025,18 @@ def hidden_line(hidden: int) -> str:
     return f"{hidden} older {noun} with no later attempt {verb} not listed (opened more than 14 days ago)."
 
 
-def projects_view(db_path: Path, now: datetime | None = None) -> ProjectsView:
-    """One row per project on record, with the same counts its project page shows."""
+def projects_view(db_path: Path, now: datetime | None = None, *,
+                  conn: sqlite3.Connection | None = None) -> ProjectsView:
+    """One row per project on record, with the same counts its project page shows. Given ``conn``
+    (`snapshot`), it reads on it and leaves it open, like the other views."""
     now = now or _now()
-    conn = _open(db_path)
+    owned = conn is None
+    conn = _open(db_path) if conn is None else conn
     try:
         factory, norms = load_factory(conn, now), load_norms()
         book = load_cost_book(conn, now)
         issues = find_issues(factory, norms, now)
+        links = linear_links()
         names = sorted({f.project for f in factory.features if f.project}
                        | {m.target_repo for m in factory.missions if m.target_repo})
         rows = []
@@ -1007,11 +1048,12 @@ def projects_view(db_path: Path, now: datetime | None = None) -> ProjectsView:
                 in_progress=sum(1 for f in mine if f.in_progress),
                 delivered=sum(1 for f in mine if f.outcome is Outcome.DELIVERED),
                 open_issues=len(open_) + hidden, spend=project_spend(book, factory, name),
-                time=sum_time(feature_time(f, now) for f in mine),
+                time=sum_time(feature_time(f, now) for f in mine), linear_url=links.get(name, ""),
             ))
         return ProjectsView(chrome=page_chrome(conn, now), rows=tuple(rows), as_of=_read_chip(freshness(conn), now))
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 
 def issues_view(db_path: Path, now: datetime | None = None, *, conn: sqlite3.Connection | None = None) -> IssuesView:

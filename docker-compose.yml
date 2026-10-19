@@ -17,6 +17,10 @@
 # so they can start in either order. `restart: unless-stopped` brings both back after a reboot.
 # suggestions.db, beside the store in ./data, is NOT disposable: it holds the suggestions people
 # sent (docs/runbook.md). Delete only readmodel.db and its -wal and -shm files.
+#
+# The feed also writes ./data/project-summaries.json after each pass, for the Linear door (read-only
+# there). The board's Linear links come from the door's own volume, mounted by
+# docker-compose.linear.yml only when that volume exists (deploy/dashboard-up.sh decides).
 
 services:
   board:

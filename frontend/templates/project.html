@@ -7,6 +7,8 @@
   <div>
     <p class="page-eyebrow">Project</p>
     <h1 class="page-title">{{ view.project }}</h1>
+    {# The project's Linear project, only when the Linear door names one (design 11.3). #}
+    {% if view.linear_url %}<div class="page-head__meta"><a href="{{ view.linear_url }}" rel="noreferrer">{{ m.icon('external') }}Linear project</a></div>{% endif %}
   </div>
   {{ m.asof_chip(panel.as_of, source='factory') }}
 </header>
