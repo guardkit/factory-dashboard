@@ -1,5 +1,6 @@
 """The summary file for the Linear door (design "Linear front door", 11.5): its contract, that its
-figures are the pages' own, the health mapping, Linear attempts' merge cost, and the atomic write.
+figures are the pages' own, the health mapping, Linear attempts' merge cost, the cost of every build
+that reached main (11.8), and the atomic write.
 All through the real feed code over a fake Forge record and a fake spend log."""
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ from backend.projector.summary import (
     SUMMARY_FILE,
     build_summary,
     linear_attempts,
+    merges_on_main,
+    mission_parts,
     project_health,
     remove_leftovers,
     summary_loop,
@@ -33,6 +36,7 @@ from backend.projector.summary import (
     write_summary,
 )
 from backend.readmodel import dbread
+from backend.readmodel.costs import load_cost_book
 from backend.readmodel.factory import load_factory
 from backend.readmodel.viewmodels import SpendSlot
 
@@ -45,8 +49,8 @@ NOW = T + timedelta(minutes=200)
 ISSUE = "lin-APP-12-1"                          # a single issue's attempt (the door's id shape)
 MISSION = "lin-m-" + "0" * 32 + "-1"            # a mission's attempt
 MERGE = "mission-merge-corr"                    # the mission's own merge build
-PART = MISSION + "-APP-13-a1"                   # Forge's part attempt id: <mission correlation id>-<KEY>-a<n>
-FAILED_PART = MISSION + "-APP-14-a1"            # a part that failed in planning, never built
+PART = MISSION + "-APP13-a1"                    # Forge's part attempt id: <mission correlation id>-<KEY>-a<n>
+FAILED_PART = MISSION + "-APP14-a1"             # a part that failed in planning, never built (keys: [A-Z0-9]{1,12})
 
 
 def _cost(prompt: int, completion: int) -> float:
@@ -305,3 +309,195 @@ def test_leftover_temporary_files_are_removed_at_start(tmp_path: Path) -> None:
     keep.write_text("{}", encoding="utf-8")
     remove_leftovers(tmp_path)
     assert not left.exists() and keep.exists()
+
+
+# --- design 11.8: the cost of every build that reached main, whatever started it -----------------
+
+
+def test_a_merged_single_build_carries_its_features_cost(store: Path) -> None:
+    s = build_summary(store, NOW)
+    merges = s["merges"]
+    # On main: the plain feature, the Linear issue's build and the mission's merge build. The mission
+    # part that joined only the mission's branch, and the build still running, are not.
+    assert set(merges) == {"build-FEAT-0001", "bL", "bM"}
+    plain = SpendSlot(**merges["build-FEAT-0001"])
+    assert plain.state == "measured" and plain.calls == 1 and plain.scope == "merge"
+    assert plain.amount_usd == pytest.approx(_cost(1_000, 100))
+    issue = SpendSlot(**merges["bL"])                 # queue, planning and build tags, each once
+    assert issue.calls == 2 and issue.amount_usd == pytest.approx(2 * _cost(10_000, 1_000))
+    assert set(merges["bL"]) == {f.name for f in dataclasses.fields(SpendSlot)}
+
+
+def test_a_linear_missions_merge_costs_the_same_as_its_attempt(store: Path) -> None:
+    s = build_summary(store, NOW)
+    merge, attempt = SpendSlot(**s["merges"]["bM"]), SpendSlot(**s["attempts"][MISSION])
+    assert merge.scope == "merge" and attempt.scope == "attempt"
+    assert dataclasses.replace(merge, scope="attempt") == attempt
+
+
+def test_any_missions_merge_costs_every_part_and_the_missions_own_calls(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mission not from Linear: one part built onto the mission's branch, one failed in planning
+    and never built (found only by the mission's correlation prefix), plus the mission's own calls
+    and its merge build's."""
+    monkeypatch.setattr(forge_fake, "T0", T)
+    corr = "mission-7f3a"
+    built, failed, merge_corr = corr + "-K1-a1", corr + "-K2-a1", "mission-7f3a-merge"
+    fake = ForgeFake(tmp_path / "forge.db")
+    fake.mission("m-7", "Archive old notes", corr, status="MERGED", closed=170)
+    fake.planning(built, "Add an archive flag.", start=100, end=110)
+    fake.build("b1", "FEAT-0071", built, queued=110, started=110, completed=150, mission_id="m-7",
+               mission_role="feature", target_branch="mission/m-7")
+    fake.merge_decision("b1", 150)
+    fake.merged("b1", 152, mission_branch=True)
+    fake.planning(failed, "Hide archived notes.", state="FAILED", start=100, end=130, error="The planner gave up.")
+    fake.build("bM7", "FEAT-0071", merge_corr, queued=160, started=160, completed=165, mission_id="m-7",
+               mission_role="mission-merge")
+    fake.merge_decision("bM7", 165)
+    fake.merged("bM7", 166)
+    spend = FakeSpend(T)
+    spend.add("p", 120, built, prompt=20_000, completion=2_000)
+    spend.add("f", 115, failed, prompt=5_000, completion=500)
+    spend.add("m", 158, corr, prompt=3_000, completion=300)
+    spend.add("mb", 162, merge_corr, prompt=4_000, completion=400)
+    spend.add("other", 50, "c-elsewhere", prompt=9_000, completion=900)    # not this mission's
+    path = tmp_path / "readmodel.db"
+    conn = store_from(fake, path, NOW)
+    import_once(conn, spend, NOW)
+    conn.close()
+
+    s = build_summary(path, NOW)
+    assert set(s["merges"]) == {"bM7"}                 # the part joined the mission's branch, not main
+    assert s["attempts"] == {}                         # not a Linear attempt: attempts are unchanged
+    slot = SpendSlot(**s["merges"]["bM7"])
+    assert slot.state == "measured" and slot.calls == 4 and "not counted" not in slot.reason
+    assert slot.amount_usd == pytest.approx(_cost(20_000, 2_000) + _cost(5_000, 500) + _cost(3_000, 300)
+                                            + _cost(4_000, 400))
+    conn = dbread.snapshot(path)
+    try:
+        factory = load_factory(conn, NOW)
+    finally:
+        conn.close()
+    mission, parts = merges_on_main(factory, NOW)["bM7"]
+    assert mission is not None and mission.id == "m-7"
+    assert sorted(f.key for f in parts) == sorted(["FEAT-0071", failed])
+    assert sorted(f.key for f in mission_parts(factory)["m-7"]) == sorted(["FEAT-0071", failed])
+
+
+def test_a_build_not_on_main_has_no_merge_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(forge_fake, "T0", T)
+    fake = ForgeFake(tmp_path / "forge.db")
+    for n, corr in enumerate(("c-pending", "c-elsewhere", "c-declined", "c-nulltarget", "c-reported"), 1):
+        fake.planning(corr, f"Feature {n}.")
+        fake.build(f"b{n}", f"FEAT-{n:04d}", corr)
+        fake.merge_decision(f"b{n}", 82)
+    fake.publication("b1", 85, result="publication pending")                # the word given, not yet published
+    fake.publication("b2", 85, target="release")                            # published, to another branch
+    fake.stage("b3", "the merge word", "merge_deploy_decision", "SKIPPED", 83,
+               {"merge_decision": {"decision": "reject", "decided_by": "U1"}})  # declined: no record
+    fake.publication("b4", 85, result="published, deployment pending", target=None)  # the build's own target
+    fake.stage("b5", "merge-deploy", "merge_deploy_executor", "PASSED", 85, {"merged_sha": "abc"})  # report only
+    path = tmp_path / "readmodel.db"
+    store_from(fake, path, NOW).close()
+    assert set(build_summary(path, NOW)["merges"]) == {"b4"}
+
+
+def test_a_merge_older_than_30_days_is_left_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(forge_fake, "T0", T)
+    fake = ForgeFake(tmp_path / "forge.db")
+    old = -31 * 24 * 60
+    fake.planning("c-old", "An old feature.", start=old, end=old + 20)
+    fake.build("bOld", "FEAT-0001", "c-old", queued=old + 21, started=old + 21, completed=old + 80)
+    fake.merged("bOld", old + 90)
+    recent = -29 * 24 * 60
+    fake.planning("c-recent", "A recent feature.", start=recent, end=recent + 20)
+    fake.build("bNew", "FEAT-0002", "c-recent", queued=recent + 21, started=recent + 21, completed=recent + 80)
+    fake.merged("bNew", recent + 90)
+    path = tmp_path / "readmodel.db"
+    store_from(fake, path, NOW).close()
+    assert set(build_summary(path, NOW)["merges"]) == {"bNew"}
+
+
+def test_attempts_are_unchanged_by_merges(store: Path) -> None:
+    s = build_summary(store, NOW)
+    assert set(s) == {"version", "written_at", "forge", "cost", "projects", "attempts", "merges"}
+    assert set(s["attempts"]) == {ISSUE, MISSION}
+    assert all(SpendSlot(**slot).scope == "attempt" for slot in s["attempts"].values())
+    # The attempt figures are the ones the attempts rule gives on its own.
+    conn = dbread.snapshot(store)
+    try:
+        factory = load_factory(conn, NOW)
+        book = load_cost_book(conn, NOW)
+    finally:
+        conn.close()
+    for corr, (mission, features) in linear_attempts(factory, NOW).items():
+        assert s["attempts"][corr] == dataclasses.asdict(dbread.attempt_spend(book, features, mission))
+
+
+def test_the_feed_copies_publication_records_and_target_branches(store: Path) -> None:
+    conn = sqlite3.connect(store)
+    try:
+        rows = dict(conn.execute("SELECT build_id, result FROM forge_publication_records").fetchall())
+        assert rows["bL"] == "merged into the remote and running"
+        assert rows["bP"] == "published to the mission branch"
+        assert conn.execute("SELECT target_branch FROM forge_builds WHERE build_id='bL'").fetchone() == (None,)
+    finally:
+        conn.close()
+
+
+def test_mission_parts_match_on_a_boundary_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two missions whose ids are prefixes of one another: `m-abcd-K2-a1` starts with `m-abc` but
+    not with `m-abc-`, so each part (and its calls) counts only for its own mission."""
+    monkeypatch.setattr(forge_fake, "T0", T)
+    fake = ForgeFake(tmp_path / "forge.db")
+    spend = FakeSpend(T)
+    for mid, corr, part, key, code, tokens in (("m-1", "m-abc", "m-abc-K1-a1", "K1", "FEAT-0101", 1_000),
+                                                ("m-2", "m-abcd", "m-abcd-K2-a1", "K2", "FEAT-0102", 7_000)):
+        fake.mission(mid, f"Mission {key}", corr, status="MERGED", closed=170)
+        fake.planning(part, f"Part {key}.", state="FAILED", start=100, end=110, error="The planner gave up.")
+        fake.build(f"b-{mid}", code, f"{corr}-merge", queued=160, started=160, completed=165, mission_id=mid,
+                   mission_role="mission-merge")
+        fake.merge_decision(f"b-{mid}", 165)
+        fake.merged(f"b-{mid}", 166)
+        spend.add(f"s-{key}", 105, part, prompt=tokens, completion=tokens // 10)
+    path = tmp_path / "readmodel.db"
+    conn = store_from(fake, path, NOW)
+    import_once(conn, spend, NOW)
+    conn.close()
+
+    conn = dbread.snapshot(path)
+    try:
+        factory = load_factory(conn, NOW)
+    finally:
+        conn.close()
+    parts = mission_parts(factory)
+    assert [f.key for f in parts["m-1"]] == ["m-abc-K1-a1"]
+    assert [f.key for f in parts["m-2"]] == ["m-abcd-K2-a1"]
+    merges = build_summary(path, NOW)["merges"]
+    abc, abcd = SpendSlot(**merges["b-m-1"]), SpendSlot(**merges["b-m-2"])
+    assert abc.calls == 1 and abc.amount_usd == pytest.approx(_cost(1_000, 100))
+    assert abcd.calls == 1 and abcd.amount_usd == pytest.approx(_cost(7_000, 700))
+
+
+def test_a_part_belongs_to_the_mission_whose_id_leaves_a_key_and_attempt(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Coach: mission A `c` has part `c-X-a1`; mission B's id is `c-X`. The part starts with both
+    `c-` and `c-X-`, but only A leaves Forge's `<KEY>-a<n>` (`X-a1`); B would leave `a1`. So it is
+    A's part, not B's, though B's id is the longer prefix."""
+    monkeypatch.setattr(forge_fake, "T0", T)
+    fake = ForgeFake(tmp_path / "forge.db")
+    fake.mission("m-a", "Mission A", "c", status="MERGED", closed=170)
+    fake.mission("m-b", "Mission B", "c-X", status="MERGED", closed=170)
+    fake.planning("c-X-a1", "A's part X.", state="FAILED", start=100, end=110, error="The planner gave up.")
+    fake.planning("c-X-Y-a2", "B's part Y.", state="FAILED", start=100, end=110, error="The planner gave up.")
+    fake.planning("c-x-a1", "Not a part: a key is upper case.", state="FAILED", start=100, end=110)
+    fake.planning("c-X-a1-extra", "Not a part: more after the attempt.", state="FAILED", start=100, end=110)
+    path = tmp_path / "readmodel.db"
+    store_from(fake, path, NOW).close()
+    conn = dbread.snapshot(path)
+    try:
+        parts = mission_parts(load_factory(conn, NOW))
+    finally:
+        conn.close()
+    assert [f.key for f in parts["m-a"]] == ["c-X-a1"]
+    assert [f.key for f in parts["m-b"]] == ["c-X-Y-a2"]

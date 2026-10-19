@@ -20,12 +20,20 @@ Contract, version 1::
      "projects": {"owner/name": {"delivered_total", "delivered_7d", "in_progress",
                                  "open_issues_total", "open_issues_words", "health",
                                  "spend_total": SpendSlot, "spend_week": SpendSlot}},
-     "attempts": {"lin-...": SpendSlot}}   # the attempt's merge cost
+     "attempts": {"lin-...": SpendSlot},  # the attempt's merge cost
+     "merges": {"<build id>": SpendSlot}}  # the cost of each build that reached main (11.8)
 
 ``forge.valid_until`` is the moment the pages would call Forge's evidence stale: the earlier of the
 last good read plus its limit and the feed's heartbeat plus its limit (`dbread.Freshness.fresh`), so
 the door can judge freshness when it reads. A SpendSlot is every field of the dashboard's
 `SpendSlot`, so ``SpendSlot(**d)`` rebuilds it.
+
+**Merges** (design 11.8, 19 October 2026). One slot per build that reached main in the last 30
+days, whatever started it, keyed by build id: "on main" is `Build.on_main`, the publication-record
+predicate the Linear door and Forge's mission finish use. A single feature's merge costs the
+deduplicated union of that feature's tags (queue, planning, builds). A mission's merge build costs
+every part of the mission, built or not (`mission_parts`), plus the mission's own tags, with the
+same unmeasured and missing rules as `attempts` (`dbread.attempt_spend`).
 
 **Health.** The worst on-track band of the project's in-progress features, taken from the project
 page's own rows (so the same `norms.on_track` function and thresholds, nothing new), mapped in
@@ -42,6 +50,7 @@ import contextlib
 import dataclasses
 import json
 import os
+import re
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -66,6 +75,8 @@ HEALTH_OF_BAND = {GREEN: "on_track", AMBER: "at_risk", RED: "off_track"}
 LINEAR_PREFIX = "lin-"
 #: Attempts last seen more than this long ago are left out.
 ATTEMPT_DAYS = 30
+#: Builds that reached main more than this long ago are left out of `merges`.
+MERGE_DAYS = 30
 
 
 def summary_path(db_path: Path) -> Path:
@@ -100,17 +111,69 @@ def _last_seen(features: list[Feature], mission: Mission | None) -> datetime | N
 
 
 def _mission_by_prefix(f: Feature, missions: dict[str, Mission]) -> Mission | None:
-    """The Linear mission a feature is a part of. Forge names each part's attempt
-    `<mission correlation id>-<KEY>-a<n>` (planning run, queue item and build alike), and only a
-    part that reached a build carries the mission's id, so a part that stopped in planning is
-    found by that prefix."""
+    """The mission of `missions` (keyed by correlation id; any missions, Linear or not) a feature is
+    a part of. Forge names each part's attempt `<mission correlation id>-<KEY>-a<n>` (planning run,
+    queue item and build alike), and only a part that reached a build carries the mission's id, so
+    a part that stopped in planning is found by that id. A tag belongs to a mission only when it
+    equals the mission's id, or is exactly `<id>-<KEY>-a<n>` (`_is_part_of`), so `m-abcd-K2-a1` is
+    never a part of `m-abc`, and `c-X-a1` is a part of `c`, not of a mission `c-X`. If two missions
+    still match, the longer id wins."""
     if f.mission is not None and f.mission.correlation_id in missions:
         return f.mission
+    found: Mission | None = None
     for tag in feature_tags(f):
         for corr, m in missions.items():
-            if tag.startswith(corr + "-"):
-                return m
-    return None
+            if _is_part_of(tag, corr) and (found is None or len(corr) > len(found.correlation_id)):
+                found = m
+    return found
+
+
+#: What follows `<mission correlation id>-` in a part's attempt id: Forge's mission key
+#: (`lifecycle/missions.py` MISSION_KEY_PATTERN, 1-12 upper-case letters or digits) and the
+#: attempt number (`missions.py` 221: `f"{mission_correlation_id}-{key}-a{attempt}"`).
+_PART_REST = re.compile(r"[A-Z0-9]{1,12}-a\d+")
+
+
+def _is_part_of(tag: str, corr: str) -> bool:
+    if not corr:
+        return False
+    return tag == corr or (tag.startswith(corr + "-") and _PART_REST.fullmatch(tag[len(corr) + 1:]) is not None)
+
+
+def mission_parts(factory: Factory) -> dict[str, list[Feature]]:
+    """Every mission's parts, keyed by mission id: the features whose builds carry the mission's id
+    and those found by its correlation prefix (failed and planning-only parts included)."""
+    by_corr = {m.correlation_id: m for m in factory.missions if m.correlation_id}
+    parts: dict[str, list[Feature]] = {m.id: [] for m in factory.missions}
+    for f in factory.features:
+        mission = f.mission if f.mission is not None else _mission_by_prefix(f, by_corr)
+        if mission is not None:
+            parts.setdefault(mission.id, []).append(f)
+    return parts
+
+
+def merges_on_main(factory: Factory, now: datetime) -> dict[str, tuple[Mission | None, list[Feature]]]:
+    """Builds on main (`Build.on_main`) that reached it in the last 30 days, by build id: a
+    mission's merge build with its mission and every part, or a feature's build with that feature.
+    A build whose record says nothing of when is kept (the door asks for it by id)."""
+    cut = now - timedelta(days=MERGE_DAYS)
+    by_merge = {m.merge_build.build_id: m for m in factory.missions if m.merge_build is not None}
+    owner = {b.build_id: f for f in factory.features for b in f.builds}
+    parts = mission_parts(factory)
+    out: dict[str, tuple[Mission | None, list[Feature]]] = {}
+    for b in factory.builds:
+        if not b.on_main:
+            continue
+        reached = b.reached_main_at()
+        if reached is not None and reached < cut:
+            continue
+        if b.is_mission_merge:
+            mission = by_merge.get(b.build_id)
+            out[b.build_id] = (mission, parts.get(mission.id, []) if mission is not None else [])
+        else:
+            f = owner.get(b.build_id)
+            out[b.build_id] = (None, [f] if f is not None else [])
+    return dict(sorted(out.items()))
 
 
 def linear_attempts(factory: Factory, now: datetime) -> dict[str, tuple[Mission | None, list[Feature]]]:
@@ -158,13 +221,15 @@ def build_summary(db_path: Path, now: datetime | None = None) -> dict[str, Any]:
         factory, book = load_factory(conn, now), load_cost_book(conn, now)
         attempts = {corr: slot_dict(dbread.attempt_spend(book, features, mission))
                     for corr, (mission, features) in linear_attempts(factory, now).items()}
+        merges = {bid: slot_dict(dbread.attempt_spend(book, features, mission, scope="merge"))
+                  for bid, (mission, features) in merges_on_main(factory, now).items()}
     finally:
         conn.close()
     return {
         "version": VERSION, "written_at": iso(now),
         "forge": {"last_success_at": _iso(fr.read_at), "stale": stale, "valid_until": _iso(valid_until)},
         "cost": {"read_at": _iso(cf.read_at), "state": cf.state(now), "stale_after_seconds": COST_STALE_SECS},
-        "projects": projects, "attempts": attempts,
+        "projects": projects, "attempts": attempts, "merges": merges,
     }
 
 

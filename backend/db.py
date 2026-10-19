@@ -36,6 +36,7 @@ def connect_ro(db_path: Path) -> sqlite3.Connection:
 ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("mirror_status", "read_count", "INTEGER NOT NULL DEFAULT 0"),
     ("forge_builds", "pending_approval_request_id", "TEXT"),
+    ("forge_builds", "target_branch", "TEXT"),
     ("forge_planning_runs", "pending_approval_request_id", "TEXT"),
     ("forge_planning_runs", "parent_request_id", "TEXT"),
     ("forge_missions", "plan_request_id", "TEXT"),

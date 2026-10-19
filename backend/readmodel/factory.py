@@ -80,6 +80,10 @@ _BUILD_ACTIVE = ("QUEUED", "PREPARING", "RUNNING", "PAUSED", "FINALISING")
 _PLANNING_ACTIVE = ("QUEUED", "RUNNING", "PAUSED", "FEATURE_SPEC", "FEATURE_PLAN")
 _SPEC_GATE_LABELS = ("feature-spec-digest-review", "product_docs")
 _MISSION_BRANCH_RESULT = "published-to-the-mission-branch"
+#: The publication record's results that mean the build's work is on its target branch (Forge's
+#: `pipeline/publication_record.py` RESULT_PUBLISHED_DEPLOYMENT_PENDING and RESULT_MERGED_AND_RUNNING;
+#: the predicate of `pipeline/mission_finish.py` and the Linear door's `forge_record.ON_MAIN_RESULTS`).
+ON_MAIN_RESULTS = frozenset({"published, deployment pending", "merged into the remote and running"})
 
 
 # --- records ----------------------------------------------------------------------------------
@@ -134,6 +138,18 @@ class PlanningEvent:
 
 
 @dataclass(frozen=True)
+class Publication:
+    """A build's publication record (Forge's `publication_records`, one row per build): what the
+    merge word did. Main is read from here, never from the merge report's wording."""
+
+    result: str
+    target_branch: str
+    j_commit: str
+    decided_at: datetime | None
+    updated_at: datetime | None
+
+
+@dataclass(frozen=True)
 class Build:
     build_id: str
     code: str
@@ -150,6 +166,27 @@ class Build:
     mission_role: str
     stages: tuple[StageRow, ...]
     pending_request_id: str = ""       # the build gate's card while the build is PAUSED
+    target_branch: str = ""            # the branch this work is aimed at, recorded when it started
+    publication: Publication | None = None
+
+    @property
+    def on_main(self) -> bool:
+        """On its target branch by its publication record: the result is one of `ON_MAIN_RESULTS`
+        and the record's branch (or the build's, when the record has none) is the build's target
+        (or main). The same predicate as Forge's mission finish and the Linear door."""
+        p = self.publication
+        if p is None or p.result not in ON_MAIN_RESULTS:
+            return False
+        target = self.target_branch or "main"
+        return (p.target_branch or target) == target
+
+    def reached_main_at(self) -> datetime | None:
+        """The latest moment its publication record was written (or the build ended), when it is
+        on main; None when it is not, or nothing on record says when."""
+        if not self.on_main or self.publication is None:
+            return None
+        times = [t for t in (self.publication.updated_at, self.publication.decided_at, self.completed_at) if t]
+        return max(times, default=None)
 
     @property
     def is_mission_merge(self) -> bool:
@@ -509,17 +546,25 @@ def _load_builds(conn: sqlite3.Connection) -> list[Build]:
         if at is None:
             continue
         stages[r[1]].append(StageRow(int(r[0]), r[1], _s(r[2]), _s(r[3]), _s(r[4]), at, _details(r[7])))
+    publications = {
+        _s(r[0]): Publication(result=_s(r[1]), target_branch=_s(r[2]), j_commit=_s(r[3]),
+                              decided_at=parse_dt(r[4]), updated_at=parse_dt(r[5]))
+        for r in conn.execute(
+            "SELECT build_id, result, target_branch, j_commit, decided_at, updated_at FROM forge_publication_records"
+        )
+    }
     builds = []
     for r in conn.execute(
         "SELECT build_id, feature_id, repo, project, status, triggered_by, correlation_id, queued_at, "
-        "started_at, completed_at, error, mission_id, mission_role, pending_approval_request_id FROM forge_builds"
+        "started_at, completed_at, error, mission_id, mission_role, pending_approval_request_id, target_branch "
+        "FROM forge_builds"
     ):
         builds.append(Build(
             build_id=r[0], code=_s(r[1]), repo=_s(r[2]), project=_s(r[3]) or _s(r[2]), status=_s(r[4]),
             triggered_by=_s(r[5]), correlation_id=_s(r[6]), queued_at=parse_dt(r[7]),
             started_at=parse_dt(r[8]), completed_at=parse_dt(r[9]), error=_s(r[10]),
             mission_id=_s(r[11]), mission_role=_s(r[12]), stages=tuple(stages.get(r[0], ())),
-            pending_request_id=_s(r[13]),
+            pending_request_id=_s(r[13]), target_branch=_s(r[14]), publication=publications.get(r[0]),
         ))
     builds.sort(key=lambda b: (b.queued_at or datetime.min.replace(tzinfo=UTC), b.build_id))
     return builds

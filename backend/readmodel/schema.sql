@@ -83,10 +83,25 @@ CREATE TABLE IF NOT EXISTS forge_builds (
     terminal_class    TEXT,
     mission_id        TEXT,
     mission_role      TEXT,  -- 'feature', 'mission-merge' (a mission's own merge, not a feature), or NULL
-    pending_approval_request_id TEXT   -- the build gate's card while the build is PAUSED
+    pending_approval_request_id TEXT,  -- the build gate's card while the build is PAUSED
+    target_branch     TEXT   -- the branch the work is aimed at, recorded when it started (NULL: main)
 );
 CREATE INDEX IF NOT EXISTS forge_builds_feature ON forge_builds(feature_id);
 CREATE INDEX IF NOT EXISTS forge_builds_correlation ON forge_builds(correlation_id);
+
+-- What the merge word did, one row per build (Forge's publication_records). A build is on main only
+-- when `result` is "published, deployment pending" or "merged into the remote and running" and
+-- `target_branch` is the build's target: the predicate Forge's mission finish and the Linear door use.
+CREATE TABLE IF NOT EXISTS forge_publication_records (
+    build_id          TEXT PRIMARY KEY,
+    feature_id        TEXT,
+    repo              TEXT,
+    target_branch     TEXT,
+    j_commit          TEXT,
+    result            TEXT,
+    decided_at        TEXT,
+    updated_at        TEXT
+);
 
 CREATE TABLE IF NOT EXISTS forge_stage_log (
     id                INTEGER PRIMARY KEY,

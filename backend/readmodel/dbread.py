@@ -1004,11 +1004,13 @@ def project_spend(book: CostBook, factory: Factory, project: str, *, lo: datetim
     return tagged_spend(book, factory, (project,), lo=lo, hi=hi)
 
 
-def attempt_spend(book: CostBook, features: Iterable[Feature], mission: Mission | None = None) -> SpendSlot:
-    """One Linear attempt's cost (design 11.5): the deduplicated union of the tags of the features it
-    covers and, for a mission, the mission's own tags, which project spend also counts. The same
-    not-measured rules as `tagged_spend`: features sent before tagging are left out and the reason
-    says how many; nothing at all since tagging is "Not measured"."""
+def attempt_spend(book: CostBook, features: Iterable[Feature], mission: Mission | None = None, *,
+                  scope: str = "attempt") -> SpendSlot:
+    """The cost of a set of features (design 11.5 and 11.8): a Linear attempt's (scope "attempt") or
+    a merge's (scope "merge"). The deduplicated union of the tags of the features it covers and, for
+    a mission, the mission's own tags, which project spend also counts. The same not-measured rules
+    as `tagged_spend`: features sent before tagging are left out and the reason says how many;
+    nothing at all since tagging is "Not measured"."""
     chosen = list(features)
     if book.state == "never":
         return book.not_available()
@@ -1025,7 +1027,7 @@ def attempt_spend(book: CostBook, features: Iterable[Feature], mission: Mission 
         tags |= cost.feature_tags(f)
     if mission is not None:
         tags |= cost.mission_tags(mission)
-    slot = book.slot(book.tag_totals(tags), scope="attempt")
+    slot = book.slot(book.tag_totals(tags), scope=scope)
     left = [f for f in chosen if f not in measured]
     if left:
         noun = "feature" if len(chosen) == 1 else "features"
