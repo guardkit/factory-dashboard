@@ -268,7 +268,7 @@ def test_a_slow_summary_does_not_delay_the_forge_copy(tmp_path: Path, monkeypatc
     monkeypatch.setattr(forge_mirror, "forge_db_path", lambda: tmp_path / "forge.db")
     writes: list[float] = []
 
-    def slow_write(_db_path: Path, _now: datetime | None = None) -> None:
+    def slow_write(db_path: Path, now: datetime | None = None) -> None:  # the writer's own names
         writes.append(time.monotonic())
         time.sleep(0.6)                                  # far longer than the whole window below
 
@@ -286,7 +286,7 @@ def test_a_slow_summary_does_not_delay_the_forge_copy(tmp_path: Path, monkeypatc
 def test_a_failing_summary_is_skipped_and_retried(tmp_path: Path) -> None:
     calls: list[int] = []
 
-    def failing(_db_path: Path, _now: datetime | None = None) -> None:
+    def failing(db_path: Path, now: datetime | None = None) -> None:  # the writer's own names
         calls.append(1)
         raise sqlite3.OperationalError("database is locked")
 
