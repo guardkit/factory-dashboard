@@ -1724,3 +1724,32 @@ textarea.suggest__input { min-height: 132px; }
 @media (max-width: 720px) {
   .suggestion { padding: var(--space-16); }
 }
+
+/* The factory's cards and their buttons (design of 19 October 2026). Plain spacing only, from the
+   existing tokens; the redesign styles them further. Buttons are full width on phones. */
+.answer-cards { display: grid; gap: var(--space-16); }
+.answer-card { margin: 0; }
+.answer-card__head { gap: var(--space-8); flex-wrap: wrap; }
+.answer-card__title a { overflow-wrap: anywhere; }
+.answer-card__heading { margin: 0 0 var(--space-8); font-weight: 700; color: var(--heading); }
+.answer-card__label { margin: var(--space-12) 0 4px; font-weight: 600; color: var(--heading); }
+.answer-card__line, .answer-card__recorded, .answer-card__state, .answer-card__slack,
+.answer-card__notice, .answer-notice, .answer-line { margin: 0 0 var(--space-8); overflow-wrap: anywhere; }
+.answer-card__list { margin: 0 0 var(--space-8); padding-left: 1.2em; }
+.answer-card__list li { margin: 0 0 4px; }
+.answer-card__why { color: var(--text-dim); }
+.answer-card__links a { overflow-wrap: anywhere; }
+.answer-card__state, .answer-card__notice, .answer-notice { font-weight: 600; color: var(--heading); }
+.answer-card__actions {
+  display: grid; gap: var(--space-8); margin-top: var(--space-12);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end;
+}
+.answer-form { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.answer-form__label { font-size: 13px; color: var(--text-dim); }
+.answer-form__note {
+  width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: var(--radius-md);
+  border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); font: 400 14px/20px var(--font-body);
+}
+@media (max-width: 720px) {
+  .answer-card__actions { grid-template-columns: 1fr; }
+}

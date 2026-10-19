@@ -10,7 +10,8 @@ Two containers from one image, under `docker compose` in this checkout:
 - **board**: the web pages on `127.0.0.1:8090` (loopback only).
 - **projector** ("the feed"): copies Forge's build record into `./data/readmodel.db` every
   15 seconds, read-only, and checks the model gateway, the model server and the bus monitor every
-  30 seconds. It has no bus connection and needs no NATS login.
+  30 seconds. It has no bus connection and needs no NATS login. Only the board touches the bus,
+  and only to answer the factory's cards (below).
 
 Forge's record is the estate's ledger volume (`forge-estate_forge-ledger`), mounted read-only.
 `./data/readmodel.db` is disposable: if it is deleted, the feed rebuilds it on its next pass.
@@ -89,13 +90,35 @@ docker compose exec projector python -m backend.readmodel.norms --db /data/readm
 
 and commit the result with its date.
 
+## Answering cards
+
+Since 19 October 2026 an operator can answer the factory's cards on the Now page, a feature's page
+or a mission's page ([design](architecture/approvals-from-the-dashboard-2026-10-19.md)): the spec
+review, the sign-in question, the go-ahead to build, a mission's plan and the merge card (with
+"Rebuild the preview"). The older assumptions checkpoint is still answered in Slack.
+
+- **Who gets buttons:** an operator account with `approver_identity` in `accounts.yaml` (README,
+  "Accounts and access"). Everyone else sees the cards with no buttons. Client accounts never do.
+- **The bus:** set `FACTORY_DASH_NATS_URL` in `./.env` and put the `dashboard_approve` user's
+  password in `dashboard_approve_password` in the config folder (`chmod 600`). The board connects
+  for each answer, publishes it and closes; it holds no lasting connection, so a bus restart needs
+  nothing here. If the bus can't be reached, the page says so in one sentence and the person can
+  press again.
+- **What the page shows:** "Sent. Waiting for the factory to record it", then the answer the factory
+  recorded. If the card is still open two feed passes after the answer was sent, the page says the
+  factory hasn't recorded it (it may have refused it) and the button comes back.
+- **A stale copy pauses answers:** when the factory's record was last read more than 60 seconds ago,
+  or the feed has stopped, nothing is sent and the page says so.
+- `./data/answers.db` holds the answers waiting to be recorded. Losing it only lets someone press
+  again; the factory's own first-answer rule still stops a second answer.
+
 ## Suggestions and "What changed"
 
 Operators can send a suggestion for the dashboard from the "Suggest a change" link at the foot of
 every page (text, or a voice note turned into text). The Suggestions page (`/suggestions`) lists
 them with who sent each, when, from which page, and its status (new, seen, done or declined); any
-operator can set the status there. They are kept in `./data/suggestions.db`, the only file the
-board writes while it runs; the feed never opens it. Each person can send 10 an hour, each up to
+operator can set the status there. They are kept in `./data/suggestions.db`; the feed never
+opens it. (The board's only other file is `./data/answers.db`, above.) Each person can send 10 an hour, each up to
 2,000 characters, and record 10 voice notes an hour.
 
 If `suggestions.db` is locked or damaged, the board still starts (the log says

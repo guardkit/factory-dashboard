@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import 'macros.html' as m %}
+{% import 'cards.html' as cards %}
 {% block title %}{{ page.title }} · Appmilla Factory{% endblock %}
 {% block content %}
 {% set open_wait = page.waits | selectattr('open') | first %}
@@ -20,6 +21,23 @@
   </div>
   {{ m.asof_chip(page.as_of, source='factory') }}
 </header>
+
+{# The feature's cards (design of 19 October 2026): an open card with its evidence and, for an
+   operator with an approver identity, its buttons; a closed card with what Forge recorded. #}
+{% set ax = ax if ax is defined else none %}
+{{ cards.page_notice(ax, page.cards | map(attribute='request_id') | list) }}
+{% if page.cards %}
+{% set open_cards = page.cards | selectattr('open') | list %}
+<section class="panel-card feature-cards" aria-labelledby="cards-title">
+  <header class="panel-card__header"><h2 class="panel-card__title" id="cards-title">{% if open_cards %}Waiting for an answer{% else %}Cards{% endif %}</h2></header>
+  <div class="panel-card__body answer-cards">
+    {% for c in open_cards %}{{ cards.card_box(c, ax, '/features/' ~ page.key) }}{% endfor %}
+    {% for c in page.cards | rejectattr('open') %}{{ cards.card_box(c, ax, '/features/' ~ page.key) }}{% endfor %}
+    {% if open_cards %}{{ cards.answer_line(ax) }}{% endif %}
+  </div>
+  {% if page.mission_link %}<p class="panel-card__foot"><a href="{{ page.mission_link }}">Open the mission</a></p>{% endif %}
+</section>
+{% endif %}
 
 {# Only figures the record carries: machine and waiting time when the record accounts for them,
    cost when it is measured; otherwise a not-measured badge with the reason, never a zero. #}
@@ -90,7 +108,7 @@
             </li>
           {% endfor %}
           </ul>
-          {% if open_wait %}<p class="observes-only">{{ m.icon('chat') }}Decide in Slack. This dashboard only shows what is waiting.</p>{% endif %}
+          {% if open_wait and not (ax and ax.can_answer) %}<p class="observes-only">{{ m.icon('chat') }}Decide in Slack. This dashboard only shows what is waiting.</p>{% endif %}
         {% else %}
           <p class="true-empty">No issues on record for this feature.</p>
         {% endif %}

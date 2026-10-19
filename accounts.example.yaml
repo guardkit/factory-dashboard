@@ -9,9 +9,14 @@
 # tenant (optional, default operator): operator sees the factory pages. A client tenant sees only
 # its own client view, and must first be registered in backend/config/tenants.yaml (none is today).
 # Any other field is refused, so a misspelt one can never widen what someone sees.
+#
+# approver_identity (optional, operator accounts only): who this person answers the factory's cards as,
+# the identity Forge checks. Without it the person sees the cards but no buttons. Use the person's
+# chat member id, or "dashboard:<name>" once the factory lists that name among its approvers.
 
 accounts:
   - username: example
     display_name: Example Person
     password_hash: "pbkdf2_sha256$120000$replace-me$with-the-line-printed-by-the-hash-command"
     # tenant: operator
+    # approver_identity: "dashboard:example"

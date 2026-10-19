@@ -11,11 +11,17 @@ Accounts live in ``accounts.yaml`` in a configuration folder OUTSIDE the reposit
         display_name: James
         password_hash: "pbkdf2_sha256$120000$<salt hex>$<digest hex>"
         tenant: operator               # optional, default operator; must be in tenants.yaml
+        approver_identity: "<id>"      # optional; operator accounts only (see below)
 
 The file is read at start and re-read whenever its modification time or size changes. An
 account's ``tenant`` decides what it sees, exactly as the July users table did: ``operator`` sees
 the factory pages; a client tenant sees only its own client layout. Unknown keys are refused, so a
 mistyped ``tenant`` can never fall back to operator access.
+
+``approver_identity`` (design of 19 October 2026) is the identity an operator's answers to the
+factory's cards are sent under (``decided_by``), the one Forge checks: for Rich his existing Slack
+member id, for another approver the ``dashboard:<name>`` Forge lists in ``approval.additional_approvers``.
+An account without it sees the cards but no buttons. A client account may not have one.
 
 Command line: ``python -m backend.accounts hash`` asks for a password twice and prints its hash.
 """
@@ -25,6 +31,7 @@ from __future__ import annotations
 import getpass
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -44,7 +51,8 @@ ACCOUNTS_FILE = "accounts.yaml"
 SESSION_SECRET_FILE = "session_secret"
 MIN_SECRET_LENGTH = 32
 OPERATOR = "operator"
-_KEYS = frozenset({"username", "display_name", "password_hash", "tenant"})
+_KEYS = frozenset({"username", "display_name", "password_hash", "tenant", "approver_identity"})
+_IDENTITY = re.compile(r"[^\s]{1,200}")
 
 # A fixed hash checked when the username is unknown, so a wrong username takes as long as a wrong
 # password and the response time does not reveal which usernames exist.
@@ -61,6 +69,7 @@ class Account:
     display_name: str
     password_hash: str
     tenant: str = OPERATOR
+    approver_identity: str = ""
 
 
 def config_dir() -> Path:
@@ -132,13 +141,27 @@ def parse_accounts(
                 f"{source}: account '{username}' names the tenant '{tenant}', "
                 "which is not in tenants.yaml."
             )
+        identity = _approver_identity(row, username, tenant, source)
         accounts[username] = Account(
             username=username,
             display_name=str(row.get("display_name") or username).strip(),
             password_hash=stored,
             tenant=tenant,
+            approver_identity=identity,
         )
     return accounts
+
+
+def _approver_identity(row: dict[object, object], username: str, tenant: str, source: str) -> str:
+    """The identity this account answers the factory's cards as, or "". Only an operator may have one."""
+    identity = str(row.get("approver_identity") or "").strip()
+    if identity and not _IDENTITY.fullmatch(identity):
+        raise ConfigError(f"{source}: account '{username}' has an approver_identity with spaces in it.")
+    if identity and tenant != OPERATOR:
+        raise ConfigError(
+            f"{source}: account '{username}' is a client account, so it cannot have an approver_identity."
+        )
+    return identity
 
 
 class AccountStore:

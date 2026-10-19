@@ -19,6 +19,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from backend import db
+from backend.readmodel import cards as cardmodel
 from backend.readmodel import costs as cost
 from backend.readmodel import viewmodels as vm
 from backend.readmodel.costs import CostBook, load_cost_book
@@ -57,6 +58,7 @@ from backend.readmodel.viewmodels import (
     JourneyBar,
     JourneyStation,
     MilestoneRow,
+    MissionPage,
     NeedsItem,
     NeedsPanel,
     PageChrome,
@@ -91,7 +93,8 @@ def _now() -> datetime:
 class Freshness:
     read_at: datetime | None       # the last good read of Forge's record
     heartbeat_at: datetime | None  # the feed's own heartbeat
-    error: str
+    error: str                     # the last attempt's error; "" when the last read succeeded
+    read_count: int = 0            # successful reads so far (only ever rises)
 
     def feed_alive(self, now: datetime) -> bool:
         return self.heartbeat_at is not None and (now - self.heartbeat_at).total_seconds() < vm.PROJECTOR_STALE_SECS
@@ -102,12 +105,14 @@ class Freshness:
 
 
 def freshness(conn: sqlite3.Connection) -> Freshness:
-    row = conn.execute("SELECT last_success_at, last_error FROM mirror_status WHERE source='forge'").fetchone()
+    row = conn.execute(
+        "SELECT last_success_at, last_error, read_count FROM mirror_status WHERE source='forge'").fetchone()
     hb = conn.execute("SELECT checked_at FROM service_health WHERE service='projector'").fetchone()
     return Freshness(
         read_at=parse_dt(row[0]) if row else None,
         heartbeat_at=parse_dt(hb[0]) if hb else None,
         error=str(row[1]) if row and row[1] else "",
+        read_count=int(row[2] or 0) if row else 0,
     )
 
 
@@ -383,14 +388,35 @@ def in_flight(conn: sqlite3.Connection, now: datetime, factory: Factory, norms: 
 
 
 def needs_you(conn: sqlite3.Connection, now: datetime, factory: Factory, norms: Norms) -> NeedsPanel:
+    """Everything waiting for a person, longest first: each open wait with the cards behind it, and
+    any open card the waits do not cover (a sign-in question, a mission's plan)."""
     fr = freshness(conn)
     items = []
+    waiting = cardmodel.open_cards(factory)
+    shown: set[str] = set()
     for i in find_issues(factory, norms, now):
         if not i.is_open or not i.kind.startswith("Waiting"):
             continue
-        items.append(NeedsItem(what=i.kind, subject=i.subject, link=i.link,
+        if i.feature is not None:
+            mine = tuple(c for c in waiting if c.feature_key == i.feature.key and c.request_id not in shown)
+            link = i.link
+        else:
+            mid = i.mission.id if i.mission else ""
+            mine = tuple(c for c in waiting if mid and c.mission_id == mid and not c.feature_key
+                         and c.request_id not in shown)
+            link = f"/missions/{mid}" if mid else i.link
+        shown.update(c.request_id for c in mine)
+        items.append(NeedsItem(what=i.kind, subject=i.subject, link=link,
                                age_label=vm.fmt_age((now - i.opened_at).total_seconds()),
-                               age_title=vm.fmt_iso(i.opened_at), band=_issue_band(i.band)))
+                               age_title=vm.fmt_iso(i.opened_at), band=_issue_band(i.band), cards=mine))
+    for c in waiting:
+        if c.request_id in shown:
+            continue
+        opened = c.opened_at or now
+        band = _issue_band(norms.waiting_hours.band((now - opened).total_seconds() / 3600))
+        items.append(NeedsItem(what=f"Waiting for an answer: {c.title.lower()}", subject=c.subject, link=c.link,
+                               age_label=vm.fmt_age((now - opened).total_seconds()), age_title=vm.fmt_iso(opened),
+                               band=band, cards=(c,)))
     items.sort(key=lambda it: it.age_title)
     return NeedsPanel(panel_id="p4", title="Waiting for a person", state=_state(fr, now, len(items)),
                       as_of=_read_chip(fr, now), items=tuple(items))
@@ -806,11 +832,38 @@ def feature_page(db_path: Path, key: str, now: datetime | None = None, *,
             attempts=attempts, waits=waits, issues=tuple(issue_row(i, now) for i in own),
             activity=activity_rows(factory, f.builds, now, limit=20), spend=book.feature_slot(f),
             time=time_slot(feature_time(f, now)), cost_by_stage=_stage_rows(conn, f, book),
+            cards=cardmodel.feature_cards(f), mission_link=f.mission.link if f.mission else "",
         )
         return page_chrome(conn, now), page
     finally:
         if owned:
             conn.close()
+
+
+def mission_page(db_path: Path, mission_id: str, now: datetime | None = None
+                 ) -> tuple[PageChrome, MissionPage] | None:
+    """A mission's own page: its plan, its features on record, its plan card and its merge card."""
+    now = now or _now()
+    conn = _open(db_path)
+    try:
+        factory = load_factory(conn, now)
+        m = next((x for x in factory.missions if x.id == mission_id), None)
+        if m is None:
+            return None
+        fr = freshness(conn)
+        mine = tuple((f.label, f.link, f.status_text) for f in factory.features if f.mission is not None
+                     and f.mission.id == m.id)
+        created = m.created_at
+        page = MissionPage(
+            id=m.id, title=m.title, project=m.target_repo, project_link=project_link(m.target_repo),
+            status_text=_mission_words(m.status).capitalize(), closed_reason=m.closed_reason,
+            created_label=vm.fmt_wall(created, now=now) if created else "—",
+            created_title=vm.fmt_iso(created) if created else "", as_of=_read_chip(fr, now), plan=m.plan,
+            features=mine, cards=cardmodel.mission_cards(m),
+        )
+        return page_chrome(conn, now), page
+    finally:
+        conn.close()
 
 
 def _build_words(b: Build) -> str:

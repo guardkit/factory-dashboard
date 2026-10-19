@@ -422,7 +422,8 @@ def _snapshot(folder: Path) -> dict[str, str]:
 def test_suggestions_db_is_the_only_file_the_board_writes(heard: tuple[TestClient, FakeModel, FakeSpeech],
                                                          data: Path) -> None:
     """After start-up, every page, every fragment, the chat, a voice note, a suggestion and a status change
-    leave every file in the data folder as it was, except suggestions.db."""
+    leave every file in the data folder as it was, except suggestions.db. (The board's other file,
+    answers.db, changes only when a card is answered: tests/test_approvals.py.)"""
     client, _, _ = heard
     before = _snapshot(data)
     assert "suggestions.db" in before

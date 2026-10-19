@@ -2,8 +2,9 @@
 
 Design, 17 October 2026, requirement 1: Forge's record is the dashboard's single source of truth,
 so the feed copies all of it that the pages read: builds, stage rows, planning runs, planning
-events, queue items and missions. It does this in one short read transaction and closes Forge's
-database between passes, so it never holds a read open long enough to get in Forge's way.
+events, queue items, missions and each mission's plan (its features and what each needs). It does
+this in one short read transaction and closes Forge's database between passes, so it never holds a
+read open long enough to get in Forge's way.
 
 - Forge's database is opened URI `mode=ro` from a read-only mount; a write on that handle fails.
 - Builds, planning runs, queue items and missions change in place, so each pass replaces them.
@@ -12,6 +13,9 @@ database between passes, so it never holds a read open long enough to get in For
   replaced), the copy of that table is thrown away and read again in full.
 - A pass that cannot read Forge records the error and keeps the last good copy; the pages then
   show the stale-data banner with the time of the last good read. It never crashes the feed.
+- Every successful pass adds one to `mirror_status.read_count`. The board counts passes with it
+  when it confirms an answer sent from the dashboard (design of 19 October 2026): only successful
+  reads are counted, so a stopped feed never confirms or clears anything.
 """
 
 from __future__ import annotations
@@ -44,18 +48,26 @@ _REPLACED: dict[str, tuple[str, tuple[str, ...], str]] = {
     "forge_builds": ("builds", (
         "build_id", "feature_id", "repo", "branch", "project", "status", "triggered_by",
         "originating_user", "correlation_id", "queued_at", "started_at", "completed_at", "error",
-        "terminal_class", "mission_id", "mission_role"), "build_id"),
+        "terminal_class", "mission_id", "mission_role", "pending_approval_request_id"), "build_id"),
     "forge_planning_runs": ("planning_runs", (
         "correlation_id", "state", "originating_user", "expected_approver", "request_text",
         "target_repo", "triggered_by", "defer_count", "paused_at", "escalated_at", "queued_at",
-        "started_at", "completed_at", "error"), "correlation_id"),
+        "started_at", "completed_at", "error", "pending_approval_request_id", "parent_request_id"),
+        "correlation_id"),
     "forge_queue": ("work_queue", (
         "id", "sentence", "target_repo", "kind", "status", "originating_user", "correlation_id",
         "queued_at", "admitted_at", "closed_at", "closed_reason"), "id"),
     "forge_missions": ("missions", (
         "id", "title", "target_repo", "status", "correlation_id", "created_at", "closed_at",
-        "closed_reason"), "id"),
+        "closed_reason", "plan_request_id", "originating_user", "approved_by", "approved_at"), "id"),
+    # A mission's plan, in Forge's own order (its rowid, copied as forge_order).
+    "forge_mission_features": ("mission_features", (
+        "forge_order", "mission_id", "key", "sentence", "no_sign_in"), "rowid"),
+    "forge_mission_needs": ("mission_needs", (
+        "forge_order", "mission_id", "key", "needs_key"), "rowid"),
 }
+#: Copied as Forge's rowid: the order Forge filed the rows in, which its own queries use.
+_ROWID_COLUMN = "forge_order"
 _APPENDED: dict[str, tuple[str, tuple[str, ...]]] = {
     "forge_stage_log": ("stage_log", (
         "id", "build_id", "stage_label", "target_identifier", "status", "gate_mode", "started_at",
@@ -91,7 +103,8 @@ def _columns(forge: sqlite3.Connection, table: str) -> set[str] | None:
 
 
 def _select(table: str, wanted: Sequence[str], have: set[str]) -> str:
-    cols = ", ".join(c if c in have else f"NULL AS {c}" for c in wanted)
+    cols = ", ".join(f"rowid AS {c}" if c == _ROWID_COLUMN else c if c in have else f"NULL AS {c}"
+                     for c in wanted)
     return f"SELECT {cols} FROM {table}"
 
 
@@ -187,10 +200,11 @@ def _write(dash: sqlite3.Connection, snap: _Snapshot, local_max: dict[str, int])
 def _stamp(dash: sqlite3.Connection, now: datetime, *, ok: bool, error: str | None) -> None:
     if ok:
         dash.execute(
-            """INSERT INTO mirror_status (source, last_attempt_at, last_success_at, last_error)
-               VALUES ('forge', ?, ?, NULL)
+            """INSERT INTO mirror_status (source, last_attempt_at, last_success_at, last_error, read_count)
+               VALUES ('forge', ?, ?, NULL, 1)
                ON CONFLICT(source) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,
-                   last_success_at=excluded.last_success_at, last_error=NULL""",
+                   last_success_at=excluded.last_success_at, last_error=NULL,
+                   read_count=COALESCE(mirror_status.read_count, 0) + 1""",
             (iso(now), iso(now)),
         )
     else:

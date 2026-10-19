@@ -1,9 +1,12 @@
 """FastAPI entrypoint: server-rendered pages, sessions, tenant resolution, the route guard.
 
-Server-rendered FastAPI + Jinja with HTMX for live updates. The app has no bus connection, and every
-request opens the store read-only. The one thing it writes is suggestions.db, its own small database
-for "Suggest a change" (requirement 11, backend/suggestions.py). Jinja autoescape is on, so every
-string from Forge's record (request sentences, error text) and every suggestion renders inert.
+Server-rendered FastAPI + Jinja with HTMX for live updates. Every request opens the store read-only.
+The board writes only its own two small databases beside it: suggestions.db for "Suggest a change"
+(requirement 11, backend/suggestions.py) and answers.db for answers sent from the dashboard that the
+factory has not recorded yet (backend/claims.py). Its one bus use is answering the factory's cards
+(design of 19 October 2026): backend/answers.py connects for each answer, publishes it on the card's
+own response subject and closes; nothing else in the board touches the bus. Jinja autoescape is on,
+so every string from Forge's record (request sentences, error text) and every suggestion renders inert.
 
 Sign-in (design 2026-10-17, requirement 2): accounts come from accounts.yaml in the configuration
 folder (backend/accounts.py); the signed cookie holds only the username. The account and its
@@ -17,14 +20,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 import functools
 import os
 import re
 import sys
 from collections.abc import AsyncIterator, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
@@ -45,7 +50,7 @@ from starlette.requests import ClientDisconnect
 from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from backend import accounts, auth, db, sse, suggestions, voice
+from backend import accounts, answers, auth, claims, db, sse, suggestions, voice
 from backend.chat.service import Chat, FollowUp
 from backend.config_loader import (
     PLANS_PATH,
@@ -54,7 +59,11 @@ from backend.config_loader import (
     load_plans,
     load_tenants,
 )
+from backend.readmodel import cards as cardmodel
 from backend.readmodel import dbread
+from backend.readmodel import viewmodels as vm
+from backend.readmodel.factory import load_factory
+from backend.readmodel.viewmodels import PageChrome
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = BASE_DIR / "frontend" / "templates"
@@ -215,6 +224,7 @@ def create_app(
     plans_path: Path = PLANS_PATH,
     config_dir: Path | None = None,
     freshness_poll_secs: int = 30,
+    answer_bus: answers.Bus | None = None,
 ) -> FastAPI:
     """Build the board. Refuses to start (accounts.ConfigError) without a session secret of at
     least 32 characters and a usable accounts.yaml in the configuration folder."""
@@ -234,6 +244,9 @@ def create_app(
     suggestions_path = suggestions.db_path_for(db_path.parent)
     # A corrupt or locked file is logged and the board starts anyway; the suggestion pages then say so.
     suggestions.init_db(suggestions_path)
+    # Answers sent from the dashboard and not yet recorded by the factory (backend/claims.py).
+    answers_path = claims.db_path_for(db_path.parent)
+    claims.init_db(answers_path)
 
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     # Fence 6: autoescape ON for every event-derived string.
@@ -261,12 +274,19 @@ def create_app(
     app.state.changes_path = suggestions.CHANGES_PATH
     # Voice notes for the suggestion box: speech to text only, a few an hour for each account.
     app.state.note_limit = voice.PerUserHourly()
+    # Answering the factory's cards (design of 19 October 2026): the bus is reached only from
+    # backend/answers.py, one connection per answer. No bus settings: the cards show, without buttons.
+    app.state.answers_path = answers_path
+    app.state.answer_bus = answer_bus if answer_bus is not None else answers.bus_from_env(config_dir)
 
     _register_exception_handlers(app)
     _register_routes(app)
+    _register_fragment_routes(app)
     _register_chat_routes(app)
     _register_voice_routes(app)
     _register_suggestion_routes(app)
+    _register_answer_routes(app)
+    _register_mission_routes(app)
     return app
 
 
@@ -294,7 +314,8 @@ def _resolve(request: Request) -> auth.ResolvedUser | None:
     if account is None:
         return None
     user = auth.ResolvedUser(
-        username=account.username, display_name=account.display_name, tenant_slug=account.tenant
+        username=account.username, display_name=account.display_name, tenant_slug=account.tenant,
+        approver_identity=account.approver_identity,
     )
     request.state.user = user
     return user
@@ -371,6 +392,13 @@ def _render(
         view = ctx.get("view")
         if view is not None and hasattr(view, "chrome"):
             ctx["chrome"] = view.chrome
+    # The data version also covers the answers waiting in answers.db, so an open page fetches its
+    # content again when one is recorded or is found not recorded (static/freshness.js).
+    user = getattr(request.state, "user", None)
+    chrome = ctx.get("chrome")
+    if user is not None and user.is_operator and isinstance(chrome, PageChrome):
+        ctx["chrome"] = dataclasses.replace(
+            chrome, version=f"{chrome.version}.{claims.token(request.app.state.answers_path)}")
     return templates.TemplateResponse(request, name, ctx, status_code=status_code)
 
 
@@ -462,10 +490,12 @@ def _register_routes(app: FastAPI) -> None:
         if not user.is_operator:
             # Client layout, honestly dark at S1 (D3 lights the client feed).
             return _render(request, "client_home.html", {"tenant": tenant})
+        _settle(request)
         return _render(
             request,
             "home.html",
-            {"view": dbread.home_view(request.app.state.db_path), "nav_active": "now", "tenant": tenant},
+            {"view": dbread.home_view(request.app.state.db_path), "nav_active": "now", "tenant": tenant,
+             "ax": _answer_view(request, user)},
         )
 
     # --- operator pages -----------------------------------------------------
@@ -487,6 +517,7 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.get("/features/{feature_key}", response_class=HTMLResponse)
     def feature(request: Request, feature_key: str, user: OperatorPage) -> HTMLResponse:
+        _settle(request)
         found = dbread.feature_page(request.app.state.db_path, feature_key)
         if found is None:
             return _render(
@@ -499,7 +530,8 @@ def _register_routes(app: FastAPI) -> None:
         return _render(
             request,
             "feature.html",
-            {"page": page, "chrome": chrome, "nav_active": "features", "tenant": _tenant(request, user)},
+            {"page": page, "chrome": chrome, "nav_active": "features", "tenant": _tenant(request, user),
+             "ax": _answer_view(request, user)},
         )
 
     @app.get("/projects", response_class=HTMLResponse)
@@ -586,12 +618,31 @@ def _register_routes(app: FastAPI) -> None:
         # the dashboard is reading the factory's record, and when it last did.
         return JSONResponse(dbread.health(request.app.state.db_path))
 
+    # --- SSE push channel (design §6): notification-only panel_update stream --
+
+    @app.get("/events")
+    async def events(request: Request, panels: str | None = None, once: bool = False) -> Response:
+        user = _resolve(request)
+        if user is None:
+            raise HTTPException(status_code=401, detail="login required")
+        if not user.is_operator:
+            raise HTTPException(status_code=403, detail="operator only")
+        gen = _sse_stream(request, request.app.state.db_path, sse.parse_panels(panels),
+                          _last_event_id(request), once)
+        return StreamingResponse(gen, media_type="text/event-stream")
+
+
+def _register_fragment_routes(app: FastAPI) -> None:
+    """The live-update fragments, refetched when the feed records a change, and the freshness poll."""
+
     # --- live-update fragments (refetched when the feed records a change) ---
 
     @app.get("/fragments/freshness", response_class=HTMLResponse)
     def freshness_fragment(request: Request, user: OperatorApi) -> HTMLResponse:
         # Polled by every page every 30 s: the read time and, when the record is not being read,
         # the stale banner. Independent of the change notifications, which stop when reads stop.
+        # It also settles the answers sent from the dashboard against the record (backend/claims.py).
+        _settle(request)
         chrome = dbread.chrome_view(request.app.state.db_path)
         return _render(request, "fragments/freshness.html", {"chrome": chrome, "standalone": True})
 
@@ -607,22 +658,12 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="unknown panel")
         # The Delivered panel keeps the window of the page it sits on.
         window = (from_, to) if from_ and to else None
+        if panel == "p4":
+            _settle(request)
         view = dbread.panel_view(request.app.state.db_path, panel, window=window)
         template = f"fragments/{_FRAGMENT_TEMPLATES[panel]}"
-        return _render(request, template, {"panel": view, "standalone": True})
-
-    # --- SSE push channel (design §6): notification-only panel_update stream --
-
-    @app.get("/events")
-    async def events(request: Request, panels: str | None = None, once: bool = False) -> Response:
-        user = _resolve(request)
-        if user is None:
-            raise HTTPException(status_code=401, detail="login required")
-        if not user.is_operator:
-            raise HTTPException(status_code=403, detail="operator only")
-        gen = _sse_stream(request, request.app.state.db_path, sse.parse_panels(panels),
-                          _last_event_id(request), once)
-        return StreamingResponse(gen, media_type="text/event-stream")
+        extra = {"ax": _answer_view(request, user)} if panel == "p4" else {}
+        return _render(request, template, {"panel": view, "standalone": True, **extra})
 
 
 def _register_chat_routes(app: FastAPI) -> None:
@@ -825,6 +866,154 @@ def _register_suggestion_routes(app: FastAPI) -> None:
         return _render(request, "changes.html", {
             "days": suggestions.read_changes(request.app.state.changes_path), "nav_active": "",
             "tenant": _tenant(request, user)})
+
+
+def _register_mission_routes(app: FastAPI) -> None:
+    """A mission's own page: its plan, its features and its cards."""
+
+    @app.get("/missions/{mission_id}", response_class=HTMLResponse)
+    def mission(request: Request, mission_id: str, user: OperatorPage) -> HTMLResponse:
+        _settle(request)
+        found = dbread.mission_page(request.app.state.db_path, mission_id)
+        if found is None:
+            return _render(request, "feature_missing.html",
+                           {"feature_id": mission_id, "nav_active": "", "tenant": _tenant(request, user),
+                            "chrome": dbread.chrome_view(request.app.state.db_path), "missing_noun": "mission"})
+        chrome, page = found
+        return _render(request, "mission.html", {"page": page, "chrome": chrome, "nav_active": "",
+                                                 "tenant": _tenant(request, user), "ax": _answer_view(request, user)})
+
+
+# --- answering the factory's cards (design of 19 October 2026) --------------------------------------
+
+
+def _settle(request: Request) -> None:
+    claims.settle(request.app.state.answers_path, request.app.state.db_path)
+
+
+@dataclasses.dataclass(frozen=True)
+class AnswerView:
+    """What a page needs to show a card's buttons and its answer's state, for one viewer."""
+
+    can_answer: bool
+    why_not: str                              # "" or why this viewer sees no buttons
+    viewer: str
+    waiting: dict[str, claims.Claim]          # request id -> the answer sent from the dashboard
+    marks: dict[str, claims.Mark]
+    names: dict[str, str]                     # approver identity -> display name
+    notice: str = ""                          # the sentence after a press
+    notice_card: str = ""                     # the request id it is about
+
+    def who(self, identity: str) -> str:
+        return self.names.get(identity, identity) or "someone"
+
+    def when(self, at: datetime | None) -> str:
+        return answers.when_words(at)
+
+    def iso(self, at: datetime | None) -> str:
+        return vm.fmt_iso(at) if at else ""
+
+    def age(self, card: cardmodel.Card) -> str:
+        if card.opened_at is None:
+            return ""
+        return vm.fmt_age((datetime.now(UTC) - card.opened_at).total_seconds())
+
+    def state(self, card: cardmodel.Card) -> str:
+        """The answer's state on an open card: sent and waiting, or not recorded."""
+        claim = self.waiting.get(card.request_id)
+        if not card.open or claim is None:
+            return ""
+        if claim.state == claims.NOT_RECORDED:
+            return answers.NOT_RECORDED
+        if claim.username == self.viewer:
+            return answers.SENT
+        return answers.WAITING.format(who=claim.display_name, when=answers.when_words(claim.claimed_at))
+
+    def buttons(self, card: cardmodel.Card) -> tuple[cardmodel.Button, ...]:
+        claim = self.waiting.get(card.request_id)
+        if not self.can_answer or (claim is not None and claim.state == claims.WAITING):
+            return ()
+        mark = self.marks.get(card.request_id)
+        waiting = mark is not None and mark.state == claims.REQUESTED
+        return tuple(b for b in card.buttons if not (b.answer == "rebuild" and waiting))
+
+    def rebuild_line(self, card: cardmodel.Card) -> str:  # noqa: PLR0911 (one return per state)
+        """What the record proves about a rebuild of this card's preview (design, "Rebuilding the preview")."""
+        rb = card.rebuild
+        if rb is None or not card.open:
+            return ""
+        mark = self.marks.get(card.request_id)
+        if rb.wanted_at and (mark is None or mark.state == claims.REQUESTED):
+            return "Waiting for room to rebuild."
+        if mark is None:
+            return ""
+        if mark.state == claims.REQUESTED:
+            return "Rebuild requested."
+        if mark.state == claims.DONE:
+            if rb.state == "ready":
+                return "Rebuilt."
+            return f"The rebuild failed: {rb.failure or 'no reason was recorded'}."
+        return "Can't confirm the rebuild yet. You may ask again."
+
+
+def _answer_view(request: Request, user: auth.ResolvedUser) -> AnswerView:
+    bus = request.app.state.answer_bus
+    can = user.can_answer and answers.bus_ready(bus)
+    why = "" if can else (answers.OFF if user.can_answer else "")
+    found_claims, marks = claims.read_all(request.app.state.answers_path)
+    store: accounts.AccountStore = request.app.state.accounts
+    names = {a.approver_identity: a.display_name for a in store.all().values() if a.approver_identity}
+    view = AnswerView(can, why, user.username, found_claims, marks, names)
+    code, rid = request.query_params.get("said", ""), request.query_params.get("card", "")
+    if not answers.known_code(code) or not rid or len(rid) > 300:
+        return view
+    card = None
+    if code == "already":
+        conn = dbread.snapshot(request.app.state.db_path)
+        try:
+            card = cardmodel.find(load_factory(conn), rid)
+        finally:
+            conn.close()
+    text = answers.notice(code, card, found_claims.get(rid), view.who)
+    return dataclasses.replace(view, notice=text, notice_card=rid)
+
+
+_ANSWER_PAGES = re.compile(r"/(features/[^/?#]+|missions/[^/?#]+)?")
+
+
+def _back(raw: str) -> str:
+    """The page to return to: the Now page, a feature page or a mission page on this board."""
+    page = suggestions.clean_page(raw).split("?", 1)[0]
+    return page if page and _ANSWER_PAGES.fullmatch(page) else "/"
+
+
+def _register_answer_routes(app: FastAPI) -> None:
+    """One route for every card's buttons: operators with an approver identity only, same-origin
+    only, after the form-size check (FormSizeLimit) like every other form."""
+
+    @app.post("/cards/answer")
+    async def card_answer(
+                          request: Request, user: OperatorApi, request_id: OptionalFormText = "",
+                          kind: OptionalFormText = "", token: OptionalFormText = "",
+                          answer: OptionalFormText = "", note: LongFormText = "",
+                          back: OptionalFormText = "") -> Response:
+        if not same_origin(request):
+            return HTMLResponse(answers.CROSS_SITE, status_code=403)
+        if not user.can_answer:
+            return HTMLResponse(answers.NO_IDENTITY, status_code=403)
+        bus = request.app.state.answer_bus
+        if not answers.bus_ready(bus):
+            return HTMLResponse(answers.OFF, status_code=503)
+        if not request_id:
+            return HTMLResponse(answers.UNKNOWN, status_code=400)
+        outcome = await answers.submit(
+            db_path=request.app.state.db_path, store=request.app.state.answers_path, bus=bus, user=user,
+            decided_by=user.approver_identity, request_id=request_id, kind=kind, token=token, answer=answer,
+            note=note)
+        code = answers.REFUSAL_CODES.get(outcome.sentence, "unknown") if outcome.code == "refused" else outcome.code
+        anchor = cardmodel.Card.anchor_for(outcome.request_id)
+        return RedirectResponse(f"{_back(back)}?said={code}&card={quote(outcome.request_id, safe='')}#{anchor}",
+                                status_code=303)
 
 
 _FRAGMENT_TEMPLATES: dict[str, str] = {
