@@ -443,3 +443,37 @@ def test_the_feed_copies_publication_records_and_target_branches(store: Path) ->
         assert conn.execute("SELECT target_branch FROM forge_builds WHERE build_id='bL'").fetchone() == (None,)
     finally:
         conn.close()
+
+
+def test_mission_parts_match_on_a_boundary_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two missions whose ids are prefixes of one another: `m-abcd-K2-a1` starts with `m-abc` but
+    not with `m-abc-`, so each part (and its calls) counts only for its own mission."""
+    monkeypatch.setattr(forge_fake, "T0", T)
+    fake = ForgeFake(tmp_path / "forge.db")
+    spend = FakeSpend(T)
+    for mid, corr, part, key, code, tokens in (("m-1", "m-abc", "m-abc-K1-a1", "K1", "FEAT-0101", 1_000),
+                                                ("m-2", "m-abcd", "m-abcd-K2-a1", "K2", "FEAT-0102", 7_000)):
+        fake.mission(mid, f"Mission {key}", corr, status="MERGED", closed=170)
+        fake.planning(part, f"Part {key}.", state="FAILED", start=100, end=110, error="The planner gave up.")
+        fake.build(f"b-{mid}", code, f"{corr}-merge", queued=160, started=160, completed=165, mission_id=mid,
+                   mission_role="mission-merge")
+        fake.merge_decision(f"b-{mid}", 165)
+        fake.merged(f"b-{mid}", 166)
+        spend.add(f"s-{key}", 105, part, prompt=tokens, completion=tokens // 10)
+    path = tmp_path / "readmodel.db"
+    conn = store_from(fake, path, NOW)
+    import_once(conn, spend, NOW)
+    conn.close()
+
+    conn = dbread.snapshot(path)
+    try:
+        factory = load_factory(conn, NOW)
+    finally:
+        conn.close()
+    parts = mission_parts(factory)
+    assert [f.key for f in parts["m-1"]] == ["m-abc-K1-a1"]
+    assert [f.key for f in parts["m-2"]] == ["m-abcd-K2-a1"]
+    merges = build_summary(path, NOW)["merges"]
+    abc, abcd = SpendSlot(**merges["b-m-1"]), SpendSlot(**merges["b-m-2"])
+    assert abc.calls == 1 and abc.amount_usd == pytest.approx(_cost(1_000, 100))
+    assert abcd.calls == 1 and abcd.amount_usd == pytest.approx(_cost(7_000, 700))

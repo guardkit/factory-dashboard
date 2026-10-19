@@ -113,14 +113,16 @@ def _mission_by_prefix(f: Feature, missions: dict[str, Mission]) -> Mission | No
     """The mission of `missions` (keyed by correlation id; any missions, Linear or not) a feature is
     a part of. Forge names each part's attempt `<mission correlation id>-<KEY>-a<n>` (planning run,
     queue item and build alike), and only a part that reached a build carries the mission's id, so
-    a part that stopped in planning is found by that prefix. When two missions' ids both prefix a
-    tag, the longer (the more exact) wins."""
+    a part that stopped in planning is found by that prefix. The match is on a boundary only: a tag
+    equals the mission's id, or starts with the id followed by "-" (so `m-abcd-K2-a1` is never a
+    part of `m-abc`). When two missions' ids both match a tag, the longer (the more exact) wins."""
     if f.mission is not None and f.mission.correlation_id in missions:
         return f.mission
     found: Mission | None = None
     for tag in feature_tags(f):
         for corr, m in missions.items():
-            if corr and tag.startswith(corr + "-") and (found is None or len(corr) > len(found.correlation_id)):
+            if (corr and (tag == corr or tag.startswith(corr + "-"))
+                    and (found is None or len(corr) > len(found.correlation_id))):
                 found = m
     return found
 
