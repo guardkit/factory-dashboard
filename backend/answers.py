@@ -28,7 +28,7 @@ How one answer goes (``submit``):
 it keeps its own per-offer mark instead (claims.ask_rebuild).
 
 Settings: ``FACTORY_DASH_NATS_URL`` (the bus, for example ``nats://127.0.0.1:4222``; empty switches
-answering off) and ``FACTORY_DASH_APPROVE_PASSWORD_FILE`` (default: ``dashboard_approve_password``
+answering off) and ``FACTORY_DASH_APPROVE_PASSWORD_FILE`` (default: ``dashboard_approve_nats_password``
 in the configuration folder).
 """
 
@@ -64,7 +64,7 @@ log = logging.getLogger("factory_dashboard.answers")
 BUS_USER = "dashboard_approve"
 NATS_URL_ENV = "FACTORY_DASH_NATS_URL"
 PASSWORD_FILE_ENV = "FACTORY_DASH_APPROVE_PASSWORD_FILE"
-PASSWORD_FILE_NAME = "dashboard_approve_password"
+PASSWORD_FILE_NAME = "dashboard_approve_nats_password"
 SOURCE_ID = "dashboard"
 EVENT_TYPE = "approval_response"
 CONNECT_TIMEOUT_SECS = 5.0

@@ -40,7 +40,10 @@ and compose refuses to start it if the folder itself is missing.
    defaults to `operator`, which sees the factory pages). To let the person answer the factory's
    cards from the dashboard, add `approver_identity`: the identity the factory accepts for them
    (see `accounts.example.yaml` and docs/runbook.md, "Answering cards"); without it they see the
-   cards but no buttons. The board notices edits to the file by
+   cards but no buttons. The board answers through the bus as the `dashboard_approve` user, whose
+   password goes in `dashboard_approve_nats_password` in this same folder (`chmod 600`; the board
+   sees it as `/config/dashboard_approve_nats_password`), with the bus address in
+   `FACTORY_DASH_NATS_URL` in `./.env`. The board notices edits to the file by
    itself; removing an account signs that person out, and a file it cannot read lets nobody in.
 
 3. Start or recreate the board: `docker compose up -d board`.

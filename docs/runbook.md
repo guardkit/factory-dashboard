@@ -100,7 +100,7 @@ review, the sign-in question, the go-ahead to build, a mission's plan and the me
 - **Who gets buttons:** an operator account with `approver_identity` in `accounts.yaml` (README,
   "Accounts and access"). Everyone else sees the cards with no buttons. Client accounts never do.
 - **The bus:** set `FACTORY_DASH_NATS_URL` in `./.env` and put the `dashboard_approve` user's
-  password in `dashboard_approve_password` in the config folder (`chmod 600`). The board connects
+  password in `dashboard_approve_nats_password` in the config folder (`chmod 600`). The board connects
   for each answer, publishes it and closes; it holds no lasting connection, so a bus restart needs
   nothing here. If the bus can't be reached, the page says so in one sentence and the person can
   press again.

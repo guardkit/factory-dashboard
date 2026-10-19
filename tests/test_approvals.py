@@ -759,7 +759,9 @@ def test_answers_need_bus_settings(tmp_path: Path, config_dir: Path, monkeypatch
         assert r.status_code == 503
     monkeypatch.setenv(answers.NATS_URL_ENV, "nats://127.0.0.1:4222")
     bus = answers.bus_from_env(config_dir)
-    assert bus is not None and bus.password_file == config_dir / answers.PASSWORD_FILE_NAME and not bus.ready()
+    # The name the bus side's estate README gives it: /config/dashboard_approve_nats_password.
+    assert answers.PASSWORD_FILE_NAME == "dashboard_approve_nats_password"
+    assert bus is not None and bus.password_file == config_dir / "dashboard_approve_nats_password" and not bus.ready()
     (config_dir / answers.PASSWORD_FILE_NAME).write_text("not-a-real-password\n", encoding="utf-8")
     assert bus.ready()
 

@@ -52,7 +52,7 @@ services:
       FACTORY_DASH_SPOKEN_WORDS: ${FACTORY_DASH_SPOKEN_WORDS:-}
       # Answering the factory's cards (docs/runbook.md "Answering cards"): the bus address, from ./.env.
       # Empty: the cards show with no buttons. The dashboard_approve password is read from
-      # /config/dashboard_approve_password unless FACTORY_DASH_APPROVE_PASSWORD_FILE names another file.
+      # /config/dashboard_approve_nats_password unless FACTORY_DASH_APPROVE_PASSWORD_FILE names another file.
       FACTORY_DASH_NATS_URL: ${FACTORY_DASH_NATS_URL:-}
       FACTORY_DASH_APPROVE_PASSWORD_FILE: ${FACTORY_DASH_APPROVE_PASSWORD_FILE:-}
     volumes:
