@@ -130,6 +130,7 @@ class PlanningEvent:
     status: str
     at: datetime
     details: dict[str, object]
+    actor: str = ""                    # actor_identity: who answered, on a card's verdict row
 
 
 @dataclass(frozen=True)
@@ -148,6 +149,7 @@ class Build:
     mission_id: str
     mission_role: str
     stages: tuple[StageRow, ...]
+    pending_request_id: str = ""       # the build gate's card while the build is PAUSED
 
     @property
     def is_mission_merge(self) -> bool:
@@ -216,6 +218,7 @@ class PlanningRun:
     completed_at: datetime | None
     error: str
     events: tuple[PlanningEvent, ...]
+    pending_request_id: str = ""       # the older assumptions checkpoint's card while PAUSED
 
     @property
     def active(self) -> bool:
@@ -258,6 +261,16 @@ class QueueItem:
 
 
 @dataclass(frozen=True)
+class MissionFeature:
+    """One feature of a mission's plan, in Forge's order, with the keys it needs first."""
+
+    key: str
+    sentence: str
+    needs: tuple[str, ...]
+    no_sign_in: bool
+
+
+@dataclass(frozen=True)
 class Mission:
     id: str
     title: str
@@ -268,6 +281,15 @@ class Mission:
     closed_at: datetime | None
     closed_reason: str
     merge_build: Build | None
+    plan_request_id: str = ""
+    originating_user: str = ""
+    approved_by: str = ""
+    approved_at: datetime | None = None
+    plan: tuple[MissionFeature, ...] = ()
+
+    @property
+    def link(self) -> str:
+        return f"/missions/{self.id}"
 
     def delivered_at(self) -> datetime | None:
         if self.merge_build is None:
@@ -490,13 +512,14 @@ def _load_builds(conn: sqlite3.Connection) -> list[Build]:
     builds = []
     for r in conn.execute(
         "SELECT build_id, feature_id, repo, project, status, triggered_by, correlation_id, queued_at, "
-        "started_at, completed_at, error, mission_id, mission_role FROM forge_builds"
+        "started_at, completed_at, error, mission_id, mission_role, pending_approval_request_id FROM forge_builds"
     ):
         builds.append(Build(
             build_id=r[0], code=_s(r[1]), repo=_s(r[2]), project=_s(r[3]) or _s(r[2]), status=_s(r[4]),
             triggered_by=_s(r[5]), correlation_id=_s(r[6]), queued_at=parse_dt(r[7]),
             started_at=parse_dt(r[8]), completed_at=parse_dt(r[9]), error=_s(r[10]),
             mission_id=_s(r[11]), mission_role=_s(r[12]), stages=tuple(stages.get(r[0], ())),
+            pending_request_id=_s(r[13]),
         ))
     builds.sort(key=lambda b: (b.queued_at or datetime.min.replace(tzinfo=UTC), b.build_id))
     return builds
@@ -505,23 +528,23 @@ def _load_builds(conn: sqlite3.Connection) -> list[Build]:
 def _load_planning(conn: sqlite3.Connection) -> dict[str, PlanningRun]:
     events: dict[str, list[PlanningEvent]] = defaultdict(list)
     for r in conn.execute(
-        "SELECT id, correlation_id, stage_label, status, recorded_at, details_json "
+        "SELECT id, correlation_id, stage_label, status, recorded_at, details_json, actor_identity "
         "FROM forge_planning_events ORDER BY id"
     ):
         at = parse_dt(r[4])
         if at is None:
             continue
-        events[r[1]].append(PlanningEvent(int(r[0]), _s(r[2]), _s(r[3]), at, _details(r[5])))
+        events[r[1]].append(PlanningEvent(int(r[0]), _s(r[2]), _s(r[3]), at, _details(r[5]), _s(r[6])))
     runs = {}
     for r in conn.execute(
         "SELECT correlation_id, state, originating_user, expected_approver, request_text, target_repo, "
-        "queued_at, started_at, completed_at, error FROM forge_planning_runs"
+        "queued_at, started_at, completed_at, error, pending_approval_request_id FROM forge_planning_runs"
     ):
         runs[r[0]] = PlanningRun(
             correlation_id=r[0], state=_s(r[1]), originating_user=_s(r[2]), expected_approver=_s(r[3]),
             request_text=_s(r[4]), target_repo=_s(r[5]), queued_at=parse_dt(r[6]),
             started_at=parse_dt(r[7]), completed_at=parse_dt(r[8]), error=_s(r[9]),
-            events=tuple(events.get(r[0], ())),
+            events=tuple(events.get(r[0], ())), pending_request_id=_s(r[10]),
         )
     return runs
 
@@ -540,17 +563,35 @@ def _load_queue(conn: sqlite3.Connection) -> dict[str, QueueItem]:
     return out
 
 
+def _load_plans(conn: sqlite3.Connection) -> dict[str, tuple[MissionFeature, ...]]:
+    """Each mission's features in Forge's order, with what each needs (Forge's `missions.features`)."""
+    needs: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for mid, key, needed in conn.execute(
+        "SELECT mission_id, key, needs_key FROM forge_mission_needs ORDER BY forge_order, rowid"
+    ):
+        needs[(_s(mid), _s(key))].append(_s(needed))
+    plans: dict[str, list[MissionFeature]] = defaultdict(list)
+    for mid, key, sentence, no_sign_in in conn.execute(
+        "SELECT mission_id, key, sentence, no_sign_in FROM forge_mission_features ORDER BY forge_order, rowid"
+    ):
+        plans[_s(mid)].append(MissionFeature(_s(key), _s(sentence), tuple(needs.get((_s(mid), _s(key)), ())),
+                                             bool(no_sign_in)))
+    return {mid: tuple(rows) for mid, rows in plans.items()}
+
+
 def _load_missions(conn: sqlite3.Connection, builds: Sequence[Build]) -> dict[str, Mission]:
     merges = {b.mission_id: b for b in builds if b.is_mission_merge and b.mission_id}
+    plans = _load_plans(conn)
     out = {}
     for r in conn.execute(
-        "SELECT id, title, target_repo, status, correlation_id, created_at, closed_at, closed_reason "
-        "FROM forge_missions"
+        "SELECT id, title, target_repo, status, correlation_id, created_at, closed_at, closed_reason, "
+        "plan_request_id, originating_user, approved_by, approved_at FROM forge_missions"
     ):
         out[r[0]] = Mission(
             id=r[0], title=_s(r[1]), target_repo=_s(r[2]), status=_s(r[3]), correlation_id=_s(r[4]),
             created_at=parse_dt(r[5]), closed_at=parse_dt(r[6]), closed_reason=_s(r[7]),
-            merge_build=merges.get(r[0]),
+            merge_build=merges.get(r[0]), plan_request_id=_s(r[8]), originating_user=_s(r[9]),
+            approved_by=_s(r[10]), approved_at=parse_dt(r[11]), plan=plans.get(r[0], ()),
         )
     return out
 

@@ -1,11 +1,12 @@
 {% extends "base.html" %}
+{% set noun = missing_noun | default('feature') %}
 {% block title %}Not found · Appmilla Factory{% endblock %}
 {% block content %}
 <header class="page-head">
-  <p class="page-eyebrow">Features</p>
-  <h1 class="page-title">No feature called {{ feature_id }}</h1>
+  <p class="page-eyebrow">{{ 'Missions' if noun == 'mission' else 'Features' }}</p>
+  <h1 class="page-title">No {{ noun }} called {{ feature_id }}</h1>
 </header>
 <p class="true-empty feature-missing"><b>Nothing on record with this name</b>
-  <span>The factory's record has no feature or request with this name. It appears here once
+  <span>The factory's record has no {{ 'mission' if noun == 'mission' else 'feature or request' }} with this name. It appears here once
   the factory records it. <a href="/features">See all features</a>.</span></p>
 {% endblock %}

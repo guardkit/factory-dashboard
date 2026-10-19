@@ -23,7 +23,7 @@ CREATE TABLE builds (
     triggered_by TEXT NOT NULL DEFAULT 'jarvis', originating_adapter TEXT, originating_user TEXT,
     correlation_id TEXT NOT NULL, parent_request_id TEXT, queued_at TEXT NOT NULL, started_at TEXT,
     completed_at TEXT, worktree_path TEXT, pr_url TEXT, error TEXT, terminal_class TEXT,
-    mission_id TEXT, mission_role TEXT);
+    mission_id TEXT, mission_role TEXT, pending_approval_request_id TEXT);
 CREATE TABLE stage_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT, build_id TEXT NOT NULL, stage_label TEXT NOT NULL,
     target_kind TEXT NOT NULL DEFAULT 'local_tool', target_identifier TEXT NOT NULL, status TEXT NOT NULL,
@@ -34,7 +34,8 @@ CREATE TABLE planning_runs (
     expected_approver TEXT NOT NULL, request_text TEXT NOT NULL, target_repo TEXT,
     triggered_by TEXT NOT NULL DEFAULT 'jarvis', defer_count INTEGER NOT NULL DEFAULT 0,
     paused_at TEXT, escalated_at TEXT, handoff_branch TEXT, handoff_path TEXT,
-    queued_at TEXT NOT NULL, started_at TEXT, completed_at TEXT, error TEXT);
+    queued_at TEXT NOT NULL, started_at TEXT, completed_at TEXT, error TEXT,
+    pending_approval_request_id TEXT, parent_request_id TEXT);
 CREATE TABLE planning_run_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, correlation_id TEXT NOT NULL, stage_label TEXT NOT NULL,
     status TEXT NOT NULL, gate_mode TEXT, coach_score REAL, actor_identity TEXT, details_json TEXT,
@@ -47,7 +48,13 @@ CREATE TABLE work_queue (
 CREATE TABLE missions (
     id TEXT PRIMARY KEY, title TEXT NOT NULL, target_repo TEXT NOT NULL, branch TEXT NOT NULL,
     status TEXT NOT NULL, correlation_id TEXT NOT NULL UNIQUE, originating_user TEXT NOT NULL DEFAULT 'U1',
-    created_at TEXT NOT NULL, closed_at TEXT, closed_reason TEXT);
+    plan_request_id TEXT, created_at TEXT NOT NULL, approved_at TEXT, approved_by TEXT, closed_at TEXT,
+    closed_reason TEXT);
+CREATE TABLE mission_features (
+    mission_id TEXT NOT NULL, key TEXT NOT NULL, sentence TEXT NOT NULL, no_sign_in INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (mission_id, key));
+CREATE TABLE mission_needs (
+    mission_id TEXT NOT NULL, key TEXT NOT NULL, needs_key TEXT NOT NULL, PRIMARY KEY (mission_id, key, needs_key));
 """
 
 T0 = datetime(2026, 10, 16, 9, 0, tzinfo=UTC)
@@ -75,10 +82,10 @@ class ForgeFake:
         )
 
     def event(self, corr: str, label: str, status: str, minute: float,
-              details: dict[str, object] | None = None) -> None:
+              details: dict[str, object] | None = None, actor: str | None = None) -> None:
         self.conn.execute(
-            "INSERT INTO planning_run_events (correlation_id, stage_label, status, details_json, recorded_at) "
-            "VALUES (?,?,?,?,?)", (corr, label, status, json.dumps(details or {}), at(minute)),
+            "INSERT INTO planning_run_events (correlation_id, stage_label, status, details_json, recorded_at, "
+            "actor_identity) VALUES (?,?,?,?,?,?)", (corr, label, status, json.dumps(details or {}), at(minute), actor),
         )
 
     def queue(self, corr: str, text: str, *, status: str = "DONE", minute: float = -1,

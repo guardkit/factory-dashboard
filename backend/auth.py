@@ -48,7 +48,13 @@ class ResolvedUser:
     username: str
     display_name: str
     tenant_slug: str
+    approver_identity: str = ""   # who this account answers the factory's cards as ("" = no buttons)
 
     @property
     def is_operator(self) -> bool:
         return self.tenant_slug == "operator"
+
+    @property
+    def can_answer(self) -> bool:
+        """Only an operator account with an approver identity may answer a card."""
+        return self.is_operator and bool(self.approver_identity)

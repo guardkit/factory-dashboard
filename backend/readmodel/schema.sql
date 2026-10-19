@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS mirror_status (
     last_attempt_at TEXT,
     last_success_at TEXT,
     last_error      TEXT,
-    content_hash    TEXT
+    content_hash    TEXT,
+    read_count      INTEGER NOT NULL DEFAULT 0   -- successful reads so far; only ever rises
 );
 
 -- ---------------------------------------------------------------------------------------------
@@ -81,7 +82,8 @@ CREATE TABLE IF NOT EXISTS forge_builds (
     error             TEXT,
     terminal_class    TEXT,
     mission_id        TEXT,
-    mission_role      TEXT   -- 'feature', 'mission-merge' (a mission's own merge, not a feature), or NULL
+    mission_role      TEXT,  -- 'feature', 'mission-merge' (a mission's own merge, not a feature), or NULL
+    pending_approval_request_id TEXT   -- the build gate's card while the build is PAUSED
 );
 CREATE INDEX IF NOT EXISTS forge_builds_feature ON forge_builds(feature_id);
 CREATE INDEX IF NOT EXISTS forge_builds_correlation ON forge_builds(correlation_id);
@@ -113,7 +115,9 @@ CREATE TABLE IF NOT EXISTS forge_planning_runs (
     queued_at         TEXT,
     started_at        TEXT,
     completed_at      TEXT,
-    error             TEXT
+    error             TEXT,
+    pending_approval_request_id TEXT,  -- the older assumptions checkpoint's card while PAUSED
+    parent_request_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS forge_planning_events (
@@ -151,7 +155,29 @@ CREATE TABLE IF NOT EXISTS forge_missions (
     correlation_id TEXT,
     created_at     TEXT,
     closed_at      TEXT,
-    closed_reason  TEXT
+    closed_reason  TEXT,
+    plan_request_id  TEXT,   -- the plan card's request id, once it was sent
+    originating_user TEXT,
+    approved_by      TEXT,   -- who approved the plan (Forge does not record who rejected one)
+    approved_at      TEXT
+);
+
+-- A mission's plan: its features in Forge's order (forge_order is Forge's rowid) and what each needs.
+CREATE TABLE IF NOT EXISTS forge_mission_features (
+    forge_order INTEGER,
+    mission_id  TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    sentence    TEXT,
+    no_sign_in  INTEGER,
+    PRIMARY KEY (mission_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS forge_mission_needs (
+    forge_order INTEGER,
+    mission_id  TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    needs_key   TEXT NOT NULL,
+    PRIMARY KEY (mission_id, key, needs_key)
 );
 
 -- ---------------------------------------------------------------------------------------------

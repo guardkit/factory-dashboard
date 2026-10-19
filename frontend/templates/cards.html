@@ -1,0 +1,117 @@
+{# The factory's cards (design of 19 October 2026): what each card shows beside its buttons, the
+   buttons themselves, and, once the card has closed, only what Forge recorded for it. One plain
+   form per button, so nothing needs a script; the redesign's button and card classes carry the look.
+   `ax` is the viewer's AnswerView (backend/app.py): whether this viewer may answer, the state of an
+   answer already sent, and the sentence after a press. `back` is the page the form returns to. #}
+{% import 'macros.html' as m %}
+
+{% macro evidence(card, full=True) -%}
+{% set ev = card.evidence %}
+{% if ev.heading %}<p class="answer-card__heading">{{ ev.heading }}</p>{% endif %}
+{% if full %}
+  {% for line in ev.lines %}<p class="answer-card__line">{{ line }}</p>{% endfor %}
+  {% if ev.examples %}
+  <p class="answer-card__label">What it will do</p>
+  <ol class="answer-card__list">{% for e in ev.examples %}<li>{{ e }}</li>{% endfor %}</ol>
+  {% endif %}
+  {% if ev.assumptions %}
+  <p class="answer-card__label">What the machine assumed</p>
+  <ol class="answer-card__list">{% for a, why in ev.assumptions %}<li>{{ a }}{% if why %} <span class="answer-card__why">(why: {{ why }})</span>{% endif %}</li>{% endfor %}</ol>
+  {% elif card.kind == 'spec_review' %}
+  <p class="answer-card__line">The spec makes no assumptions of its own.</p>
+  {% endif %}
+  {% if ev.sign_in %}
+  <p class="answer-card__label">One thing to confirm</p>
+  <p class="answer-card__line">{{ ev.sign_in }} Approving the spec counts as agreeing that nothing here involves signing in.</p>
+  {% endif %}
+  {% if ev.plan %}
+  <p class="answer-card__label">The plan, in the order the factory filed it</p>
+  <ol class="answer-card__list answer-card__plan">
+  {% for f in ev.plan %}<li><b>{{ f.key }}</b>: {{ f.sentence }}{% if f.needs %} <span class="answer-card__why">(needs {{ f.needs | join(', ') }} first)</span>{% endif %}{% if f.no_sign_in %} <span class="answer-card__why">(no sign-in)</span>{% endif %}</li>{% endfor %}
+  </ol>
+  {% endif %}
+{% else %}
+  {% if ev.lines and card.kind in ('merge', 'build_gate', 'paused') %}
+  <p class="answer-card__line">{{ ev.lines[-1] if card.kind == 'merge' else ev.lines[0] }}</p>
+  {% endif %}
+  {# Forge reads an approve that leaves the sign-in question unanswered as "no sign-in", so the
+     short card says so beside the button too. #}
+  {% if ev.sign_in %}
+  <p class="answer-card__line">{{ ev.sign_in }} Approving the spec counts as agreeing that nothing here involves signing in.</p>
+  {% endif %}
+{% endif %}
+{% if ev.preview_url or ev.report_url %}
+<p class="answer-card__links">
+  {% if ev.preview_url %}<a href="{{ ev.preview_url }}" rel="noopener noreferrer" target="_blank">Try the preview</a>{% endif %}
+  {% if ev.preview_url and ev.report_url %} · {% endif %}
+  {% if ev.report_url %}<a href="{{ ev.report_url }}" rel="noopener noreferrer" target="_blank">Read the test report</a>{% endif %}
+</p>
+{% endif %}
+{%- endmacro %}
+
+{% macro recorded(card, ax) -%}
+{% set r = card.recorded %}
+<p class="answer-card__recorded">{% if r.answered %}<b>{{ ax.who(r.who) if ax else r.who }}</b> {{ r.text }}{% if r.notes %}: “{{ r.notes }}”{% endif %}{% if r.at %} at <span title="{{ ax.iso(r.at) if ax else '' }}">{{ ax.when(r.at) if ax else '' }}</span>{% endif %}.{% else %}{{ r.text }}{% endif %}</p>
+{%- endmacro %}
+
+{% macro buttons(card, ax, back) -%}
+{% set shown = ax.buttons(card) if ax else () %}
+{% if shown %}
+<div class="answer-card__actions">
+  {% for b in shown %}
+  <form method="post" action="/cards/answer" class="answer-form">
+    <input type="hidden" name="request_id" value="{{ card.request_id }}">
+    <input type="hidden" name="kind" value="{{ card.kind }}">
+    <input type="hidden" name="token" value="{{ card.token }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    {% if b.note %}
+    <label class="answer-form__label" for="{{ card.anchor }}-{{ b.answer }}-note">{{ b.note_label }}</label>
+    <textarea class="answer-form__note" id="{{ card.anchor }}-{{ b.answer }}-note" name="note" rows="2" maxlength="2000"{% if b.note == 'required' %} required{% endif %}></textarea>
+    {% endif %}
+    <button type="submit" name="answer" value="{{ b.answer }}" class="{{ 'button--primary' if b.primary else 'button--secondary' }} button--block">{{ b.label }}</button>
+  </form>
+  {% endfor %}
+</div>
+{% endif %}
+{%- endmacro %}
+
+{# One card. `full` shows all its evidence (the feature and mission pages); otherwise a short form
+   for the Now page's Needs-you band, with a link to the whole card. #}
+{% macro card_box(card, ax, back, full=True) -%}
+<article class="panel-card answer-card answer-card--{{ card.kind | replace('_', '-') }}{% if card.open %} answer-card--open{% endif %}" id="{{ card.anchor }}" data-request-id="{{ card.request_id }}" aria-labelledby="{{ card.anchor }}-title">
+  <header class="panel-card__header answer-card__head">
+    <h3 class="panel-card__title answer-card__title" id="{{ card.anchor }}-title">{{ card.title }}{% if not full %}: <a href="{{ card.link }}#{{ card.anchor }}">{{ card.subject }}</a>{% endif %}</h3>
+    {% if card.open %}{{ m.status_pill('wait', 'Waiting', ax.age(card) if ax else '') }}{% else %}{{ m.status_pill('neutral', 'Closed') }}{% endif %}
+  </header>
+  <div class="panel-card__body answer-card__body">
+    {{ evidence(card, full) }}
+    {% if ax and ax.notice and ax.notice_card == card.request_id %}<p class="answer-card__notice" role="status">{{ ax.notice }}</p>{% endif %}
+    {% if card.recorded %}
+      {{ recorded(card, ax) }}
+    {% elif card.open and not card.answerable %}
+      <p class="answer-card__slack">{{ card.slack_reason }}</p>
+    {% else %}
+      {% set said = ax.state(card) if ax else '' %}
+      {% if said %}<p class="answer-card__state" role="status">{{ said }}</p>{% endif %}
+      {% set rebuilt = ax.rebuild_line(card) if ax else '' %}
+      {% if rebuilt %}<p class="answer-card__state answer-card__rebuild" role="status">{{ rebuilt }}</p>{% endif %}
+      {{ buttons(card, ax, back) }}
+    {% endif %}
+  </div>
+</article>
+{%- endmacro %}
+
+{# The line under a list of cards: who can answer here. "Decide in Slack" stays plain words. #}
+{% macro answer_line(ax) -%}
+{% if ax and ax.can_answer %}
+<p class="answer-line">{{ m.icon('chat') }}Answer here or in Slack. The factory keeps whichever answer reaches it first, and this page shows the answer it recorded.</p>
+{% else %}
+<p class="observes-only">{{ m.icon('chat') }}Decide in Slack. This dashboard only shows what is waiting.</p>
+{% if ax and ax.why_not %}<p class="answer-line">{{ ax.why_not }}</p>{% endif %}
+{% endif %}
+{%- endmacro %}
+
+{# The sentence after a press whose card is not on this page any more (it closed, or moved on). #}
+{% macro page_notice(ax, shown_ids) -%}
+{% if ax and ax.notice and ax.notice_card not in shown_ids %}<p class="answer-notice" role="status">{{ ax.notice }}</p>{% endif %}
+{%- endmacro %}

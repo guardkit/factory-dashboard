@@ -1,7 +1,10 @@
 {% import 'macros.html' as m %}
+{% import 'cards.html' as cards %}
+{% set ax = ax if ax is defined else none %}
 {# What is waiting for a person, longest first: the dark band at the top of Now. The look lives on
-   this root element, because live updates replace the whole section. Decisions are made in Slack;
-   the dashboard only shows them (there is no Slack address in the record, so no link). #}
+   this root element, because live updates replace the whole section. Each wait shows the cards
+   behind it; an operator with an approver identity gets their buttons (design of 19 October 2026).
+   Everyone else decides in Slack (there is no Slack address in the record, so no link). #}
 {% set n = panel.items | length %}
 <section class="panel-card needs-you panel-card--hero state-{{ panel.state.value }}" data-theme="dark" id="panel-p4" data-panel="p4" aria-labelledby="needs-you-title">
   <header class="panel-card__header needs-you__head">
@@ -13,6 +16,7 @@
   </header>
   <div class="panel-card__body">
     {% if panel.state.value == 'lagging' %}{{ m.lagging_note(panel.as_of) }}{% endif %}
+    {{ cards.page_notice(ax, panel.card_ids) }}
     {% if panel.items %}
       <ul class="needs-you__list">
       {% for it in panel.items %}
@@ -21,10 +25,11 @@
           <h3 class="needs-you__subject">{% if it.link and it.link != '/issues' %}<a href="{{ it.link }}">{{ it.subject }}</a>{% else %}{{ it.subject }}{% endif %}</h3>
           <span class="needs-you__age num" title="{{ it.age_title }}">{{ it.age_label }}<span class="needs-you__age-word">waiting</span></span>
           {{ m.band_chip(it.band) }}
+          {% for c in it.cards %}{{ cards.card_box(c, ax, '/', full=False) }}{% endfor %}
         </li>
       {% endfor %}
       </ul>
-      <p class="observes-only">{{ m.icon('chat') }}Decide in Slack. This dashboard only shows what is waiting.</p>
+      {{ cards.answer_line(ax) }}
     {% else %}
       <p class="true-empty true-empty--circles">{{ panel.empty_copy }}</p>
     {% endif %}

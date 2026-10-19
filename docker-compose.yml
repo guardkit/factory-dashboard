@@ -2,7 +2,9 @@
 #
 #   board  — the web pages and the chat, on 127.0.0.1:8090 (loopback only; nothing is published). The
 #            chat calls LiteLLM on :4000 with its own key (FACTORY_DASH_CHAT_KEY, from ./.env); voice
-#            calls the speech models through llama-swap on :9000 (no key).
+#            calls the speech models through llama-swap on :9000 (no key). Answering the factory's
+#            cards (19 October 2026) connects to the bus for each answer as the dashboard_approve
+#            user, which may only post card answers; its password is a file in the config folder.
 #   projector ("the feed") — copies Forge's build record into ./data every 15 s, read-only, and checks the model
 #            gateway, the model server and the bus monitor every 30 s. No bus connection.
 #
@@ -16,7 +18,9 @@
 # READ-ONLY and opened read-only (URI mode=ro). Both containers create the store's tables at start,
 # so they can start in either order. `restart: unless-stopped` brings both back after a reboot.
 # suggestions.db, beside the store in ./data, is NOT disposable: it holds the suggestions people
-# sent (docs/runbook.md). Delete only readmodel.db and its -wal and -shm files.
+# sent (docs/runbook.md). answers.db beside it holds answers sent from the dashboard that the factory
+# has not recorded yet; losing it only lets someone press again. Delete only readmodel.db and its
+# -wal and -shm files.
 #
 # The feed also writes ./data/project-summaries.json after each pass, for the Linear door (read-only
 # there). The board's Linear links come from the door's own volume, mounted by
@@ -46,9 +50,14 @@ services:
       FACTORY_DASH_TTS_VOICE: ${FACTORY_DASH_TTS_VOICE:-}
       FACTORY_DASH_VOICE_TIMEOUT: ${FACTORY_DASH_VOICE_TIMEOUT:-}
       FACTORY_DASH_SPOKEN_WORDS: ${FACTORY_DASH_SPOKEN_WORDS:-}
+      # Answering the factory's cards (docs/runbook.md "Answering cards"): the bus address, from ./.env.
+      # Empty: the cards show with no buttons. The dashboard_approve password is read from
+      # /config/dashboard_approve_nats_password unless FACTORY_DASH_APPROVE_PASSWORD_FILE names another file.
+      FACTORY_DASH_NATS_URL: ${FACTORY_DASH_NATS_URL:-}
+      FACTORY_DASH_APPROVE_PASSWORD_FILE: ${FACTORY_DASH_APPROVE_PASSWORD_FILE:-}
     volumes:
-      # The read model (the board touches it only at start, for its tables and the tenant list) and
-      # suggestions.db (requirement 11), the one file the board writes while it runs. The board runs as
+      # The read model (the board touches it only at start, for its tables and the tenant list),
+      # suggestions.db (requirement 11) and answers.db, the two files the board writes while it runs. The board runs as
       # FACTORY_UID, the owner of ./data, so it can create and write it.
       - ./data:/data
       # Accounts and the session secret (README "Accounts and access"), outside the repository,

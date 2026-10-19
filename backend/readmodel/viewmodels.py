@@ -11,7 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    from backend.readmodel.cards import Card
+    from backend.readmodel.factory import MissionFeature
 
 LONDON = ZoneInfo("Europe/London")
 
@@ -260,12 +265,17 @@ class NeedsItem:
     age_label: str
     age_title: str
     band: BandChip
+    cards: tuple[Card, ...] = ()      # the open cards behind this wait, with what an answer needs
 
 
 @dataclass(frozen=True)
 class NeedsPanel(Panel):
     items: tuple[NeedsItem, ...] = ()
     empty_copy: str = "Nothing is waiting for a person."
+
+    @property
+    def card_ids(self) -> tuple[str, ...]:
+        return tuple(c.request_id for it in self.items for c in it.cards)
 
 
 @dataclass(frozen=True)
@@ -430,6 +440,26 @@ class FeaturePage:
     spend: SpendSlot
     time: TimeSlot = field(default_factory=TimeSlot)
     cost_by_stage: tuple[StageCostRow, ...] = ()
+    cards: tuple[Card, ...] = ()       # the feature's cards, open and closed (backend/readmodel/cards.py)
+    mission_link: str = ""
+
+
+@dataclass(frozen=True)
+class MissionPage:
+    """A mission: its plan as Forge filed it, its features on record and its cards."""
+
+    id: str
+    title: str
+    project: str
+    project_link: str
+    status_text: str
+    closed_reason: str
+    created_label: str
+    created_title: str
+    as_of: AsOf
+    plan: tuple[MissionFeature, ...]
+    features: tuple[tuple[str, str, str], ...]   # (label, link, where it stands)
+    cards: tuple[Card, ...]
 
 
 # --- the project page -----------------------------------------------------------------------------

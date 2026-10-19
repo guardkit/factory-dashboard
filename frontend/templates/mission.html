@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% import 'macros.html' as m %}
+{% import 'cards.html' as cards %}
+{% block title %}{{ page.title or ('Mission ' ~ page.id) }} · Appmilla Factory{% endblock %}
+{% block content %}
+{% set ax = ax if ax is defined else none %}
+<header class="page-head page-head--split feature-header">
+  <div class="feature-header__main">
+    <p class="page-eyebrow">{% if page.project_link %}<a href="{{ page.project_link }}">{{ page.project }}</a>{% else %}{{ page.project }}{% endif %} · Mission</p>
+    <h1 class="page-title feature-title">{{ page.title or ('Mission ' ~ page.id) }}</h1>
+    <p class="page-lead">{{ page.status_text }}{% if page.closed_reason %}: {{ page.closed_reason }}{% endif %}</p>
+    <div class="page-head__meta">
+      <span class="feature-id">{{ page.id }}</span>
+      <span title="{{ page.created_title }}">Proposed {{ page.created_label }}</span>
+    </div>
+  </div>
+  {{ m.asof_chip(page.as_of, source='factory') }}
+</header>
+
+{{ cards.page_notice(ax, page.cards | map(attribute='request_id') | list) }}
+{% set open_cards = page.cards | selectattr('open') | list %}
+{% if page.cards %}
+<section class="panel-card feature-cards" aria-labelledby="cards-title">
+  <header class="panel-card__header"><h2 class="panel-card__title" id="cards-title">{% if open_cards %}Waiting for an answer{% else %}Cards{% endif %}</h2></header>
+  <div class="panel-card__body answer-cards">
+    {% for c in open_cards %}{{ cards.card_box(c, ax, '/missions/' ~ page.id) }}{% endfor %}
+    {% for c in page.cards | rejectattr('open') %}{{ cards.card_box(c, ax, '/missions/' ~ page.id) }}{% endfor %}
+    {% if open_cards %}{{ cards.answer_line(ax) }}{% endif %}
+  </div>
+</section>
+{% endif %}
+
+<section class="panel-card mission-plan" aria-labelledby="plan-title">
+  <header class="panel-card__header"><h2 class="panel-card__title" id="plan-title">The plan</h2></header>
+  <div class="panel-card__body">
+    {% if page.plan %}
+    <ol class="answer-card__list answer-card__plan">
+    {% for f in page.plan %}<li><b>{{ f.key }}</b>: {{ f.sentence }}{% if f.needs %} <span class="answer-card__why">(needs {{ f.needs | join(', ') }} first)</span>{% endif %}</li>{% endfor %}
+    </ol>
+    {% else %}<p class="true-empty">The dashboard's copy of the record holds no plan for this mission yet.</p>{% endif %}
+  </div>
+</section>
+
+<section class="panel-card mission-features" aria-labelledby="features-title">
+  <header class="panel-card__header"><h2 class="panel-card__title" id="features-title">Its features on record ({{ page.features | length }})</h2></header>
+  <div class="panel-card__body">
+    {% if page.features %}
+    <ul class="signal-list">
+    {% for label, link, status in page.features %}<li class="signal-row"><b class="signal-row__name"><a href="{{ link }}">{{ label }}</a></b><p class="signal-row__text">{{ status }}</p></li>{% endfor %}
+    </ul>
+    {% else %}<p class="true-empty">No feature of this mission has started yet.</p>{% endif %}
+  </div>
+</section>
+{% endblock %}

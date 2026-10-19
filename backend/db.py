@@ -30,8 +30,38 @@ def connect_ro(db_path: Path) -> sqlite3.Connection:
     return sqlite3.connect(uri, uri=True)
 
 
+#: Columns added after a table was first shipped. `CREATE TABLE IF NOT EXISTS` leaves an existing
+#: store's table as it was, and the feed's copy would then fail on the missing column, so each one is
+#: added here when it is missing (19 October 2026: answering the factory's cards from the dashboard).
+ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("mirror_status", "read_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("forge_builds", "pending_approval_request_id", "TEXT"),
+    ("forge_planning_runs", "pending_approval_request_id", "TEXT"),
+    ("forge_planning_runs", "parent_request_id", "TEXT"),
+    ("forge_missions", "plan_request_id", "TEXT"),
+    ("forge_missions", "originating_user", "TEXT"),
+    ("forge_missions", "approved_by", "TEXT"),
+    ("forge_missions", "approved_at", "TEXT"),
+)
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    for table, column, decl in ADDED_COLUMNS:
+        have = {str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})")}
+        if not have or column in have:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        except sqlite3.OperationalError as exc:
+            # The other container added it a moment ago (both apply the schema at start).
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+
 def _apply_schema(conn: sqlite3.Connection, schema_path: Path) -> None:
     conn.executescript(schema_path.read_text(encoding="utf-8"))
+    if schema_path == SCHEMA_PATH:
+        _add_missing_columns(conn)
 
 
 # Both containers may apply the schema at the same moment; wait for the other's lock, don't fail.
