@@ -79,7 +79,7 @@ The budget-breach card is switched off in Forge, and its options are not valid d
    - **Subject:** `agents.approval.forge.<token>.response`.
    - **Method:** a plain core-NATS publish and flush, not a JetStream publish.
    - **Credential:** a separate bus user, `dashboard_approve`, whose permissions allow publishing on
-     `agents.approval.forge.*.response` and nothing else. It can't subscribe to anything except its own replies.
+     `agents.approval.forge.*.response` and nothing else. It can't subscribe to anything.
    - **Where the code lives:** only in the answer module. The projector never holds this credential.
 5. The page shows "Sent. Waiting for the factory to record it". Its existing freshness poll then re-reads Forge's
    record:
@@ -169,7 +169,7 @@ id it has already shown.
   - the answers module publishes only on `agents.approval.forge.*.response`;
   - the projector never imports it.
 - **nats-infrastructure** (`config/accounts/accounts.conf.template`): a `dashboard_approve` user in the APPMILLA
-  account, allowed to publish only on `agents.approval.forge.*.response` and to subscribe only to `_INBOX.>`.
+  account, allowed to publish only on `agents.approval.forge.*.response` and to subscribe to nothing (`deny: [">"]`). Subscribing to `_INBOX.>` would let it read every other client's replies and consumer deliveries, so it gets no subscriptions at all. A publish and flush needs none (independent coach, 19 October 2026).
 - **nats-infrastructure (the broker's start-up script):** `scripts/docker-entrypoint.sh` substitutes only a fixed
   list of password variables (~112) and refuses to start on an unresolved `${VAR}` (~137-141). So
   `DASHBOARD_APPROVE_NATS_PASSWORD` joins that list. Because the script is built into the broker image (`Dockerfile`
