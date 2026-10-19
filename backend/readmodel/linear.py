@@ -42,7 +42,7 @@ def linear_links(directory: Path | None = None) -> dict[str, str]:
         if path.stat().st_size > _MAX_FILE:
             return {}
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # RecursionError: a deeply nested file
         return {}
     projects = raw.get("projects") if isinstance(raw, dict) else None
     if not isinstance(projects, dict):

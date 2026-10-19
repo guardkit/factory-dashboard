@@ -59,7 +59,12 @@ def test_the_link_shows_on_the_project_page_and_its_row(pages: TestClient, no_li
     assert f'href="{URL}"' in row and "#i-external" in row and f'aria-label="Linear project for {REPO}"' in row
 
 
-@pytest.mark.parametrize("content", [None, "not json", "[]", '{"projects": []}', '{"projects": {"acme/notes": "x"}}'])
+DEEP = '{"projects": ' + "[" * 100_000 + "]" * 100_000 + "}"     # json raises RecursionError (coach D2)
+
+
+@pytest.mark.parametrize("content", [None, "not json", "[]", '{"projects": []}', '{"projects": {"acme/notes": "x"}}',
+                                     DEEP], ids=["missing", "not-json", "list", "projects-list", "entry-string",
+                                                 "deeply-nested"])
 def test_without_a_usable_file_nothing_is_rendered(pages: TestClient, no_linear_door: Path,
                                                     content: str | None) -> None:
     if content is not None:

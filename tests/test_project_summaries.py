@@ -4,15 +4,20 @@ All through the real feed code over a fake Forge record and a fake spend log."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import dataclasses
 import json
 import os
+import sqlite3
 import stat
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from backend.projector import forge_mirror
 from backend.projector.cost_import import import_once
 from backend.projector.store import iso, open_rw, write_heartbeat
 from backend.projector.summary import (
@@ -21,6 +26,8 @@ from backend.projector.summary import (
     build_summary,
     linear_attempts,
     project_health,
+    remove_leftovers,
+    summary_loop,
     summary_path,
     write_atomic,
     write_summary,
@@ -249,3 +256,52 @@ def test_the_file_is_written_atomically_and_readable(store: Path) -> None:
         write_atomic(out, {"version": 1, "bad": object()})
     assert out.read_bytes() == before
     assert [p.name for p in out.parent.iterdir() if p.name.endswith(".tmp")] == []
+
+
+# --- coach D3: the summary has its own loop, so a slow one never delays the Forge copy -------------
+
+
+def test_a_slow_summary_does_not_delay_the_forge_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    passes: list[float] = []
+    monkeypatch.setattr(forge_mirror, "mirror_once", lambda *_a, **_k: passes.append(time.monotonic()))
+    monkeypatch.setattr(forge_mirror, "prune_change_log", lambda *_a, **_k: None)
+    monkeypatch.setattr(forge_mirror, "forge_db_path", lambda: tmp_path / "forge.db")
+    writes: list[float] = []
+
+    def slow_write(_db_path: Path, _now: datetime | None = None) -> None:
+        writes.append(time.monotonic())
+        time.sleep(0.6)                                  # far longer than the whole window below
+
+    async def run() -> None:
+        loops = asyncio.gather(forge_mirror.mirror_loop(None, interval=0.01),  # type: ignore[arg-type]
+                               summary_loop(tmp_path / "readmodel.db", interval=0.01, write=slow_write))
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(loops, timeout=0.3)
+
+    asyncio.run(run())
+    assert len(writes) == 1                              # the summary is still in its first write
+    assert len(passes) >= 10                             # and the Forge copy kept its own pace
+
+
+def test_a_failing_summary_is_skipped_and_retried(tmp_path: Path) -> None:
+    calls: list[int] = []
+
+    def failing(_db_path: Path, _now: datetime | None = None) -> None:
+        calls.append(1)
+        raise sqlite3.OperationalError("database is locked")
+
+    async def run() -> None:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(summary_loop(tmp_path / "readmodel.db", interval=0.01, write=failing), timeout=0.2)
+
+    asyncio.run(run())
+    assert len(calls) >= 3
+
+
+def test_leftover_temporary_files_are_removed_at_start(tmp_path: Path) -> None:
+    left = tmp_path / f".{SUMMARY_FILE}.abc123.tmp"
+    left.write_text("{", encoding="utf-8")
+    keep = tmp_path / SUMMARY_FILE
+    keep.write_text("{}", encoding="utf-8")
+    remove_leftovers(tmp_path)
+    assert not left.exists() and keep.exists()

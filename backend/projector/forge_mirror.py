@@ -21,7 +21,7 @@ import contextlib
 import hashlib
 import os
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -231,10 +231,7 @@ def prune_change_log(dash: sqlite3.Connection, now: datetime) -> None:
     dash.execute("DELETE FROM change_log WHERE at < ?", (iso(now - CHANGE_LOG_KEEP),))
 
 
-async def mirror_loop(dash: sqlite3.Connection, *, interval: int = MIRROR_INTERVAL_SECS,
-                      after: Callable[[datetime], object] | None = None) -> None:  # pragma: no cover
-    """Every 15 s: one pass, then `after` (the summary file for the Linear door) in a thread, on
-    the same cycle whether the pass read Forge or not, so the file's freshness says which."""
+async def mirror_loop(dash: sqlite3.Connection, *, interval: int = MIRROR_INTERVAL_SECS) -> None:  # pragma: no cover
     path = forge_db_path()
     while True:
         now = datetime.now(UTC)
@@ -242,7 +239,4 @@ async def mirror_loop(dash: sqlite3.Connection, *, interval: int = MIRROR_INTERV
         with contextlib.suppress(Exception):
             mirror_once(dash, path, now)
             prune_change_log(dash, now)
-        if after is not None:
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(after, datetime.now(UTC))
         await asyncio.sleep(interval)

@@ -7,9 +7,10 @@ use, on ONE read snapshot of the store (`dbread.snapshot`) passed as ``conn=`` t
 repository `project_view` (the project page), the repository list from `projects_view` (the
 Projects page). Main's scope rule is kept: this is the operator's whole-factory view.
 
-The feed writes it after each pass over Forge's record (`mirror_loop`'s ``after``), atomically: a
-temporary file in the same directory, then `os.replace`, so a reader sees the old file or the new
-one, never half of one. The board never writes it.
+The feed writes it every 15 s (the Forge copy's own cadence) in its own loop, `summary_loop`, so a
+slow summary never delays the copy of Forge's record. Each write is atomic: a temporary file in the
+same directory, then `os.replace`, so a reader sees the old file or the new one, never half of one.
+The board never writes it.
 
 Contract, version 1::
 
@@ -36,6 +37,7 @@ never shown as on track.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 import json
@@ -43,8 +45,9 @@ import os
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
+from backend.projector.forge_mirror import MIRROR_INTERVAL_SECS
 from backend.projector.store import iso
 from backend.readmodel import dbread
 from backend.readmodel import viewmodels as vm
@@ -187,3 +190,24 @@ def write_summary(db_path: Path, now: datetime | None = None, out: Path | None =
     data = build_summary(db_path, now)
     write_atomic(out or summary_path(db_path), data)
     return data
+
+
+def remove_leftovers(directory: Path) -> None:
+    """Temporary files a write left behind when the feed was stopped mid-write (at start only)."""
+    for tmp in directory.glob(f".{SUMMARY_FILE}.*.tmp"):
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+
+
+class _Writer(Protocol):
+    def __call__(self, db_path: Path, now: datetime | None = ...) -> object: ...
+
+
+async def summary_loop(db_path: Path, *, interval: float = MIRROR_INTERVAL_SECS,
+                       write: _Writer = write_summary) -> None:
+    """Its own loop beside the Forge copy, in a thread, so a slow summary never delays a Forge pass.
+    A failed write is skipped (the file then ages, and the door sees it by `valid_until`)."""
+    while True:
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(write, db_path, datetime.now(UTC))
+        await asyncio.sleep(interval)

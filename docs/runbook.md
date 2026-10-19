@@ -19,7 +19,8 @@ rebuilds it. Delete only `readmodel.db` (and its `-wal` and `-shm` files), never
 
 For the Linear door (18 October 2026): after each pass the feed also rewrites
 `./data/project-summaries.json` (each project's delivered, open and cost figures and health, as
-the pages show them; the door posts them to Linear after a merge). It is rebuilt every 15 seconds.
+the pages show them; the door posts them to Linear after a merge). It is rebuilt every 15 seconds,
+in its own loop beside the copy of Forge's record.
 The board shows each project's Linear link from the door's own volume
 (`forge-estate_linear-door-state`, or `FACTORY_LINEAR_DOOR_VOLUME` in the shell or `./.env`; the
 script asks compose for the name, `deploy/linear-volume.sh`), mounted read-only by

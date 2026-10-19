@@ -1,8 +1,8 @@
 """`python -m backend.projector` — the dashboard's feed.
 
-It applies the store's schema, then runs five loops: the heartbeat (10 s), the copy of Forge's
-record (15 s, each pass followed by the summary file for the Linear door, `summary.py`), the copy of
-LiteLLM's spend log (60 s), the service checks (30 s) and the plan file (on change). It has no bus
+It applies the store's schema, then runs six loops: the heartbeat (10 s), the copy of Forge's
+record (15 s), the summary file for the Linear door (15 s, `summary.py`), the copy of LiteLLM's
+spend log (60 s), the service checks (30 s) and the plan file (on change). It has no bus
 connection:
 the design of 17 October 2026 takes every build, planning, approval and delivery fact from Forge's
 record, which is complete and survives the dashboard being stopped; bus events do not.
@@ -23,7 +23,7 @@ from backend.projector.forge_mirror import forge_db_path, mirror_loop, mirror_on
 from backend.projector.health_polls import health_loop
 from backend.projector.plan_mirror import mirror_plans_once, plan_mirror_loop
 from backend.projector.store import open_rw, write_heartbeat
-from backend.projector.summary import write_summary
+from backend.projector.summary import remove_leftovers, summary_loop
 
 HEARTBEAT_SECS = 10
 
@@ -47,15 +47,12 @@ async def _run() -> None:
     mirror_plans_once(boot, now=now)
     boot.close()
 
-    def summary(at: datetime) -> None:
-        write_summary(db_path, at)
-
-    with contextlib.suppress(Exception):
-        summary(now)
+    remove_leftovers(db_path.parent)
 
     await asyncio.gather(
         heartbeat_loop(open_rw(db_path)),
-        mirror_loop(open_rw(db_path), after=summary),
+        mirror_loop(open_rw(db_path)),
+        summary_loop(db_path),
         cost_loop(open_rw(db_path)),
         health_loop(open_rw(db_path)),
         plan_mirror_loop(open_rw(db_path)),
