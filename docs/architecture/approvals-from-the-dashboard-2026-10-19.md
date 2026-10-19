@@ -103,15 +103,19 @@ The budget-breach card is switched off in Forge, and its options are not valid d
   - **"Rebuild requested":** the board has sent it, and the record shows nothing new yet.
   - **"Waiting for room to rebuild":** the offer carries `rebuild_wanted_at`. Forge is waiting for capacity
     (`merge_offer.py` ~3295-3313).
-  - **"Rebuilt":** the offer's review evidence and `preview_rebuilds` count have changed (`merge_offer.py`
-    ~3233-3284). The new preview link appears.
+  - **A rebuild attempt finished:** the offer's `preview_rebuilds` count went up (`merge_offer.py` ~3271-3284).
+    Forge also does this when preparing the preview fails (~2203-2205, ~3251-3256), so the page then reads the
+    offer's `review_evidence.state`, as the Slack card does (`merge_card.py` ~317-338):
+    - **"Rebuilt"** when the state is ready. The new preview link appears.
+    - **"The rebuild failed: <recorded failure reason>"** for any other state. No preview link is promised.
   - **"Can't confirm the rebuild yet":** a long time has passed with no change, three successful fresh feed passes or
     more. A slow rebuild, preparing the preview and the merge check, can take minutes, so the page never says Forge
     hasn't started. After that the mark is cleared, so the person may ask again. Forge's own record of a rebuild
     already in preparation decides whether that starts a second one.
 - **Rebuilding never closes the card.**
 - **Tests:** a slow rebuild, where the count changes only after several passes; capacity waiting, where only
-  `rebuild_wanted_at` appears; and an amended offer.
+  `rebuild_wanted_at` appears; a successful amended offer; and a failed preparation, where the count rises with
+  failed evidence and its reason.
 
 ## What is open (all from the read-only copy)
 
