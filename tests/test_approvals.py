@@ -10,6 +10,7 @@ the stale-copy refusals; an unreachable bus; and confirmation against the record
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import re
 import sqlite3
@@ -535,7 +536,8 @@ def test_a_stopped_feed_never_declares_an_answer_unrecorded(world: World) -> Non
     world.answer(rid, "merge", "merge-FEAT-0001", "merge")
     world.refresh(5)
     write_heartbeat(world.feed, datetime.now(UTC) - timedelta(minutes=5))    # the feed stops
-    claims.set_read_count(world.answers_db, rid, 0)                            # however many passes ago
+    gen = claims.read_all(world.answers_db)[0][rid].generation
+    claims.set_read_count(world.answers_db, rid, 0, gen)                       # however many passes ago
     body = page(world, "/features/FEAT-0001")
     assert answers.SENT in body and "hasn&#39;t recorded" not in body
 
@@ -997,3 +999,85 @@ def test_needs_you_shows_each_card_once(world: World) -> None:
     ids = re.findall(r'<article class="panel-card answer-card[^"]*" id="([^"]+)"', band)
     assert sorted(ids) == sorted(set(ids)) and len(ids) == 3, ids
     assert 'id="card-merge-bm"' in band and 'href="/missions/m3"' in band
+
+
+# --- Codex round 1 (19 October 2026): settlement against a newer submission, late rebuilds, one 60 s rule ---
+
+
+def test_a_stale_settlement_never_marks_a_newer_submission(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Settle, retry, then a settlement that read the old submission before the retry: the new one
+    stays waiting."""
+    rid = merge_card(world)
+    world.answer(rid, "merge", "merge-FEAT-0001", "merge")
+    world.refresh(3)
+    stale = claims._read(world.answers_db)                      # the slow settlement's read, taken now
+    claims.settle(world.answers_db, world.store)                # a quick one marks it not recorded
+    assert claims.read_all(world.answers_db)[0][rid].state == claims.NOT_RECORDED
+    assert said(world.answer(rid, "merge", "merge-FEAT-0001", "merge")) == "sent"   # the retry
+    newer = claims.read_all(world.answers_db)[0][rid]
+    assert newer.state == claims.WAITING and newer.generation != stale[0][0].generation
+    claims.set_read_count(world.answers_db, rid, 0, newer.generation)   # even if it looked expired
+    monkeypatch.setattr(claims, "_read", lambda _path: stale)
+    claims.settle(world.answers_db, world.store)                # the slow settlement writes now
+    monkeypatch.undo()
+    assert claims.read_all(world.answers_db)[0][rid].state == claims.WAITING
+
+
+def test_a_stale_settlement_never_touches_a_newer_rebuild_request(world: World,
+                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    merge_card(world)
+    _rebuild(world)
+    world.refresh(4)
+    stale = claims._read(world.answers_db)
+    claims.settle(world.answers_db, world.store)
+    assert claims.read_all(world.answers_db)[1]["merge-b1"].state == claims.UNCONFIRMED
+    assert _rebuild(world) == "rebuild_sent"                    # asked again
+    newer = claims.read_all(world.answers_db)[1]["merge-b1"]
+    claims.set_read_count(world.answers_db, "merge-b1", 0, newer.generation, table="rebuild_marks")
+    stale_requested: tuple[list[claims.Claim], list[claims.Mark]] = (
+        [], [dataclasses.replace(m, state=claims.REQUESTED) for m in stale[1]])
+    monkeypatch.setattr(claims, "_read", lambda _path: stale_requested)
+    claims.settle(world.answers_db, world.store)
+    monkeypatch.undo()
+    assert claims.read_all(world.answers_db)[1]["merge-b1"].state == claims.REQUESTED
+
+
+@pytest.mark.parametrize(("state", "failure", "line"), [
+    ("ready", None, "Rebuilt."),
+    ("failed", "the preview's build step failed.", "The rebuild failed: the preview&#39;s build step failed."),
+])
+def test_a_rebuild_that_finishes_after_cant_confirm_is_still_shown(world: World, state: str, failure: str | None,
+                                                                    line: str) -> None:
+    merge_card(world)
+    _rebuild(world)
+    world.refresh(4)
+    assert "Can&#39;t confirm the rebuild yet" in page(world, "/features/FEAT-0001")
+    amend_offer(world, 95, rebuilds=1, state=state, failure=failure)
+    world.refresh()
+    body = page(world, "/features/FEAT-0001")
+    assert line in body and "Can&#39;t confirm" not in body and "Rebuild the preview" in body
+
+
+def test_a_late_wait_for_room_after_cant_confirm_is_shown(world: World) -> None:
+    merge_card(world)
+    _rebuild(world)
+    world.refresh(4)
+    assert "Can&#39;t confirm the rebuild yet" in page(world, "/features/FEAT-0001")
+    amend_offer(world, 95, wanted="2026-10-19T09:00:00+00:00")
+    world.refresh()
+    body = page(world, "/features/FEAT-0001")
+    assert "Waiting for room to rebuild." in body and "Rebuild the preview" in body     # a retry is allowed
+
+
+def test_settlement_counts_no_pass_from_a_copy_over_60_seconds_old(world: World) -> None:
+    rid = merge_card(world)
+    world.answer(rid, "merge", "merge-FEAT-0001", "merge")
+    world.refresh(5)                                              # passes enough, while fresh ...
+    gen = claims.read_all(world.answers_db)[0][rid].generation
+    claims.set_read_count(world.answers_db, rid, 0, gen)
+    now = datetime.now(UTC)
+    write_heartbeat(world.feed, now)                              # ... then a live feed, a 90 s old copy
+    world.feed.execute("UPDATE mirror_status SET last_success_at=? WHERE source='forge'",
+                       (iso(now - timedelta(seconds=90)),))
+    claims.settle(world.answers_db, world.store)
+    assert claims.read_all(world.answers_db)[0][rid].state == claims.WAITING

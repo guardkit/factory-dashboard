@@ -104,6 +104,19 @@ class Freshness:
                 and (now - self.read_at).total_seconds() < vm.STALE_AFTER_SECS)
 
 
+#: Answers from the dashboard are sent, and confirmed, only from a copy read at most this long ago
+#: (design of 19 October 2026). Stricter than the pages' stale banner (vm.STALE_AFTER_SECS).
+ANSWER_FRESH_SECS = 60
+
+
+def answer_copy_is_fresh(fr: Freshness, now: datetime) -> bool:
+    """The one rule for answering and for confirming answers: freshness known, the feed running, its
+    last read not failed, and the last successful read at most ANSWER_FRESH_SECS old."""
+    if fr.read_at is None or not fr.feed_alive(now) or fr.error:
+        return False
+    return (now - fr.read_at).total_seconds() <= ANSWER_FRESH_SECS
+
+
 def freshness(conn: sqlite3.Connection) -> Freshness:
     row = conn.execute(
         "SELECT last_success_at, last_error, read_count FROM mirror_status WHERE source='forge'").fetchone()

@@ -69,8 +69,8 @@ SOURCE_ID = "dashboard"
 EVENT_TYPE = "approval_response"
 CONNECT_TIMEOUT_SECS = 5.0
 FLUSH_TIMEOUT_SECS = 5.0
-#: An answer is sent only from a copy of the record read at most this long ago.
-FRESH_FOR_SECS = 60
+#: An answer is sent only from a copy of the record read at most this long ago (the shared rule).
+FRESH_FOR_SECS = dbread.ANSWER_FRESH_SECS
 MAX_NOTE_CHARS = 2000
 
 #: The only subjects this module ever publishes on: one card's response subject.
@@ -262,9 +262,7 @@ def envelope(card: cardmodel.Card, answer: Answer, decided_by: str, now: datetim
 def copy_is_fresh(fr: dbread.Freshness, now: datetime) -> bool:
     """Answers are sent only from a copy that is known to be current: freshness known, the last
     successful read at most 60 seconds old, the feed running and its last read not failed."""
-    if fr.read_at is None or fr.heartbeat_at is None or not fr.feed_alive(now) or fr.error:
-        return False
-    return (now - fr.read_at).total_seconds() <= FRESH_FOR_SECS
+    return dbread.answer_copy_is_fresh(fr, now)
 
 
 @dataclass(frozen=True)
@@ -329,16 +327,18 @@ async def submit(  # noqa: PLR0911, PLR0912 (one return per outcome)
     try:
         if rebuild:
             assert card.rebuild is not None
-            ok, _mark = await asyncio.to_thread(claims.ask_rebuild, store, request_id=card.request_id,
-                                                rebuilds=card.rebuild.count, user=user, read_count=read_count)
+            ok, mark = await asyncio.to_thread(claims.ask_rebuild, store, request_id=card.request_id,
+                                               rebuilds=card.rebuild.count, user=user, read_count=read_count)
             if not ok:
                 return Outcome("rebuild_waiting", card.request_id)
+            generation = mark.generation
         else:
-            ok, _claim = await asyncio.to_thread(claims.claim, store, request_id=card.request_id,
-                                                 card_kind=card.kind, answer=answer, decision=chosen.decision,
-                                                 user=user, read_count=read_count)
+            ok, claim = await asyncio.to_thread(claims.claim, store, request_id=card.request_id,
+                                                card_kind=card.kind, answer=answer, decision=chosen.decision,
+                                                user=user, read_count=read_count)
             if not ok:
                 return Outcome("taken", card.request_id)
+            generation = claim.generation
     except claims.Unavailable:
         return Outcome("cant_save", card.request_id)
     data = json.dumps(envelope(card, chosen, decided_by, now()), separators=(",", ":")).encode("utf-8")
@@ -348,9 +348,9 @@ async def submit(  # noqa: PLR0911, PLR0912 (one return per outcome)
         log.warning("answers: could not send an answer for %s (%s)", card.request_id, type(exc).__name__)
         try:
             if rebuild:
-                await asyncio.to_thread(claims.drop_rebuild, store, card.request_id)
+                await asyncio.to_thread(claims.drop_rebuild, store, card.request_id, generation)
             else:
-                await asyncio.to_thread(claims.release, store, card.request_id)
+                await asyncio.to_thread(claims.release, store, card.request_id, generation)
         except claims.Unavailable:
             pass
         return Outcome("bus", card.request_id)
@@ -358,7 +358,7 @@ async def submit(  # noqa: PLR0911, PLR0912 (one return per outcome)
     # Passes are counted from the feed's read count just after the send (claims.NOT_RECORDED_AFTER).
     try:
         after = await asyncio.to_thread(_read_count, db_path)
-        await asyncio.to_thread(claims.set_read_count, store, card.request_id, after,
+        await asyncio.to_thread(claims.set_read_count, store, card.request_id, after, generation,
                                 table="rebuild_marks" if rebuild else "answer_claims")
     except (sqlite3.Error, claims.Unavailable):
         pass

@@ -943,7 +943,7 @@ class AnswerView:
         if rb is None or not card.open:
             return ""
         mark = self.marks.get(card.request_id)
-        if rb.wanted_at and (mark is None or mark.state == claims.REQUESTED):
+        if rb.wanted_at and (mark is None or mark.state in (claims.REQUESTED, claims.UNCONFIRMED)):
             return "Waiting for room to rebuild."
         if mark is None:
             return ""

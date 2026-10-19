@@ -17,6 +17,9 @@ data folder. Only the board writes it; the feed never opens it. It holds two thi
   while one is waiting is ignored, and the page can say what the record proves since.
 
 Every write is one short transaction (BEGIN IMMEDIATE), so two presses at once cannot both claim.
+Each submission and each rebuild request has its own generation (a random id). Settling changes or
+removes a row only while it still holds the generation the settlement inspected, so a settlement that
+read an older submission can never mark a newer one (Codex review round 1, R1).
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ import contextlib
 import hashlib
 import logging
 import sqlite3
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -63,7 +67,8 @@ CREATE TABLE IF NOT EXISTS answer_claims (
     claimed_at   TEXT NOT NULL,
     read_count   INTEGER NOT NULL,
     state        TEXT NOT NULL CHECK (state IN ('waiting', 'not_recorded')),
-    updated_at   TEXT NOT NULL
+    updated_at   TEXT NOT NULL,
+    generation   TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS rebuild_marks (
     request_id   TEXT PRIMARY KEY,
@@ -73,7 +78,8 @@ CREATE TABLE IF NOT EXISTS rebuild_marks (
     asked_at     TEXT NOT NULL,
     read_count   INTEGER NOT NULL,
     state        TEXT NOT NULL CHECK (state IN ('requested', 'done', 'unconfirmed')),
-    updated_at   TEXT NOT NULL
+    updated_at   TEXT NOT NULL,
+    generation   TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -95,6 +101,7 @@ class Claim:
     claimed_at: datetime
     read_count: int
     state: str
+    generation: str = ""
 
 
 @dataclass(frozen=True)
@@ -106,6 +113,7 @@ class Mark:
     asked_at: datetime
     read_count: int
     state: str
+    generation: str = ""
 
 
 def db_path_for(data_dir: Path) -> Path:
@@ -130,6 +138,10 @@ def init_db(path: Path) -> bool:
         conn = _connect(path)
         try:
             conn.executescript(_SCHEMA)
+            for table in ("answer_claims", "rebuild_marks"):   # a store from before generations
+                if "generation" not in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
+                    with contextlib.suppress(sqlite3.OperationalError):
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN generation TEXT NOT NULL DEFAULT ''")
         finally:
             conn.close()
     except (sqlite3.Error, OSError) as exc:
@@ -164,12 +176,13 @@ def _write(path: Path) -> Iterator[sqlite3.Connection]:
 def _claim(row: sqlite3.Row) -> Claim:
     return Claim(row["request_id"], row["card_kind"], row["answer"], row["decision"], row["username"],
                  row["display_name"], parse_dt(row["claimed_at"]) or datetime.now(UTC), int(row["read_count"]),
-                 row["state"])
+                 row["state"], row["generation"])
 
 
 def _mark(row: sqlite3.Row) -> Mark:
     return Mark(row["request_id"], int(row["rebuilds"]), row["username"], row["display_name"],
-                parse_dt(row["asked_at"]) or datetime.now(UTC), int(row["read_count"]), row["state"])
+                parse_dt(row["asked_at"]) or datetime.now(UTC), int(row["read_count"]), row["state"],
+                row["generation"])
 
 
 # --- claims --------------------------------------------------------------------------------------------
@@ -186,25 +199,27 @@ def claim(path: Path, *, request_id: str, card_kind: str, answer: str, decision:
             return False, _claim(row)
         conn.execute(
             "INSERT OR REPLACE INTO answer_claims (request_id, card_kind, answer, decision, username, display_name, "
-            "claimed_at, read_count, state, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)",
+            "claimed_at, read_count, state, updated_at, generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?, ?)",
             (request_id, card_kind, answer, decision, user.username, user.display_name, _iso(now), read_count,
-             _iso(now)),
+             _iso(now), uuid.uuid4().hex),
         )
         new = conn.execute("SELECT * FROM answer_claims WHERE request_id = ?", (request_id,)).fetchone()
     return True, _claim(new)
 
 
-def set_read_count(path: Path, request_id: str, read_count: int, *, table: str = "answer_claims") -> None:
+def set_read_count(path: Path, request_id: str, read_count: int, generation: str, *,
+                   table: str = "answer_claims") -> None:
     """The feed's read count just after the send: passes are counted from here."""
     assert table in ("answer_claims", "rebuild_marks")
     with _write(path) as conn:
-        conn.execute(f"UPDATE {table} SET read_count = ? WHERE request_id = ?", (read_count, request_id))
+        conn.execute(f"UPDATE {table} SET read_count = ? WHERE request_id = ? AND generation = ?",
+                     (read_count, request_id, generation))
 
 
-def release(path: Path, request_id: str) -> None:
+def release(path: Path, request_id: str, generation: str) -> None:
     """Clear a claim whose answer could not be sent, so the person can try again."""
     with _write(path) as conn:
-        conn.execute("DELETE FROM answer_claims WHERE request_id = ?", (request_id,))
+        conn.execute("DELETE FROM answer_claims WHERE request_id = ? AND generation = ?", (request_id, generation))
 
 
 # --- rebuild marks ----------------------------------------------------------------------------------------
@@ -220,16 +235,17 @@ def ask_rebuild(path: Path, *, request_id: str, rebuilds: int, user: ResolvedUse
             return False, _mark(row)
         conn.execute(
             "INSERT OR REPLACE INTO rebuild_marks (request_id, rebuilds, username, display_name, asked_at, read_count, "
-            "state, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'requested', ?)",
-            (request_id, rebuilds, user.username, user.display_name, _iso(now), read_count, _iso(now)),
+            "state, updated_at, generation) VALUES (?, ?, ?, ?, ?, ?, 'requested', ?, ?)",
+            (request_id, rebuilds, user.username, user.display_name, _iso(now), read_count, _iso(now),
+             uuid.uuid4().hex),
         )
         new = conn.execute("SELECT * FROM rebuild_marks WHERE request_id = ?", (request_id,)).fetchone()
     return True, _mark(new)
 
 
-def drop_rebuild(path: Path, request_id: str) -> None:
+def drop_rebuild(path: Path, request_id: str, generation: str) -> None:
     with _write(path) as conn:
-        conn.execute("DELETE FROM rebuild_marks WHERE request_id = ?", (request_id,))
+        conn.execute("DELETE FROM rebuild_marks WHERE request_id = ? AND generation = ?", (request_id, generation))
 
 
 # --- reading ---------------------------------------------------------------------------------------------
@@ -272,8 +288,8 @@ def token(path: Path) -> str:
 # --- settling from the record ---------------------------------------------------------------------------
 
 
-_Deletes = list[tuple[str, str]]
-_Updates = list[tuple[str, str, str]]
+_Deletes = list[tuple[str, str, str]]          # (table, request id, generation)
+_Updates = list[tuple[str, str, str, str]]     # (table, request id, generation, new state)
 
 
 def _settle_claims(found: list[Claim], every: dict[str, cardmodel.Card], counted: int | None
@@ -283,9 +299,9 @@ def _settle_claims(found: list[Claim], every: dict[str, cardmodel.Card], counted
     for c in found:
         card = every.get(c.request_id)
         if card is None or not card.open:
-            deletes.append(("answer_claims", c.request_id))       # closed: the record says how
+            deletes.append(("answer_claims", c.request_id, c.generation))       # closed: the record says how
         elif c.state == WAITING and counted is not None and counted >= c.read_count + NOT_RECORDED_AFTER:
-            updates.append(("answer_claims", c.request_id, NOT_RECORDED))
+            updates.append(("answer_claims", c.request_id, c.generation, NOT_RECORDED))
     return deletes, updates
 
 
@@ -296,14 +312,15 @@ def _settle_marks(found: list[Mark], every: dict[str, cardmodel.Card], counted: 
     for m in found:
         card = every.get(m.request_id)
         if card is None or not card.open or card.rebuild is None:
-            deletes.append(("rebuild_marks", m.request_id))
-        elif m.state != REQUESTED:
+            deletes.append(("rebuild_marks", m.request_id, m.generation))
+        elif m.state == DONE:
             continue
         elif card.rebuild.count > m.rebuilds:
-            updates.append(("rebuild_marks", m.request_id, DONE))         # a rebuild attempt finished
-        elif (not card.rebuild.wanted_at and counted is not None
+            # A rebuild attempt finished, even one that came after "can't confirm" (Codex R2).
+            updates.append(("rebuild_marks", m.request_id, m.generation, DONE))
+        elif (m.state == REQUESTED and not card.rebuild.wanted_at and counted is not None
               and counted >= m.read_count + REBUILD_UNCONFIRMED_AFTER):
-            updates.append(("rebuild_marks", m.request_id, UNCONFIRMED))  # long enough with no change
+            updates.append(("rebuild_marks", m.request_id, m.generation, UNCONFIRMED))  # long enough, no change
     return deletes, updates
 
 
@@ -325,8 +342,9 @@ def settle(store: Path, db_path: Path, now: datetime | None = None) -> None:
         log.warning("claims: could not read the record to settle answers (%s)", exc)
         return
     every = {c.request_id: c for c in cardmodel.all_cards(factory)}
-    # Only successful reads of a copy that is fresh now are counted (a stopped feed counts nothing).
-    counted = fr.read_count if fr.fresh(now) and not fr.error else None
+    # Passes count only while the copy meets the answers' own 60-second rule (a stopped feed, a failed
+    # read or an old copy counts nothing).
+    counted = fr.read_count if dbread.answer_copy_is_fresh(fr, now) else None
     deletes, updates = _settle_claims(claims_, every, counted)
     more_deletes, more_updates = _settle_marks(marks, every, counted)
     deletes += more_deletes
@@ -335,9 +353,11 @@ def settle(store: Path, db_path: Path, now: datetime | None = None) -> None:
         return
     try:
         with _write(store) as w:
-            for table, rid in deletes:
-                w.execute(f"DELETE FROM {table} WHERE request_id = ?", (rid,))
-            for table, rid, state in updates:
-                w.execute(f"UPDATE {table} SET state = ?, updated_at = ? WHERE request_id = ?", (state, _iso(now), rid))
+            # Only the exact submission inspected: a newer one with the same request id is left alone.
+            for table, rid, gen in deletes:
+                w.execute(f"DELETE FROM {table} WHERE request_id = ? AND generation = ?", (rid, gen))
+            for table, rid, gen, state in updates:
+                w.execute(f"UPDATE {table} SET state = ?, updated_at = ? WHERE request_id = ? AND generation = ?",
+                          (state, _iso(now), rid, gen))
     except Unavailable:
         return
