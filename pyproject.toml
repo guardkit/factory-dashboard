@@ -13,6 +13,8 @@ dependencies = [
     "python-multipart>=0.0.18",
     "httpx>=0.28.1",
     "psycopg[binary]>=3.2",
+    # The bus client, used only by backend/answers.py to answer the factory's cards (19 October 2026).
+    "nats-py>=2.15",
 ]
 
 [dependency-groups]
