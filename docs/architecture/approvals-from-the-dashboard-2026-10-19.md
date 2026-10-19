@@ -84,7 +84,7 @@ The budget-breach card is switched off in Forge, and its options are not valid d
 5. The page shows "Sent. Waiting for the factory to record it". Its existing freshness poll then re-reads Forge's
    record:
    - when Forge records the decision, the card shows the recorded answer: who, which decision, when;
-   - if the card is still open two feed passes later, the page says "The factory hasn't recorded this answer. It may
+   - if the card is still open two successful, fresh feed passes later, the page says "The factory hasn't recorded this answer. It may
      have refused it", and the claim is cleared so the person can try again. This is the Linear door's "couldn't
      confirm" rule. Forge logs a refusal, for example an identity it doesn't accept, but records nothing about it in
      the ledger (`approval_subscriber.py` ~735-748). So the page never invents a reason. It only says the card is
@@ -99,11 +99,19 @@ The budget-breach card is switched off in Forge, and its options are not valid d
   throughout.
 - **One rebuild at a time.** The board keeps its own short "rebuild requested" mark per offer, holding the offer's
   current rebuild count, so a second press while one is waiting is ignored.
-- **What the page shows.** "Rebuild requested" until Forge amends the offer's evidence: the `merge_deploy_offer`
-  row's review evidence and rebuild count change (`merge_offer.py` ~3189-3293). Then the new preview link appears.
-  Rebuilding never closes the card.
-- **If nothing changes** after two feed passes, the page says "The factory hasn't started a rebuild" and clears the
-  mark.
+- **What the page shows.** Forge reports a rebuild in stages, so the page shows the state the record proves:
+  - **"Rebuild requested":** the board has sent it, and the record shows nothing new yet.
+  - **"Waiting for room to rebuild":** the offer carries `rebuild_wanted_at`. Forge is waiting for capacity
+    (`merge_offer.py` ~3295-3313).
+  - **"Rebuilt":** the offer's review evidence and `preview_rebuilds` count have changed (`merge_offer.py`
+    ~3233-3284). The new preview link appears.
+  - **"Can't confirm the rebuild yet":** a long time has passed with no change, three successful fresh feed passes or
+    more. A slow rebuild, preparing the preview and the merge check, can take minutes, so the page never says Forge
+    hasn't started. After that the mark is cleared, so the person may ask again. Forge's own record of a rebuild
+    already in preparation decides whether that starts a second one.
+- **Rebuilding never closes the card.**
+- **Tests:** a slow rebuild, where the count changes only after several passes; capacity waiting, where only
+  `rebuild_wanted_at` appears; and an amended offer.
 
 ## What is open (all from the read-only copy)
 
@@ -181,9 +189,27 @@ id it has already shown.
   - always sets the envelope's correlation id.
 
   If the record has moved on (a newer attempt, or the card has closed), it sends nothing and shows the current card
-  instead. That still leaves a narrow race: the gate can change between the board's snapshot and Forge receiving the
-  answer, at most one feed pass (15 s) out of date. The same race exists for Slack today. It is recorded here rather
-  than fixed in Forge in this change.
+  instead.
+
+  **The copy must be fresh.** The mirror keeps its last good copy when Forge's record can't be read
+  (`forge_mirror.py` ~208-222), so a copy can be old. In the same snapshot, the answer route checks the factory
+  record's freshness (`dbread` freshness: last successful read and heartbeat). It refuses to send when:
+  - freshness is unknown;
+  - the last successful read is older than 60 seconds;
+  - the feed has stopped.
+
+  The page then says "The factory's record is out of date, so answers are paused. Try again in a minute." Confirmation
+  and its "two passes" rule count only successful, fresh reads, so a stopped feed never clears a claim or declares an
+  answer unrecorded.
+
+  **The race that remains.** Even with a fresh copy, the card can change between the board's last successful read
+  and Forge receiving the answer. That window is the age of the copy, at most the 60-second limit, plus delivery time.
+  For a build gate, Forge doesn't re-check the request id of an approve, so an answer that reaches it after a newer
+  gate card has opened on the same build would act on that newer card. Slack has the same race today. It is recorded
+  here and not fixed in Forge in this change.
+
+  **Tests:** a stopped feed, a failed read, and a copy older than the limit each refuse with that sentence and send
+  nothing.
 - **Least permission.** The bus user can post card answers and nothing else. A leaked credential could only post an
   answer under an identity Forge would refuse, unless the attacker also knew an approver identity. Approver identities
   are not secrets, which is why Forge's own identity check is not the only protection: the bus user, the board's
