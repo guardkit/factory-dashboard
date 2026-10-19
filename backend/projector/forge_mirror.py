@@ -65,7 +65,10 @@ _REPLACED: dict[str, tuple[str, tuple[str, ...], str]] = {
         "queued_at", "admitted_at", "closed_at", "closed_reason"), "id"),
     "forge_missions": ("missions", (
         "id", "title", "target_repo", "status", "correlation_id", "created_at", "closed_at",
-        "closed_reason", "plan_request_id", "originating_user", "approved_by", "approved_at"), "id"),
+        "closed_reason", "plan_request_id", "originating_user", "approved_by", "approved_at",
+        # A stop asked for and not yet finished (Forge's missions section 11). A ledger from before
+        # stopping lacks both, so they are copied as NULL and the mission shows as it did.
+        "stop_requested_at", "stop_requested_by"), "id"),
     # A mission's plan, in Forge's own order (its rowid, copied as forge_order).
     "forge_mission_features": ("mission_features", (
         "forge_order", "mission_id", "key", "sentence", "no_sign_in"), "rowid"),

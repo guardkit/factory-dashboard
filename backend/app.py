@@ -60,7 +60,7 @@ from backend.config_loader import (
     load_tenants,
 )
 from backend.readmodel import cards as cardmodel
-from backend.readmodel import dbread
+from backend.readmodel import dbread, missionwords
 from backend.readmodel import viewmodels as vm
 from backend.readmodel.factory import load_factory
 from backend.readmodel.viewmodels import PageChrome
@@ -518,7 +518,7 @@ def _register_routes(app: FastAPI) -> None:
     @app.get("/features/{feature_key}", response_class=HTMLResponse)
     def feature(request: Request, feature_key: str, user: OperatorPage) -> HTMLResponse:
         _settle(request)
-        found = dbread.feature_page(request.app.state.db_path, feature_key)
+        found = dbread.feature_page(request.app.state.db_path, feature_key, names=_approver_names(request))
         if found is None:
             return _render(
                 request,
@@ -874,7 +874,7 @@ def _register_mission_routes(app: FastAPI) -> None:
     @app.get("/missions/{mission_id}", response_class=HTMLResponse)
     def mission(request: Request, mission_id: str, user: OperatorPage) -> HTMLResponse:
         _settle(request)
-        found = dbread.mission_page(request.app.state.db_path, mission_id)
+        found = dbread.mission_page(request.app.state.db_path, mission_id, names=_approver_names(request))
         if found is None:
             return _render(request, "feature_missing.html",
                            {"feature_id": mission_id, "nav_active": "", "tenant": _tenant(request, user),
@@ -905,7 +905,8 @@ class AnswerView:
     notice_card: str = ""                     # the request id it is about
 
     def who(self, identity: str) -> str:
-        return self.names.get(identity, identity) or "someone"
+        """A display name from the accounts, else "someone": never the identity itself."""
+        return missionwords.person(identity, self.names)
 
     def when(self, at: datetime | None) -> str:
         return answers.when_words(at)
@@ -956,14 +957,18 @@ class AnswerView:
         return "Can't confirm the rebuild yet. You may ask again."
 
 
+def _approver_names(request: Request) -> dict[str, str]:
+    """Approver identity -> display name, from the dashboard's accounts (operator pages only)."""
+    store: accounts.AccountStore = request.app.state.accounts
+    return {a.approver_identity: a.display_name for a in store.all().values() if a.approver_identity}
+
+
 def _answer_view(request: Request, user: auth.ResolvedUser) -> AnswerView:
     bus = request.app.state.answer_bus
     can = user.can_answer and answers.bus_ready(bus)
     why = "" if can else (answers.OFF if user.can_answer else "")
     found_claims, marks = claims.read_all(request.app.state.answers_path)
-    store: accounts.AccountStore = request.app.state.accounts
-    names = {a.approver_identity: a.display_name for a in store.all().values() if a.approver_identity}
-    view = AnswerView(can, why, user.username, found_claims, marks, names)
+    view = AnswerView(can, why, user.username, found_claims, marks, _approver_names(request))
     code, rid = request.query_params.get("said", ""), request.query_params.get("card", "")
     if not answers.known_code(code) or not rid or len(rid) > 300:
         return view

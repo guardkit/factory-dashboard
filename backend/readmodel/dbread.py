@@ -21,6 +21,7 @@ from pathlib import Path
 from backend import db
 from backend.readmodel import cards as cardmodel
 from backend.readmodel import costs as cost
+from backend.readmodel import missionwords
 from backend.readmodel import viewmodels as vm
 from backend.readmodel.costs import CostBook, load_cost_book
 from backend.readmodel.factory import (
@@ -801,7 +802,10 @@ def _norms_line(norms: Norms) -> str:
 
 
 def feature_page(db_path: Path, key: str, now: datetime | None = None, *,
-                 conn: sqlite3.Connection | None = None) -> tuple[PageChrome, FeaturePage] | None:
+                 conn: sqlite3.Connection | None = None,
+                 names: missionwords.Names | None = None) -> tuple[PageChrome, FeaturePage] | None:
+    """A feature's own page. `names` maps an approver identity to the person's display name (the
+    dashboard's accounts); without it no person is named where Forge recorded only an identity."""
     now = now or _now()
     owned = conn is None
     conn = _open(db_path) if conn is None else conn
@@ -829,11 +833,7 @@ def feature_page(db_path: Path, key: str, now: datetime | None = None, *,
             duration=vm.fmt_age(w.seconds(now)), open=w.open,
         ) for w in f.waits)
         own = [i for i in find_issues(factory, norms, now) if i.feature is f]
-        mission_line = ""
-        if f.mission is not None:
-            m = f.mission
-            mission_line = (f"Part of mission {m.id}" + (f" ({m.title})" if m.title else "")
-                            + f": the mission is {_mission_words(m.status)}.")
+        mission_line = missionwords.sentence(f.mission, now, names) if f.mission is not None else ""
         sent = f.sent_at
         page = FeaturePage(
             title=f.title, code=f.code, key=f.key, project=f.project, project_link=project_link(f.project),
@@ -853,9 +853,10 @@ def feature_page(db_path: Path, key: str, now: datetime | None = None, *,
             conn.close()
 
 
-def mission_page(db_path: Path, mission_id: str, now: datetime | None = None
-                 ) -> tuple[PageChrome, MissionPage] | None:
-    """A mission's own page: its plan, its features on record, its plan card and its merge card."""
+def mission_page(db_path: Path, mission_id: str, now: datetime | None = None, *,
+                 names: missionwords.Names | None = None) -> tuple[PageChrome, MissionPage] | None:
+    """A mission's own page: its plan, its features on record, its plan card and its merge card.
+    `names` as for `feature_page`."""
     now = now or _now()
     conn = _open(db_path)
     try:
@@ -867,12 +868,13 @@ def mission_page(db_path: Path, mission_id: str, now: datetime | None = None
         mine = tuple((f.label, f.link, f.status_text) for f in factory.features if f.mission is not None
                      and f.mission.id == m.id)
         created = m.created_at
+        status, detail = missionwords.status_and_detail(m, now, names)
         page = MissionPage(
             id=m.id, title=m.title, project=m.target_repo, project_link=project_link(m.target_repo),
-            status_text=_mission_words(m.status).capitalize(), closed_reason=m.closed_reason,
+            status_text=status[:1].upper() + status[1:], status_detail=detail,
             created_label=vm.fmt_wall(created, now=now) if created else "—",
             created_title=vm.fmt_iso(created) if created else "", as_of=_read_chip(fr, now), plan=m.plan,
-            features=mine, cards=cardmodel.mission_cards(m),
+            features=mine, cards=cardmodel.mission_cards(m, now=now, names=names),
         )
         return page_chrome(conn, now), page
     finally:
@@ -895,12 +897,6 @@ def _build_words(b: Build) -> str:
         if d is not None and d.status == "SKIPPED":
             text += "; not merged"
     return text
-
-
-def _mission_words(status: str) -> str:
-    return {"PROPOSED": "proposed", "REJECTED": "rejected", "NOT_STARTED": "not started", "STARTING": "starting",
-            "RUNNING": "running", "READY": "ready for its merge", "MERGING": "merging", "MERGED": "merged",
-            "NOT_MERGED": "not merged"}.get(status, status.lower())
 
 
 def project_view(db_path: Path, project: str, now: datetime | None = None, *,

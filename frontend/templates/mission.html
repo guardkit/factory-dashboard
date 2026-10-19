@@ -8,7 +8,7 @@
   <div class="feature-header__main">
     <p class="page-eyebrow">{% if page.project_link %}<a href="{{ page.project_link }}">{{ page.project }}</a>{% else %}{{ page.project }}{% endif %} · Mission</p>
     <h1 class="page-title feature-title">{{ page.title or ('Mission ' ~ page.id) }}</h1>
-    <p class="page-lead">{{ page.status_text }}{% if page.closed_reason %}: {{ page.closed_reason }}{% endif %}</p>
+    <p class="page-lead">{{ page.status_text }}{% if page.status_detail %}: {{ page.status_detail }}{% endif %}</p>
     <div class="page-head__meta">
       <span class="feature-id">{{ page.id }}</span>
       <span title="{{ page.created_title }}">Proposed {{ page.created_label }}</span>

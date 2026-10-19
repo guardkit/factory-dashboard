@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from urllib.parse import unquote, urlsplit
 from zoneinfo import ZoneInfo
 
+from backend.readmodel import missionwords
 from backend.readmodel.factory import Build, Factory, Feature, Mission, MissionFeature, PlanningEvent, PlanningRun
 
 # --- the kinds of card ---------------------------------------------------------------------------
@@ -494,7 +495,7 @@ def _merge_evidence(offer: dict[str, object], ev: dict[str, object]) -> Evidence
 # --- mission plans ----------------------------------------------------------------------------------------
 
 
-def _mission_plan_card(m: Mission) -> Card | None:
+def _mission_plan_card(m: Mission, now: datetime, names: missionwords.Names | None) -> Card | None:
     if not m.plan_request_id:
         return None
     token = f"mission-{m.id}"
@@ -512,11 +513,12 @@ def _mission_plan_card(m: Mission) -> Card | None:
     if m.approved_by:
         rec = Recorded("approved the plan", True, who=m.approved_by, decision="approve", at=m.approved_at)
     elif m.status in ("REJECTED", "NOT_STARTED"):
-        # Forge does not record who rejected a mission plan: only that it was not started, and why.
-        reason = m.closed_reason.rstrip(".")
+        # Forge does not record who rejected a mission plan: only that it was not started, and why
+        # (a stop's reason names an approver identity, which `reason_words` never shows as it is).
+        reason = missionwords.reason_words(m.closed_reason, now, names)
         rec = Recorded(f"Not started: {reason}." if reason else "Not started.", False, at=m.closed_at)
     else:
-        rec = Recorded(f"The card closed; the mission is {m.status.lower()}.", False)
+        rec = Recorded(f"The card closed; the mission is {missionwords.status_words(m)}.", False)
     return Card(**base, open=False, answerable=False, recorded=rec)  # type: ignore[arg-type]
 
 
@@ -550,10 +552,12 @@ def feature_cards(f: Feature) -> tuple[Card, ...]:
     return tuple(out)
 
 
-def mission_cards(m: Mission) -> tuple[Card, ...]:
-    """The mission's plan card and its own merge card (and that merge build's go-ahead card)."""
+def mission_cards(m: Mission, *, now: datetime | None = None,
+                  names: missionwords.Names | None = None) -> tuple[Card, ...]:
+    """The mission's plan card and its own merge card (and that merge build's go-ahead card).
+    `names` maps an approver identity to a display name, for a reason that names one."""
     out: list[Card] = []
-    plan = _mission_plan_card(m)
+    plan = _mission_plan_card(m, now or datetime.now(UTC), names)
     if plan is not None:
         out.append(plan)
     b = m.merge_build

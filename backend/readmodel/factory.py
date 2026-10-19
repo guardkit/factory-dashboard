@@ -84,6 +84,8 @@ _MISSION_BRANCH_RESULT = "published-to-the-mission-branch"
 #: `pipeline/publication_record.py` RESULT_PUBLISHED_DEPLOYMENT_PENDING and RESULT_MERGED_AND_RUNNING;
 #: the predicate of `pipeline/mission_finish.py` and the Linear door's `forge_record.ON_MAIN_RESULTS`).
 ON_MAIN_RESULTS = frozenset({"published, deployment pending", "merged into the remote and running"})
+#: A mission in one of these has ended (Forge's `lifecycle/missions.py` _CLOSED_MISSION_STATUSES).
+CLOSED_MISSION_STATUSES = frozenset({"REJECTED", "NOT_STARTED", "MERGED", "NOT_MERGED"})
 
 
 # --- records ----------------------------------------------------------------------------------
@@ -323,10 +325,21 @@ class Mission:
     approved_by: str = ""
     approved_at: datetime | None = None
     plan: tuple[MissionFeature, ...] = ()
+    stop_requested_at: datetime | None = None   # a stop was asked for (NULL in a ledger from before stopping)
+    stop_requested_by: str = ""                 # an approver identity: never shown as it is
 
     @property
     def link(self) -> str:
         return f"/missions/{self.id}"
+
+    @property
+    def closed(self) -> bool:
+        return self.status in CLOSED_MISSION_STATUSES
+
+    @property
+    def stopping(self) -> bool:
+        """A stop was asked for and the mission has not closed yet: its work is draining."""
+        return self.stop_requested_at is not None and not self.closed
 
     def delivered_at(self) -> datetime | None:
         if self.merge_build is None:
@@ -630,13 +643,15 @@ def _load_missions(conn: sqlite3.Connection, builds: Sequence[Build]) -> dict[st
     out = {}
     for r in conn.execute(
         "SELECT id, title, target_repo, status, correlation_id, created_at, closed_at, closed_reason, "
-        "plan_request_id, originating_user, approved_by, approved_at FROM forge_missions"
+        "plan_request_id, originating_user, approved_by, approved_at, stop_requested_at, stop_requested_by "
+        "FROM forge_missions"
     ):
         out[r[0]] = Mission(
             id=r[0], title=_s(r[1]), target_repo=_s(r[2]), status=_s(r[3]), correlation_id=_s(r[4]),
             created_at=parse_dt(r[5]), closed_at=parse_dt(r[6]), closed_reason=_s(r[7]),
             merge_build=merges.get(r[0]), plan_request_id=_s(r[8]), originating_user=_s(r[9]),
             approved_by=_s(r[10]), approved_at=parse_dt(r[11]), plan=plans.get(r[0], ()),
+            stop_requested_at=parse_dt(r[12]), stop_requested_by=_s(r[13]),
         )
     return out
 
@@ -850,7 +865,8 @@ def _where_build(  # noqa: PLR0911 (one return per build state)
             if mission.status in ("NOT_MERGED", "REJECTED"):
                 return (MERGED, Outcome.MISSION_NOT_MERGED,
                         f"On mission {mission.id}'s branch; the mission was not merged", mission.closed_at or landed)
-            text = f"On mission {mission.id}'s branch, waiting for the mission's merge"
+            text = (f"On mission {mission.id}'s branch; the mission is stopping, so it will not be merged"
+                    if mission.stopping else f"On mission {mission.id}'s branch, waiting for the mission's merge")
             return MERGED, Outcome.ON_MISSION_BRANCH, text, None
         return BUILT, Outcome.BUILT_NO_MERGE, "Built (the record shows no merge)", b.completed_at
     if b.status == "FAILED":

@@ -174,7 +174,9 @@ CREATE TABLE IF NOT EXISTS forge_missions (
     plan_request_id  TEXT,   -- the plan card's request id, once it was sent
     originating_user TEXT,
     approved_by      TEXT,   -- who approved the plan (Forge does not record who rejected one)
-    approved_at      TEXT
+    approved_at      TEXT,
+    stop_requested_at TEXT,  -- a stop was asked for; the mission shows as "Stopping" until it closes
+    stop_requested_by TEXT   -- who asked (an approver identity: never shown as it is)
 );
 
 -- A mission's plan: its features in Forge's order (forge_order is Forge's rowid) and what each needs.

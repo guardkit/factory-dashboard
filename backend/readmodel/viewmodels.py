@@ -453,7 +453,7 @@ class MissionPage:
     project: str
     project_link: str
     status_text: str
-    closed_reason: str
+    status_detail: str       # the stop while it drains, or the reason it closed, in plain words
     created_label: str
     created_title: str
     as_of: AsOf
