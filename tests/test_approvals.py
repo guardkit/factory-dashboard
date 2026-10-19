@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from backend import accounts, answers, claims
+from backend import app as app_module
 from backend.app import create_app
 from backend.auth import ResolvedUser
 from backend.projector.forge_mirror import mirror_once
@@ -399,8 +400,10 @@ def test_an_already_answered_card_sends_nothing_and_names_the_answer(world: Worl
     r = world.answer(rid, "merge", "merge-FEAT-0001", "merge", back="/features/FEAT-0001")
     assert said(r) == "already" and world.bus.sent == []
     body = page(world, r.headers["location"])
-    assert "Nothing was sent: U0SOMEONEELSE already declined the merge at" in body
-    assert "<b>U0SOMEONEELSE</b> declined the merge" in body and "Merge and deploy" not in body
+    # An identity no account maps is "someone", on the card and in the notice alike (never the member id).
+    assert "Nothing was sent: someone already declined the merge at" in body
+    assert "<b>someone</b> declined the merge" in body and "Merge and deploy" not in body
+    assert "U0SOMEONEELSE" not in body
 
 
 def test_a_second_press_finds_the_waiting_answer(world: World) -> None:
@@ -581,8 +584,27 @@ def test_a_spec_answer_and_an_approved_mission_name_who_and_when(world: World) -
     world.fake.conn.execute("UPDATE missions SET status='STARTING', approved_by=?, approved_at=? WHERE id='m1'",
                             (APPROVER, iso(datetime(2026, 10, 18, 9, 0, tzinfo=UTC))))
     world.refresh()
-    assert "<b>U0SOMEONEELSE</b> asked for changes: “Please change: make it faster”" in page(world, "/features/c1")
+    feature = page(world, "/features/c1")
+    assert "<b>someone</b> asked for changes: “Please change: make it faster”" in feature
+    assert "U0SOMEONEELSE" not in feature
     assert "<b>Test Person</b> approved the plan" in page(world, "/missions/m1")
+
+
+def test_no_member_id_reaches_a_card_or_the_notice(world: World) -> None:
+    """Whoever answered is named by an account's display name, or "someone": never by an identity,
+    whatever its form (a chat member id, a dashboard approver, a Linear id, a user name)."""
+    rid = merge_card(world)
+    decide_merge(world, "reject", who=APPROVER)            # an identity an account maps
+    world.refresh()
+    r = world.answer(rid, "merge", "merge-FEAT-0001", "merge", back="/features/FEAT-0001")
+    body = page(world, r.headers["location"])
+    assert "Nothing was sent: Test Person already declined the merge at" in body
+    assert "<b>Test Person</b> declined the merge" in body
+    assert APPROVER not in body
+    view = app_module.AnswerView(True, "", "tester", {}, {}, {APPROVER: "Test Person", "dashboard:rich": "Rich"})
+    assert view.who(APPROVER) == "Test Person" and view.who("dashboard:rich") == "Rich"
+    for identity in ("U0SOMEONEELSE", "dashboard:james", "linear:abc-123", "richardwoollcott", "", " "):
+        assert view.who(identity) == "someone", identity
 
 
 # --- rebuilding the preview ------------------------------------------------------------------------------------
@@ -879,7 +901,7 @@ def test_a_stop_on_the_spec_card_is_recorded_as_stopped_by_the_person(world: Wor
     rid = spec_card(world)
     _cancel_at_the_spec_door(world, rid)
     lines = recorded_lines(page(world, "/features/c1"))
-    assert lines == ["<b>U0SOMEONEELSE</b> stopped this request: “reject: too big for now” at "
+    assert lines == ["<b>someone</b> stopped this request: “reject: too big for now” at "
                      + lines[0].split(" at ", 1)[1]], lines
     assert "Closed without" not in lines[0]
 
@@ -888,7 +910,7 @@ def test_a_stop_recorded_only_by_the_cancel_row_is_still_stopped_by_the_person(w
     rid = spec_card(world)
     _cancel_at_the_spec_door(world, rid, verdict=False)
     (line,) = recorded_lines(page(world, "/features/c1"))
-    assert line.startswith("<b>U0SOMEONEELSE</b> stopped this request")
+    assert line.startswith("<b>someone</b> stopped this request")
 
 
 @pytest.mark.parametrize(("rid", "where"), [

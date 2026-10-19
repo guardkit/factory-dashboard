@@ -51,7 +51,7 @@
 
 {% macro recorded(card, ax) -%}
 {% set r = card.recorded %}
-<p class="answer-card__recorded">{% if r.answered %}<b>{{ ax.who(r.who) if ax else r.who }}</b> {{ r.text }}{% if r.notes %}: “{{ r.notes }}”{% endif %}{% if r.at %} at <span title="{{ ax.iso(r.at) if ax else '' }}">{{ ax.when(r.at) if ax else '' }}</span>{% endif %}.{% else %}{{ r.text }}{% endif %}</p>
+<p class="answer-card__recorded">{% if r.answered %}<b>{{ ax.who(r.who) if ax else 'someone' }}</b> {{ r.text }}{% if r.notes %}: “{{ r.notes }}”{% endif %}{% if r.at %} at <span title="{{ ax.iso(r.at) if ax else '' }}">{{ ax.when(r.at) if ax else '' }}</span>{% endif %}.{% else %}{{ r.text }}{% endif %}</p>
 {%- endmacro %}
 
 {% macro buttons(card, ax, back) -%}

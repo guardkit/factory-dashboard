@@ -158,8 +158,17 @@ STOP_REASON = f"stopped by {APPROVER} at {iso(STOP_AT)}; 2 landed on the branch,
     # plain sentences pass through, without a closing full stop
     ("nothing landed", None, NOW, "nothing landed"),
     ("nobody answered the mission plan card in time.", None, NOW, "nobody answered the mission plan card in time"),
-    # a bare code becomes words
-    ("merged-deploy-failed", None, NOW, "merged deploy failed"),
+    # a bare code becomes words: Forge's merge report words have sentences, any other gets spaces
+    ("merged-deploy-failed", None, NOW, "merged, but the deploy failed"),
+    ("merged-into-the-remote-and-running", None, NOW, "merged into the remote and running"),
+    ("some-new-code", None, NOW, "some new code"),
+    # Forge's "the merge ended <word>" (mission_finish.py)
+    ("the merge ended mission-merge-unfinished", None, NOW, "the mission's merge did not finish"),
+    ("the merge ended some-new-code", None, NOW, "the merge ended: some new code"),
+    ("the merge ended without a word", None, NOW, "the merge ended without a word"),
+    # a code inside any other sentence is left alone (it may be a branch name)
+    ("its branch mission/m-abc is no longer on the remote", None, NOW,
+     "its branch mission/m-abc is no longer on the remote"),
     # any other approver identity is never shown as it is
     (f"the merge was refused by {STRANGER}", None, NOW, "the merge was refused by someone"),
     ("asked by dashboard:rich to wait", {"dashboard:rich": "Rich"}, NOW, "asked by Rich to wait"),
@@ -168,6 +177,17 @@ STOP_REASON = f"stopped by {APPROVER} at {iso(STOP_AT)}; 2 landed on the branch,
 def test_closed_reasons_read_as_plain_words(reason: str, names: dict[str, str] | None, now: datetime,
                                             words: str) -> None:
     assert missionwords.reason_words(reason, now, names) == words
+
+
+@pytest.mark.parametrize(("status", "reason", "words"), [
+    ("MERGED", "merged-into-the-remote-and-running",
+     "Part of mission m-1 (Notes): the mission is merged into the remote and running."),
+    ("MERGED", "merged-deploy-failed", "Part of mission m-1 (Notes): the mission is merged, but the deploy failed."),
+    ("MERGED", "Merged and deployed.", "Part of mission m-1 (Notes): the mission is merged (Merged and deployed)."),
+    ("NOT_MERGED", "nothing landed", "Part of mission m-1 (Notes): the mission is not merged (nothing landed)."),
+])
+def test_a_reason_that_repeats_the_status_is_not_said_twice(status: str, reason: str, words: str) -> None:
+    assert missionwords.sentence(_m(status, reason=reason), NOW) == words
 
 
 def test_the_mission_sentence_carries_a_closed_reason() -> None:
@@ -292,8 +312,11 @@ def test_a_closed_plan_card_on_a_stopping_mission_says_stopping(world: World) ->
 def test_a_mission_closed_for_another_reason_shows_that_reason(world: World) -> None:
     world.fake.mission("m1", "Notes", "mc1", status="NOT_MERGED", closed=120)
     world.fake.conn.execute("UPDATE missions SET closed_reason='nothing landed' WHERE id='m1'")
+    world.fake.mission("m2", "Tags", "mc2", status="MERGED", closed=120)
+    world.fake.conn.execute("UPDATE missions SET closed_reason='merged-deploy-failed' WHERE id='m2'")
     world.refresh()
     assert _lead(world.page("/missions/m1")) == "Not merged: nothing landed"
+    assert _lead(world.page("/missions/m2")) == "Merged, but the deploy failed"
 
 
 def test_a_ledger_without_the_columns_shows_the_page_as_before(tmp_path: Path, config_dir: Path) -> None:

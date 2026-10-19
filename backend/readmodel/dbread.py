@@ -868,10 +868,10 @@ def mission_page(db_path: Path, mission_id: str, now: datetime | None = None, *,
         mine = tuple((f.label, f.link, f.status_text) for f in factory.features if f.mission is not None
                      and f.mission.id == m.id)
         created = m.created_at
+        status, detail = missionwords.status_and_detail(m, now, names)
         page = MissionPage(
             id=m.id, title=m.title, project=m.target_repo, project_link=project_link(m.target_repo),
-            status_text=missionwords.status_words(m).capitalize(),
-            status_detail=missionwords.detail_words(m, now, names),
+            status_text=status[:1].upper() + status[1:], status_detail=detail,
             created_label=vm.fmt_wall(created, now=now) if created else "—",
             created_title=vm.fmt_iso(created) if created else "", as_of=_read_chip(fr, now), plan=m.plan,
             features=mine, cards=cardmodel.mission_cards(m, now=now, names=names),

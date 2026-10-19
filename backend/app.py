@@ -60,7 +60,7 @@ from backend.config_loader import (
     load_tenants,
 )
 from backend.readmodel import cards as cardmodel
-from backend.readmodel import dbread
+from backend.readmodel import dbread, missionwords
 from backend.readmodel import viewmodels as vm
 from backend.readmodel.factory import load_factory
 from backend.readmodel.viewmodels import PageChrome
@@ -905,7 +905,8 @@ class AnswerView:
     notice_card: str = ""                     # the request id it is about
 
     def who(self, identity: str) -> str:
-        return self.names.get(identity, identity) or "someone"
+        """A display name from the accounts, else "someone": never the identity itself."""
+        return missionwords.person(identity, self.names)
 
     def when(self, at: datetime | None) -> str:
         return answers.when_words(at)
