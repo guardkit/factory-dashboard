@@ -26,10 +26,13 @@ from backend.app import create_app
 from backend.auth import ResolvedUser
 from backend.projector.forge_mirror import mirror_once
 from backend.projector.store import iso, open_rw, write_heartbeat
+from backend.readmodel import cards as cardmodel
+from backend.readmodel import dbread
+from backend.readmodel.factory import load_factory
 from starlette.testclient import TestClient
 
 from tests.conftest import LOOPBACK_URL, TENANTS_TEST, account_row, client_account_row, login, write_accounts
-from tests.forge_fake import ForgeFake, store_from
+from tests.forge_fake import T0, ForgeFake, store_from
 
 # Placeholders only: no real member id appears in this public repository.
 APPROVER = "U0PLACEHOLDER1"
@@ -941,6 +944,13 @@ def test_a_door_reopened_after_a_restart_is_open_since_it_first_opened(world: Wo
     world.refresh()
     body = page(world, "/features/c1")
     assert "Approve the spec" in body and recorded_lines(body) == []
+    # Its waiting age runs from the first opening (minute 5), not from the reopening (minute 40).
+    conn = dbread.snapshot(world.store)
+    try:
+        card = cardmodel.find(load_factory(conn), rid)
+    finally:
+        conn.close()
+    assert card is not None and card.open and card.opened_at == T0 + timedelta(minutes=5)
     assert said(world.answer(rid, "spec_review", "plan-c1", "approve")) == "sent"
     _, env = one_sent(world)
     assert env["payload"]["request_id"] == rid
