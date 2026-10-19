@@ -3,6 +3,11 @@
 Changes to the factory dashboard, newest first, in plain words. The dashboard's "What changed" page
 shows this list. Keep each line short, and add new lines at the top of their day.
 
+## 19 October 2026
+
+- You can approve, decline or rebuild from the dashboard: every card that needs a person has its buttons on the page.
+- A mission that has been asked to stop shows as "Stopping", and a closed mission says why it closed.
+
 ## 18 October 2026
 
 - You can suggest a change to the dashboard from any page, typed or as a voice note, and see what changed here.
