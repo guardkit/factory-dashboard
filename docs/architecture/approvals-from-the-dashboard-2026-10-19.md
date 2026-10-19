@@ -170,7 +170,13 @@ id it has already shown.
   - the projector never imports it.
 - **nats-infrastructure** (`config/accounts/accounts.conf.template`): a `dashboard_approve` user in the APPMILLA
   account, allowed to publish only on `agents.approval.forge.*.response` and to subscribe only to `_INBOX.>`.
-- **Forge's estate compose:** the new password file, alongside the bus's other account passwords.
+- **nats-infrastructure (the broker's start-up script):** `scripts/docker-entrypoint.sh` substitutes only a fixed
+  list of password variables (~112) and refuses to start on an unresolved `${VAR}` (~137-141). So
+  `DASHBOARD_APPROVE_NATS_PASSWORD` joins that list. Because the script is built into the broker image (`Dockerfile`
+  ~3-5), the broker image is rebuilt and released with it. The password rotation helper (`scripts/rotate-nats-password.sh`)
+  gains the new account in its table.
+- **Forge's estate compose:** the new password file, alongside the bus's other account passwords, and passed into the
+  broker's environment the same way they are.
 - **fleet-secrets:** the password, by name only, never printed. The dashboard reads it from a file.
 - **Live `forge.yaml`:** `approval.additional_approvers` gains `dashboard:james`. That's a release step.
 - **Forge and Jarvis code:** no change.
@@ -246,15 +252,18 @@ id it has already shown.
 - Guards: not signed in, a client account, a request from another site, and an account with no `approver_identity`.
 - The plan-card `reject` prefix, and the meaning of the sign-in card's buttons.
 - The new fence tests.
-- The bus permission. A check against a real `nats-server` started for the test from the template shows the user can
-  publish on a response subject and is refused on anything else, including `agents.approval.forge.x` and `pipeline.>`.
-  Where nats-server isn't available, the test is skipped and says so.
+- The bus permission. A check renders the accounts file through the broker's own start-up script, the production
+  path, with test passwords. It then starts a real `nats-server` from that file and shows the user can publish on a
+  response subject and is refused on anything else, including `agents.approval.forge.x` and `pipeline.>`. It also
+  shows the entrypoint refuses to start when the new password is missing. Where nats-server isn't available, the test
+  is skipped and says so.
 - A real-browser test answering a merge card, against a fake bus and a fake record update.
 
 ## Rollout
 
-- **Through ai-transition-03, as a release:** the bus account change, which needs a bus configuration reload; the
-  password file; and the `forge.yaml` approver entry.
+- **Through ai-transition-03, as a release:** the rebuilt broker image with the new account and the entrypoint's
+  extended password list, which needs the broker restarted in an idle window; the password file; and the `forge.yaml`
+  approver entry.
 - **The dashboard rebuild,** after those, under the dashboard handoff's authority.
 - **First live use:** answer one real card from the dashboard, for example a declined merge on a test-fixture
   feature, and confirm Forge recorded it.
