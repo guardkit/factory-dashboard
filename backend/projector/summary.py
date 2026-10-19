@@ -50,6 +50,7 @@ import contextlib
 import dataclasses
 import json
 import os
+import re
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -113,18 +114,30 @@ def _mission_by_prefix(f: Feature, missions: dict[str, Mission]) -> Mission | No
     """The mission of `missions` (keyed by correlation id; any missions, Linear or not) a feature is
     a part of. Forge names each part's attempt `<mission correlation id>-<KEY>-a<n>` (planning run,
     queue item and build alike), and only a part that reached a build carries the mission's id, so
-    a part that stopped in planning is found by that prefix. The match is on a boundary only: a tag
-    equals the mission's id, or starts with the id followed by "-" (so `m-abcd-K2-a1` is never a
-    part of `m-abc`). When two missions' ids both match a tag, the longer (the more exact) wins."""
+    a part that stopped in planning is found by that id. A tag belongs to a mission only when it
+    equals the mission's id, or is exactly `<id>-<KEY>-a<n>` (`_is_part_of`), so `m-abcd-K2-a1` is
+    never a part of `m-abc`, and `c-X-a1` is a part of `c`, not of a mission `c-X`. If two missions
+    still match, the longer id wins."""
     if f.mission is not None and f.mission.correlation_id in missions:
         return f.mission
     found: Mission | None = None
     for tag in feature_tags(f):
         for corr, m in missions.items():
-            if (corr and (tag == corr or tag.startswith(corr + "-"))
-                    and (found is None or len(corr) > len(found.correlation_id))):
+            if _is_part_of(tag, corr) and (found is None or len(corr) > len(found.correlation_id)):
                 found = m
     return found
+
+
+#: What follows `<mission correlation id>-` in a part's attempt id: Forge's mission key
+#: (`lifecycle/missions.py` MISSION_KEY_PATTERN, 1-12 upper-case letters or digits) and the
+#: attempt number (`missions.py` 221: `f"{mission_correlation_id}-{key}-a{attempt}"`).
+_PART_REST = re.compile(r"[A-Z0-9]{1,12}-a\d+")
+
+
+def _is_part_of(tag: str, corr: str) -> bool:
+    if not corr:
+        return False
+    return tag == corr or (tag.startswith(corr + "-") and _PART_REST.fullmatch(tag[len(corr) + 1:]) is not None)
 
 
 def mission_parts(factory: Factory) -> dict[str, list[Feature]]:

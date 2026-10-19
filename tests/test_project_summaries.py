@@ -49,8 +49,8 @@ NOW = T + timedelta(minutes=200)
 ISSUE = "lin-APP-12-1"                          # a single issue's attempt (the door's id shape)
 MISSION = "lin-m-" + "0" * 32 + "-1"            # a mission's attempt
 MERGE = "mission-merge-corr"                    # the mission's own merge build
-PART = MISSION + "-APP-13-a1"                   # Forge's part attempt id: <mission correlation id>-<KEY>-a<n>
-FAILED_PART = MISSION + "-APP-14-a1"            # a part that failed in planning, never built
+PART = MISSION + "-APP13-a1"                    # Forge's part attempt id: <mission correlation id>-<KEY>-a<n>
+FAILED_PART = MISSION + "-APP14-a1"             # a part that failed in planning, never built (keys: [A-Z0-9]{1,12})
 
 
 def _cost(prompt: int, completion: int) -> float:
@@ -477,3 +477,27 @@ def test_mission_parts_match_on_a_boundary_only(tmp_path: Path, monkeypatch: pyt
     abc, abcd = SpendSlot(**merges["b-m-1"]), SpendSlot(**merges["b-m-2"])
     assert abc.calls == 1 and abc.amount_usd == pytest.approx(_cost(1_000, 100))
     assert abcd.calls == 1 and abcd.amount_usd == pytest.approx(_cost(7_000, 700))
+
+
+def test_a_part_belongs_to_the_mission_whose_id_leaves_a_key_and_attempt(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Coach: mission A `c` has part `c-X-a1`; mission B's id is `c-X`. The part starts with both
+    `c-` and `c-X-`, but only A leaves Forge's `<KEY>-a<n>` (`X-a1`); B would leave `a1`. So it is
+    A's part, not B's, though B's id is the longer prefix."""
+    monkeypatch.setattr(forge_fake, "T0", T)
+    fake = ForgeFake(tmp_path / "forge.db")
+    fake.mission("m-a", "Mission A", "c", status="MERGED", closed=170)
+    fake.mission("m-b", "Mission B", "c-X", status="MERGED", closed=170)
+    fake.planning("c-X-a1", "A's part X.", state="FAILED", start=100, end=110, error="The planner gave up.")
+    fake.planning("c-X-Y-a2", "B's part Y.", state="FAILED", start=100, end=110, error="The planner gave up.")
+    fake.planning("c-x-a1", "Not a part: a key is upper case.", state="FAILED", start=100, end=110)
+    fake.planning("c-X-a1-extra", "Not a part: more after the attempt.", state="FAILED", start=100, end=110)
+    path = tmp_path / "readmodel.db"
+    store_from(fake, path, NOW).close()
+    conn = dbread.snapshot(path)
+    try:
+        parts = mission_parts(load_factory(conn, NOW))
+    finally:
+        conn.close()
+    assert [f.key for f in parts["m-a"]] == ["c-X-a1"]
+    assert [f.key for f in parts["m-b"]] == ["c-X-Y-a2"]
